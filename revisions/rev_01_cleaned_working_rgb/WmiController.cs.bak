@@ -11,12 +11,6 @@ namespace PredatorControlApp
         private readonly object _lock = new();
         private bool _disposed;
 
-        // Consecutive failure tracking — only evict cache after 2+ failures in a row
-        private int _consecutiveFailures = 0;
-        private const int MaxFailuresBeforeEviction = 2;
-        // Pre-warm flag: avoids blocking hot path while cache is being rebuilt
-        private volatile bool _cacheRebuilding = false;
-
         [DllImport("powrprof.dll")]
         private static extern uint PowerSetActiveOverlayScheme(Guid scheme);
 
@@ -41,11 +35,11 @@ namespace PredatorControlApp
 
         private byte _customCpuFanSpeed = 50;
         private byte _customGpuFanSpeed = 50;
+
         // Background worker queue for zero-latency instantaneous lighting updates
         private Action? _pendingLightingAction;
         private readonly object _lightingLock = new();
         private bool _isLightingWorkerRunning;
-
 
         public byte LastR => _lastR;
         public byte LastG => _lastG;
@@ -64,7 +58,6 @@ namespace PredatorControlApp
             {
                 if (_disposed) return null;
                 if (_cachedObj != null) return _cachedObj;
-                if (_cacheRebuilding) return null; // Skip rather than block during pre-warm
 
                 try
                 {
@@ -74,7 +67,6 @@ namespace PredatorControlApp
                     if (enumerator.MoveNext() && enumerator.Current is ManagementObject obj)
                     {
                         _cachedObj = obj;
-                        _consecutiveFailures = 0;
                     }
                 }
                 catch
@@ -90,28 +82,8 @@ namespace PredatorControlApp
         {
             lock (_lock)
             {
-                _consecutiveFailures++;
-
-                // Only evict the cache after MaxFailuresBeforeEviction consecutive failures.
-                // This prevents a single transient WMI timeout from triggering an expensive
-                // 200-400ms cache rebuild on the very next command.
-                if (_consecutiveFailures < MaxFailuresBeforeEviction)
-                    return;
-
-                _consecutiveFailures = 0;
                 try { _cachedObj?.Dispose(); } catch { }
                 _cachedObj = null;
-            }
-
-            // Pre-warm the cache off the hot path so the next command is fast
-            if (!_cacheRebuilding)
-            {
-                _cacheRebuilding = true;
-                Task.Run(() =>
-                {
-                    try { GetWmiObject(); } catch { }
-                    finally { _cacheRebuilding = false; }
-                });
             }
         }
 
@@ -131,25 +103,7 @@ namespace PredatorControlApp
                     if (outParams?["gmOutput"] == null) return (false, 0);
 
                     ulong result = Convert.ToUInt64(outParams["gmOutput"]);
-                    bool ok = (result & 0xFF) == 0;
-
-                    if (ok)
-                    {
-                        _consecutiveFailures = 0;
-                        return (true, result);
-                    }
-
-                    // EC rejected the command (non-zero status byte) — retry once after 20ms
-                    // This handles transient EC-busy states without meaningfully increasing
-                    // latency on the success path.
-                    Thread.Sleep(20);
-                    using var retryIn = obj.GetMethodParameters(method);
-                    retryIn["gmInput"] = input;
-                    using var retryOut = obj.InvokeMethod(method, retryIn, null);
-                    if (retryOut?["gmOutput"] == null) return (false, 0);
-                    ulong retryResult = Convert.ToUInt64(retryOut["gmOutput"]);
-                    _consecutiveFailures = 0;
-                    return ((retryResult & 0xFF) == 0, retryResult);
+                    return ((result & 0xFF) == 0, result);
                 }
                 catch
                 {
@@ -175,19 +129,7 @@ namespace PredatorControlApp
                     if (outParams?["gmOutput"] == null) return false;
 
                     ulong result = Convert.ToUInt64(outParams["gmOutput"]);
-                    bool ok = (result & 0xFF) == 0;
-
-                    if (ok) { _consecutiveFailures = 0; return true; }
-
-                    // Single retry on EC rejection
-                    Thread.Sleep(20);
-                    using var retryIn = obj.GetMethodParameters("SetGamingKBBacklight");
-                    retryIn["gmInput"] = payload;
-                    using var retryOut = obj.InvokeMethod("SetGamingKBBacklight", retryIn, null);
-                    if (retryOut?["gmOutput"] == null) return false;
-                    ulong retryResult = Convert.ToUInt64(retryOut["gmOutput"]);
-                    _consecutiveFailures = 0;
-                    return (retryResult & 0xFF) == 0;
+                    return (result & 0xFF) == 0;
                 }
                 catch
                 {
@@ -265,12 +207,12 @@ namespace PredatorControlApp
             }
         }
 
-        public (int? cpuTemp, int? gpuTemp, int? cpuFanRpm, int? gpuFanRpm) GetAllSensors(bool isPluggedIn, bool includeGpu = true)
+        public (int? cpuTemp, int? gpuTemp, int? cpuFanRpm, int? gpuFanRpm) GetAllSensors(bool isPluggedIn)
         {
             int? cpuTemp = CpuTemp;
             int? cpuRpm = CpuFanRpm;
-            int? gpuTemp = (isPluggedIn && includeGpu) ? GpuTemp : null;
-            int? gpuRpm = (isPluggedIn && includeGpu) ? GpuFanRpm : null;
+            int? gpuTemp = isPluggedIn ? GpuTemp : null;
+            int? gpuRpm = isPluggedIn ? GpuFanRpm : null;
 
             return (cpuTemp, gpuTemp, cpuRpm, gpuRpm);
         }
@@ -380,24 +322,7 @@ namespace PredatorControlApp
                 _lastG = _zoneColors[0].G;
                 _lastB = _zoneColors[0].B;
                 _lastMode = mode;
-                QueueLightingTask(() =>
-                {
-                    SendCommand("SetGamingLEDBehavior", 0x07ul);
-
-                    byte[] payload = new byte[16];
-                    payload[0] = (byte)mode;
-                    payload[1] = _speed;
-                    payload[2] = _brightness;
-                    payload[3] = _direction;
-                    payload[5] = _lastR;
-                    payload[6] = _lastG;
-                    payload[7] = _lastB;
-                    payload[9] = 1;
-                    SendLedCommand(payload);
-
-                    Thread.Sleep(20);
-                    ApplyMultiZoneLightingCore(1ul << zoneIndex, color);
-                });
+                QueueLightingTask(() => ApplyMultiZoneLightingCore(1ul << zoneIndex, color));
             }
         }
 
@@ -534,27 +459,6 @@ namespace PredatorControlApp
 
         private void Apply4ZoneLightingCore(int mode)
         {
-            SendCommand("SetGamingLEDBehavior", 0x07ul);
-
-            byte[] payload = new byte[16];
-            payload[0] = (byte)mode;
-            payload[1] = _speed;
-            payload[2] = _brightness;
-            payload[3] = _direction;
-            payload[5] = _lastR;
-            payload[6] = _lastG;
-            payload[7] = _lastB;
-            payload[9] = 1;
-            SendLedCommand(payload);
-
-            // If all 4 zones are identical, send a single 0x0F mask command!
-            if (_zoneColors[0] == _zoneColors[1] && _zoneColors[1] == _zoneColors[2] && _zoneColors[2] == _zoneColors[3])
-            {
-                Thread.Sleep(20);
-                ApplyMultiZoneLightingCore(0x0Ful, _zoneColors[0]);
-                return;
-            }
-
             // Group zones with matching colors to send the absolute minimum number of WMI commands
             var colorGroups = new Dictionary<Color, ulong>();
             for (int z = 0; z < 4; z++)
@@ -567,9 +471,15 @@ namespace PredatorControlApp
                     colorGroups[c] = mask;
             }
 
+            bool first = true;
             foreach (var kvp in colorGroups)
             {
-                Thread.Sleep(30); // Pacing for EC firmware buffer
+                if (!first)
+                {
+                    Thread.Sleep(35); // Pacing for EC firmware buffer
+                }
+                first = false;
+
                 ApplyMultiZoneLightingCore(kvp.Value, kvp.Key);
             }
         }
@@ -632,30 +542,6 @@ namespace PredatorControlApp
                 return false;
             }
         }
-
-        #region Hardware Features (LCD Overdrive, Backlight Sleep, Windows Key Lock)
-
-        public bool SetLcdOverdrive(bool enable)
-        {
-            var (ok, _) = SendCommand("SetGamingMiscSetting", 0x05UL | ((ulong)(enable ? 1 : 0) << 8));
-            return ok;
-        }
-
-        public bool SetBacklight30s(bool enable)
-        {
-            byte status = (byte)(enable ? 1 : 0);
-            byte[] kbPayload = new byte[8] { 0x30, 0x01, status, 0x00, 0x00, 0x00, 0x00, (byte)(0xCE - status) };
-            return SendGamingRgbKbCommand(kbPayload);
-        }
-
-        public bool SetWinKeyLock(bool lockKeys)
-        {
-            byte val = (byte)(lockKeys ? 0 : 3);
-            byte[] kbPayload = new byte[8] { 0x03, val, 0x00, 0x00, 0x00, 0x00, 0x00, (byte)(0xFC - val) };
-            return SendGamingRgbKbCommand(kbPayload);
-        }
-
-        #endregion
 
         public void Dispose()
         {

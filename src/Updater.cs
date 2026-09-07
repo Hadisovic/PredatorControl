@@ -15,7 +15,7 @@ namespace PredatorControlApp
     [SupportedOSPlatform("windows")]
     internal static class Updater
     {
-        private const string ReleasesApi = "https://api.github.com/repos/supesonly/Acer-P-Helper/releases";
+        private const string ReleasesApi = "https://api.github.com/repos/Hadisovic/PredatorControl/releases";
         private const string RegPath = @"SOFTWARE\PredatorControl";
         private const StringComparison OIC = StringComparison.OrdinalIgnoreCase;
 
@@ -46,7 +46,22 @@ namespace PredatorControlApp
             http.DefaultRequestHeaders.UserAgent.ParseAdd("PredatorControl");
             http.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
 
-            using var doc = JsonDocument.Parse(await http.GetStringAsync(ReleasesApi));
+            HttpResponseMessage resp;
+            try
+            {
+                resp = await http.GetAsync(ReleasesApi);
+            }
+            catch
+            {
+                return null;
+            }
+
+            if (resp.StatusCode == System.Net.HttpStatusCode.NotFound)
+                return null;
+            resp.EnsureSuccessStatusCode();
+
+            string json = await resp.Content.ReadAsStringAsync();
+            using var doc = JsonDocument.Parse(json);
 
             var current = Current;
             UpdateInfo? newest = null;

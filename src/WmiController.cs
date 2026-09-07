@@ -20,6 +20,9 @@ namespace PredatorControlApp
         [DllImport("powrprof.dll")]
         private static extern uint PowerSetActiveOverlayScheme(Guid scheme);
 
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool WritePrivateProfileString(string lpAppName, string? lpKeyName, string? lpString, string lpFileName);
+
         private static readonly Guid OVERLAY_EFFICIENCY = new("961cc777-2547-4f9d-8174-7d86181b8a7a");
         private static readonly Guid OVERLAY_BALANCED = new("00000000-0000-0000-0000-000000000000");
         private static readonly Guid OVERLAY_PERFORMANCE = new("ded574b5-45a0-4f42-8737-46345c09c238");
@@ -357,6 +360,7 @@ namespace PredatorControlApp
             });
         }
 
+
         public void SetRgbMode(int mode, byte r, byte g, byte b, byte brightness, byte speed, byte direction)
         {
             _lastR = r; _lastG = g; _lastB = b;
@@ -382,18 +386,21 @@ namespace PredatorControlApp
                 _lastMode = mode;
                 QueueLightingTask(() =>
                 {
-                    ApplyMultiZoneLightingCore(1ul << zoneIndex, color);
+                    ApplyZoneLightingCore(zoneIndex, color);
 
                     byte[] payload = new byte[16];
                     payload[0] = (byte)(mode == 8 ? 0 : mode);
                     payload[1] = _speed;
                     payload[2] = (byte)(mode == 8 ? 0 : _brightness);
-                    payload[3] = _direction;
+                    payload[3] = 0;
+                    payload[4] = (byte)(_direction + 1);
                     payload[5] = _lastR;
                     payload[6] = _lastG;
                     payload[7] = _lastB;
+                    payload[8] = 0x03;
                     payload[9] = (byte)(mode == 8 ? 0 : 1);
                     SendLedCommand(payload);
+                    SyncLightingProfileIni();
                 });
             }
         }
@@ -405,30 +412,44 @@ namespace PredatorControlApp
             {
                 _zoneColors[0] = color;
                 _lastR = color.R; _lastG = color.G; _lastB = color.B;
-                QueueLightingTask(() => ApplyMultiZoneLightingCore(1ul << 0, color));
+                QueueLightingTask(() =>
+                {
+                    ApplyZoneLightingCore(0, color);
+                    ApplyLightingModeCore(mode);
+                });
             }
             else if (zoneIndex == 1)
             {
                 // Middle zone covers physical zones 2 and 3 simultaneously
                 _zoneColors[1] = color;
                 _zoneColors[2] = color;
-                QueueLightingTask(() => ApplyMultiZoneLightingCore((1ul << 1) | (1ul << 2), color));
+                QueueLightingTask(() =>
+                {
+                    ApplyZoneLightingCore(1, color);
+                    Thread.Sleep(15);
+                    ApplyZoneLightingCore(2, color);
+                    ApplyLightingModeCore(mode);
+                });
             }
             else if (zoneIndex == 2)
             {
-                // Right zone is physical zone 4
                 _zoneColors[3] = color;
-                QueueLightingTask(() => ApplyMultiZoneLightingCore(1ul << 3, color));
+                QueueLightingTask(() =>
+                {
+                    ApplyZoneLightingCore(3, color);
+                    ApplyLightingModeCore(mode);
+                });
             }
         }
 
-        private void ApplyMultiZoneLightingCore(ulong mask, Color color)
+        private void ApplyZoneLightingCore(int zoneIndex, Color color)
         {
-            ulong zonePayload = 0x06ul | (mask << 8)
-                | ((ulong)color.R << 16)
-                | ((ulong)color.G << 24)
-                | ((ulong)color.B << 32);
-            SendCommand("SetGamingLEDBehavior", zonePayload);
+            // SetGamingRgbKb zone register: (zone + 1) | (R << 8) | (G << 16) | (B << 24)
+            ulong zonePayload = (ulong)(uint)(zoneIndex + 1)
+                | ((ulong)color.R << 8)
+                | ((ulong)color.G << 16)
+                | ((ulong)color.B << 24);
+            SendCommand("SetGamingRgbKb", zonePayload);
         }
 
         public void Set4ZoneColors(Color[] zones, int mode = 0, byte? brightness = null, byte? speed = null)
@@ -446,7 +467,6 @@ namespace PredatorControlApp
 
         public void Set3ZoneColors(Color zone1, Color zone2, Color zone3, int mode = 0)
         {
-            // For 3-zone keyboards, map Zone 1 (Left), Zone 2 (Center -> zones 2 & 3), Zone 3 (Right -> zone 4)
             var zones4 = new Color[] { zone1, zone2, zone2, zone3 };
             Set4ZoneColors(zones4, mode);
         }
@@ -477,22 +497,19 @@ namespace PredatorControlApp
 
             QueueLightingTask(() =>
             {
-                SendCommand("SetGamingLEDBehavior", 0x07ul);
-
-                ulong zonePayload = 0x06ul | (0x0Ful << 8)
-                    | ((ulong)c.R << 16) | ((ulong)c.G << 24) | ((ulong)c.B << 32);
-                SendCommand("SetGamingLEDBehavior", zonePayload);
-
                 byte[] payload = new byte[16];
-                payload[0] = (byte)mode;
+                payload[0] = (byte)(mode == 8 ? 0 : mode);
                 payload[1] = _speed;
-                payload[2] = _brightness;
-                payload[3] = _direction;
+                payload[2] = (byte)(mode == 8 ? 0 : _brightness);
+                payload[3] = 0;
+                payload[4] = (byte)(_direction + 1);
                 payload[5] = c.R;
                 payload[6] = c.G;
                 payload[7] = c.B;
-                payload[9] = 1;
+                payload[8] = 0x03;
+                payload[9] = (byte)(mode == 8 ? 0 : 1);
                 SendLedCommand(payload);
+                SyncLightingProfileIni();
             });
         }
 
@@ -511,88 +528,33 @@ namespace PredatorControlApp
 
         private void ApplyLightingModeCore(int mode)
         {
-            SendCommand("SetGamingLEDBehavior", 0x07ul);
-
-            if (mode != 2 && mode != 3 && mode != 8)
-            {
-                bool allSame = (_zoneColors[0] == _zoneColors[1] &&
-                                _zoneColors[1] == _zoneColors[2] &&
-                                _zoneColors[2] == _zoneColors[3]);
-
-                if (allSame)
-                {
-                    ulong zonePayload = 0x06ul | (0x0Ful << 8)
-                        | ((ulong)_lastR << 16) | ((ulong)_lastG << 24) | ((ulong)_lastB << 32);
-                    SendCommand("SetGamingLEDBehavior", zonePayload);
-                }
-                else
-                {
-                    var colorGroups = new Dictionary<Color, ulong>();
-                    for (int z = 0; z < 4; z++)
-                    {
-                        var c = _zoneColors[z];
-                        ulong mask = 1ul << z;
-                        if (colorGroups.TryGetValue(c, out ulong existingMask))
-                            colorGroups[c] = existingMask | mask;
-                        else
-                            colorGroups[c] = mask;
-                    }
-
-                    bool first = true;
-                    foreach (var kvp in colorGroups)
-                    {
-                        if (!first) Thread.Sleep(35);
-                        first = false;
-                        ApplyMultiZoneLightingCore(kvp.Value, kvp.Key);
-                    }
-                }
-            }
-
             byte[] payload = new byte[16];
             payload[0] = (byte)(mode == 8 ? 0 : mode);
             payload[1] = _speed;
             payload[2] = (byte)(mode == 8 ? 0 : _brightness);
-            payload[3] = _direction;
+            payload[3] = 0;
+            payload[4] = (byte)(_direction + 1);
             payload[5] = _lastR;
             payload[6] = _lastG;
             payload[7] = _lastB;
+            payload[8] = 0x03;
             payload[9] = (byte)(mode == 8 ? 0 : 1);
             SendLedCommand(payload);
+            SyncLightingProfileIni();
         }
 
         private void Apply4ZoneLightingCore(int mode)
         {
-            SendCommand("SetGamingLEDBehavior", 0x07ul);
-
             bool allSame = (_zoneColors[0] == _zoneColors[1] &&
                             _zoneColors[1] == _zoneColors[2] &&
                             _zoneColors[2] == _zoneColors[3]);
 
-            if (allSame)
+            if (!allSame)
             {
-                ulong zonePayload = 0x06ul | (0x0Ful << 8)
-                    | ((ulong)_zoneColors[0].R << 16) | ((ulong)_zoneColors[0].G << 24) | ((ulong)_zoneColors[0].B << 32);
-                SendCommand("SetGamingLEDBehavior", zonePayload);
-            }
-            else
-            {
-                var colorGroups = new Dictionary<Color, ulong>();
                 for (int z = 0; z < 4; z++)
                 {
-                    var c = _zoneColors[z];
-                    ulong mask = 1ul << z;
-                    if (colorGroups.TryGetValue(c, out ulong existingMask))
-                        colorGroups[c] = existingMask | mask;
-                    else
-                        colorGroups[c] = mask;
-                }
-
-                bool first = true;
-                foreach (var kvp in colorGroups)
-                {
-                    if (!first) Thread.Sleep(35);
-                    first = false;
-                    ApplyMultiZoneLightingCore(kvp.Value, kvp.Key);
+                    ApplyZoneLightingCore(z, _zoneColors[z]);
+                    Thread.Sleep(15);
                 }
             }
 
@@ -600,12 +562,51 @@ namespace PredatorControlApp
             payload[0] = (byte)(mode == 8 ? 0 : mode);
             payload[1] = _speed;
             payload[2] = (byte)(mode == 8 ? 0 : _brightness);
-            payload[3] = _direction;
+            payload[3] = 0;
+            payload[4] = (byte)(_direction + 1);
             payload[5] = _zoneColors[0].R;
             payload[6] = _zoneColors[0].G;
             payload[7] = _zoneColors[0].B;
+            payload[8] = 0x03;
             payload[9] = (byte)(mode == 8 ? 0 : 1);
             SendLedCommand(payload);
+            SyncLightingProfileIni();
+        }
+
+        private void SyncLightingProfileIni()
+        {
+            try
+            {
+                string iniPath = @"C:\ProgramData\OEM\AcerLightingService\LightingProfile\LightingProfile.ini";
+                if (!File.Exists(iniPath)) return;
+
+                string modeSection = _lastMode switch
+                {
+                    0 => "AcerECKeyboard Device_STATIC",
+                    1 => "AcerECKeyboard Device_BREATHING",
+                    2 => "AcerECKeyboard Device_NEON",
+                    3 => "AcerECKeyboard Device_WAVE",
+                    4 => "AcerECKeyboard Device_SHIFTING",
+                    5 => "AcerECKeyboard Device_ZOOM",
+                    6 => "AcerECKeyboard Device_METEOR",
+                    7 => "AcerECKeyboard Device_TWINKLING",
+                    _ => "AcerECKeyboard Device_STATIC"
+                };
+
+                int activeModeVal = _lastMode == 8 ? 0 : (_lastMode + 1);
+                WritePrivateProfileString("AcerECKeyboard Device", "ActiveMode", activeModeVal.ToString(), iniPath);
+                WritePrivateProfileString(modeSection, "brightness", _brightness.ToString(), iniPath);
+                WritePrivateProfileString(modeSection, "speed", _speed.ToString(), iniPath);
+                string colorHex = $"0X{_lastR:x2}{_lastG:x2}{_lastB:x2}";
+                WritePrivateProfileString(modeSection, "color", colorHex, iniPath);
+
+                for (int i = 0; i < 4; i++)
+                {
+                    Color c = _zoneColors[i];
+                    WritePrivateProfileString("AcerECKeyboard Device_PerKeyColor", $"Key{i + 1}", $"0X{c.R:x2}{c.G:x2}{c.B:x2}", iniPath);
+                }
+            }
+            catch { }
         }
 
         #endregion

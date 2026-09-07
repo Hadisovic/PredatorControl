@@ -309,7 +309,35 @@ namespace PredatorControlApp
                 EnableDarkTitleBar();
                 Updater.ShowPendingNotes(this);
                 if (Environment.CommandLine.Contains("-hidden")) HideApp();
+                CheckPredatorSenseConflict();
             };
+        }
+
+        private void CheckPredatorSenseConflict()
+        {
+            try
+            {
+                var procs = System.Diagnostics.Process.GetProcessesByName("PredatorSense");
+                if (procs.Length > 0)
+                {
+                    var res = MessageBox.Show(
+                        "PredatorSense is currently running in the background.\n\n" +
+                        "Running both PredatorSense and Predator Control simultaneously causes hardware conflicts on the laptop's Embedded Controller (EC), causing keyboard lighting and sensor glitches.\n\n" +
+                        "Would you like to close PredatorSense now to ensure smooth operation?",
+                        "PredatorSense Conflict Detected",
+                        MessageBoxButtons.YesNo,
+                        MessageBoxIcon.Warning);
+
+                    if (res == DialogResult.Yes)
+                    {
+                        foreach (var p in procs)
+                        {
+                            try { p.Kill(); } catch { }
+                        }
+                    }
+                }
+            }
+            catch { }
         }
 
         private void EnableDarkTitleBar()

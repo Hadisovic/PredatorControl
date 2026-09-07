@@ -683,7 +683,11 @@ namespace PredatorControlApp
 
         public bool SetLcdOverdrive(bool enable)
         {
-            var (ok, _) = SendCommand("SetGamingMiscSetting", 0x05UL | ((ulong)(enable ? 1 : 0) << 8));
+            // Reverse-engineered from AcerAgentService.exe / AcerHardwareService.exe:
+            // SetGamingMiscSetting takes 64-bit value where bits [31:0] = 0x10 (Feature ID for LCD Overdrive)
+            // and bits [63:32] = 1 (enable) or 0 (disable).
+            ulong payload = ((enable ? 1UL : 0UL) << 32) | 0x10UL;
+            var (ok, _) = SendCommand("SetGamingMiscSetting", payload);
             return ok;
         }
 

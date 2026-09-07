@@ -1850,22 +1850,30 @@ namespace PredatorControlApp
             else if (mode == 0) // Static
             {
                 _speedSlider.Enabled = false;
-                _wmi.SetBrightness(bright);
-                _wmi.Set4ZoneColors(_currentZoneColors, 0);
+                bool allSame = (_currentZoneColors[0] == _currentZoneColors[1] &&
+                                _currentZoneColors[1] == _currentZoneColors[2] &&
+                                _currentZoneColors[2] == _currentZoneColors[3]);
+
+                Color c = (_selectedZone >= 0 && _selectedZone < 4) ? _currentZoneColors[_selectedZone] : _currentZoneColors[0];
+                if (allSame)
+                {
+                    _wmi.SetRgbMode(0, c.R, c.G, c.B, bright, speed, 0);
+                }
+                else
+                {
+                    _wmi.Set4ZoneColors(_currentZoneColors, 0, bright, speed);
+                }
             }
             else if (mode == 2 || mode == 3) // Neon (2), Wave (3) - fixed firmware rainbow animations
             {
                 _speedSlider.Enabled = true;
-                _wmi.SetBrightness(bright);
-                _wmi.SetSpeed(speed);
-                _wmi.SetRgbMode(mode, _currentZoneColors[0].R, _currentZoneColors[0].G, _currentZoneColors[0].B, bright, speed, 0);
+                _wmi.SetRgbMode(mode, _wmi.LastR, _wmi.LastG, _wmi.LastB, bright, speed, 0);
             }
             else // Breathing (1), Shifting (4), Zoom (5), Meteor (6), Twinkling (7) - custom colors supported
             {
                 _speedSlider.Enabled = true;
-                _wmi.SetBrightness(bright);
-                _wmi.SetSpeed(speed);
-                _wmi.Set4ZoneColors(_currentZoneColors, mode);
+                Color c = (_selectedZone >= 0 && _selectedZone < 4) ? _currentZoneColors[_selectedZone] : _currentZoneColors[0];
+                _wmi.SetRgbMode(mode, c.R, c.G, c.B, bright, speed, 0);
             }
 
             if (_rgbDropDown.SelectedIndex != mode)

@@ -2364,7 +2364,11 @@ namespace PredatorControlApp
                 Task.Run(() => { try { _wmi.SetLcdOverdrive(savedLcdOverdrive == 1); } catch { } });
 
                 // Backlight 30s Sleep
-                int savedBacklight30s = GetInt(key, "Backlight30s", 1, 0, 1);
+                int savedBacklight30s = GetInt(key, "Backlight30s", -1, 0, 1);
+                if (savedBacklight30s == -1)
+                {
+                    try { savedBacklight30s = _wmi.GetBacklight30s() ? 1 : 0; } catch { savedBacklight30s = 1; }
+                }
                 if (_switchBacklight30s != null) _switchBacklight30s.Checked = (savedBacklight30s == 1);
                 Task.Run(() => { try { _wmi.SetBacklight30s(savedBacklight30s == 1); } catch { } });
 

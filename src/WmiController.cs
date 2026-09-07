@@ -1,3 +1,4 @@
+using System.IO.Pipes;
 using System.Management;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
@@ -44,6 +45,7 @@ namespace PredatorControlApp
 
         private byte _customCpuFanSpeed = 50;
         private byte _customGpuFanSpeed = 50;
+        private bool _backlight30s = true;
         // Background worker queue for zero-latency instantaneous lighting updates
         private Action? _pendingLightingAction;
         private readonly object _lightingLock = new();
@@ -60,6 +62,7 @@ namespace PredatorControlApp
         public Color[] ZoneColors => _zoneColors;
         public byte CustomCpuFanSpeed => _customCpuFanSpeed;
         public byte CustomGpuFanSpeed => _customGpuFanSpeed;
+        public bool Backlight30s => _backlight30s;
 
         private ManagementObject? GetWmiObject()
         {
@@ -484,6 +487,7 @@ namespace PredatorControlApp
         {
             _brightness = brightness;
             QueueLightingTask(() => ApplyLightingModeCore(_lastMode));
+            Task.Run(() => { try { SetBacklight30s(_backlight30s); } catch { } });
         }
 
         public void SetSpeed(byte speed)
@@ -691,11 +695,191 @@ namespace PredatorControlApp
             return ok;
         }
 
+        private static uint GetBkHotkeyNumber()
+        {
+            try
+            {
+                using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\OEM\AcerAgentService");
+                if (key?.GetValue("BK_Hotkey_Number") is int val) return (uint)val;
+                if (key?.GetValue("BK_Hotkey_Number") is long val64) return (uint)val64;
+            }
+            catch { }
+            return 132; // Default for Predator Neo/Helios (0x84)
+        }
+
+        public bool GetBacklight30s()
+        {
+            uint hotkeyNum = GetBkHotkeyNumber();
+            uint low32_get = 0x80001 | (hotkeyNum << 8);
+
+            // 1. Hardware Service named pipes (kSvcCmdWMIGetFunction = 0x1E)
+            string[] pipeNames = { "systemmonitoring_hardware_service_", "predatorsense_hardware_service_" };
+            byte[] packet = new byte[11];
+            BitConverter.GetBytes((ushort)0x1E).CopyTo(packet, 0);
+            packet[2] = 1;
+            BitConverter.GetBytes((uint)4).CopyTo(packet, 3);
+            BitConverter.GetBytes(low32_get).CopyTo(packet, 7);
+
+            foreach (var pipeName in pipeNames)
+            {
+                try
+                {
+                    using var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut);
+                    pipe.Connect(150);
+                    pipe.Write(packet, 0, packet.Length);
+                    pipe.Flush();
+                    byte[] resp = new byte[32];
+                    int read = pipe.Read(resp, 0, resp.Length);
+                    if (read >= 13)
+                    {
+                        ulong val = BitConverter.ToUInt64(resp, 5);
+                        uint high32 = (uint)(val >> 32);
+                        byte timeoutSec = (byte)((high32 >> 8) & 0xFF);
+                        _backlight30s = timeoutSec > 0;
+                        return _backlight30s;
+                    }
+                }
+                catch { }
+            }
+
+            // 2. Direct WMI APGeAction.GetFunction
+            try
+            {
+                using var searcher = new ManagementObjectSearcher(@"root\WMI", "SELECT * FROM APGeAction");
+                using var results = searcher.Get();
+                using var enumerator = results.GetEnumerator();
+                if (enumerator.MoveNext() && enumerator.Current is ManagementObject obj)
+                {
+                    using var inParams = obj.GetMethodParameters("GetFunction");
+                    inParams["uiInput"] = low32_get;
+                    using var outParams = obj.InvokeMethod("GetFunction", inParams, null);
+                    if (outParams?["uiOutput"] != null)
+                    {
+                        ulong val = Convert.ToUInt64(outParams["uiOutput"]);
+                        uint high32 = (uint)(val >> 32);
+                        byte timeoutSec = (byte)((high32 >> 8) & 0xFF);
+                        _backlight30s = timeoutSec > 0;
+                        return _backlight30s;
+                    }
+                }
+            }
+            catch { }
+
+            // 3. Direct WMI AcerGenericMethod.GetFunction
+            try
+            {
+                using var searcher = new ManagementObjectSearcher(@"root\WMI", "SELECT * FROM AcerGenericMethod");
+                using var results = searcher.Get();
+                using var enumerator = results.GetEnumerator();
+                if (enumerator.MoveNext() && enumerator.Current is ManagementObject obj)
+                {
+                    using var inParams = obj.GetMethodParameters("GetFunction");
+                    inParams["uiInput"] = low32_get;
+                    using var outParams = obj.InvokeMethod("GetFunction", inParams, null);
+                    if (outParams?["uiOutput"] != null)
+                    {
+                        ulong val = Convert.ToUInt64(outParams["uiOutput"]);
+                        uint high32 = (uint)(val >> 32);
+                        byte timeoutSec = (byte)((high32 >> 8) & 0xFF);
+                        _backlight30s = timeoutSec > 0;
+                        return _backlight30s;
+                    }
+                }
+            }
+            catch { }
+
+            return _backlight30s;
+        }
+
         public bool SetBacklight30s(bool enable)
         {
-            byte status = (byte)(enable ? 1 : 0);
-            byte[] kbPayload = new byte[8] { 0x30, 0x01, status, 0x00, 0x00, 0x00, 0x00, (byte)(0xCE - status) };
-            return SendGamingRgbKbCommand(kbPayload);
+            // Reverse-Engineered from AcerAgentService.exe (0x14003DFE0 - 0x14003E0D1) & AcerHardwareService.exe:
+            // low32  = 0x80002 | (BK_Hotkey_Number << 8)  => 0x88402 (on BK_Hotkey_Number = 132 / 0x84)
+            // high32 = (enable ? 0x1E00 : 0x0000) | brightness (0x1E = 30 seconds idle timeout!)
+            // uiInput = ((ulong)high32 << 32) | (ulong)low32
+            //
+            // We dispatch across all supported communication paths:
+            // 1. Hardware Service Named Pipe (kSvcCmdWMISetFunction = 0x1F) - exact method used by official PredatorSense
+            // 2. Direct WMI APGeAction.SetFunction
+            // 3. Direct WMI AcerGenericMethod.SetFunction
+            // 4. Direct WMI AcerGamingFunction.SetGamingMiscSetting
+            _backlight30s = enable;
+            uint hotkeyNum = GetBkHotkeyNumber();
+
+            uint low32 = 0x80002 | (hotkeyNum << 8);
+            uint high32 = (enable ? 0x1E00U : 0x0000U) | (_brightness > 0 ? _brightness : (byte)0x64);
+            ulong uiInput = ((ulong)high32 << 32) | (ulong)low32;
+
+            bool anySuccess = false;
+
+            // Path 1: Hardware Service Named Pipe
+            string[] pipeNames = { "systemmonitoring_hardware_service_", "predatorsense_hardware_service_" };
+            byte[] packet = new byte[15];
+            BitConverter.GetBytes((ushort)0x1F).CopyTo(packet, 0); // kSvcCmdWMISetFunction
+            packet[2] = 1;                                         // 1 argument
+            BitConverter.GetBytes((uint)8).CopyTo(packet, 3);      // argument size (8 bytes)
+            BitConverter.GetBytes(uiInput).CopyTo(packet, 7);      // payload uint64
+
+            foreach (var pipeName in pipeNames)
+            {
+                try
+                {
+                    using var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut);
+                    pipe.Connect(150);
+                    pipe.Write(packet, 0, packet.Length);
+                    pipe.Flush();
+                    byte[] resp = new byte[16];
+                    int read = pipe.Read(resp, 0, resp.Length);
+                    if (read >= 7 && resp[read - 1] == 0)
+                    {
+                        anySuccess = true;
+                        break;
+                    }
+                }
+                catch { }
+            }
+
+            // Path 2: Direct WMI APGeAction.SetFunction
+            try
+            {
+                using var searcher = new ManagementObjectSearcher(@"root\WMI", "SELECT * FROM APGeAction");
+                using var results = searcher.Get();
+                using var enumerator = results.GetEnumerator();
+                if (enumerator.MoveNext() && enumerator.Current is ManagementObject obj)
+                {
+                    using var inParams = obj.GetMethodParameters("SetFunction");
+                    inParams["uiInput"] = uiInput;
+                    using var outParams = obj.InvokeMethod("SetFunction", inParams, null);
+                    if (outParams?["uiOutput"] != null) anySuccess = true;
+                }
+            }
+            catch { }
+
+            // Path 3: Direct WMI AcerGenericMethod.SetFunction
+            try
+            {
+                using var searcher = new ManagementObjectSearcher(@"root\WMI", "SELECT * FROM AcerGenericMethod");
+                using var results = searcher.Get();
+                using var enumerator = results.GetEnumerator();
+                if (enumerator.MoveNext() && enumerator.Current is ManagementObject obj)
+                {
+                    using var inParams = obj.GetMethodParameters("SetFunction");
+                    inParams["uiInput"] = uiInput;
+                    using var outParams = obj.InvokeMethod("SetFunction", inParams, null);
+                    if (outParams?["uiOutput"] != null) anySuccess = true;
+                }
+            }
+            catch { }
+
+            // Path 4: Direct WMI AcerGamingFunction.SetGamingMiscSetting
+            try
+            {
+                var (ok, _) = SendCommand("SetGamingMiscSetting", uiInput);
+                if (ok) anySuccess = true;
+            }
+            catch { }
+
+            return anySuccess;
         }
 
         public bool SetWinKeyLock(bool lockKeys)

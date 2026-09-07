@@ -10,7 +10,7 @@ namespace PredatorControlApp
     [SupportedOSPlatform("windows")]
     public partial class Form1 : Form
     {
-        #region Win32 Interop — DWM & Dark Mode
+        #region Win32 Interop â€” DWM & Dark Mode
 
         [DllImport("dwmapi.dll")]
         private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
@@ -19,7 +19,7 @@ namespace PredatorControlApp
 
         #endregion
 
-        #region Win32 Interop — Window Dragging
+        #region Win32 Interop â€” Window Dragging
 
         public const int WM_NCLBUTTONDOWN = 0xA1;
         public const int HT_CAPTION = 0x2;
@@ -41,7 +41,7 @@ namespace PredatorControlApp
 
         #endregion
 
-        #region Win32 Interop — Hotkeys & Foreground
+        #region Win32 Interop â€” Hotkeys & Foreground
 
         [DllImport("user32.dll", SetLastError = true)]
         private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
@@ -129,10 +129,6 @@ namespace PredatorControlApp
         private PredatorButton _btnFixedSpeed = null!, _btnFanCurve = null!;
         private PredatorButton? _activeCustomSubBtn;
         private PredatorButton _btn60Hz = null!, _btnMaxHz = null!;
-        private Label _lblExternalDisplayHdr = null!;
-        private Panel _pnlExternalMonitors = null!;
-        private List<DisplayCcdController.ExternalMonitorInfo> _externalMonitors = new();
-        private const int WM_DISPLAYCHANGE = 0x007E;
 
         // Theme Switcher Buttons
         private PredatorButton _btnThemeTeal = null!, _btnThemeCrimson = null!, _btnThemeOled = null!;
@@ -142,16 +138,6 @@ namespace PredatorControlApp
         private PredatorDropDown _rgbDropDown = null!;
         private PredatorButton _btnCustomColor = null!;
         private readonly PredatorButton[] _btnPresetColors = new PredatorButton[6];
-        private readonly PredatorButton[] _btnZones = new PredatorButton[4];
-        private PredatorButton _btnAllZones = null!;
-        private int _selectedZone = -1; // -1 = All Zones, 0 = Zone 1, 1 = Zone 2, 2 = Zone 3, 3 = Zone 4
-        private readonly Color[] _currentZoneColors = new Color[4]
-        {
-            Color.FromArgb(0, 230, 180),
-            Color.FromArgb(0, 230, 180),
-            Color.FromArgb(0, 230, 180),
-            Color.FromArgb(0, 230, 180)
-        };
         private static readonly Color[] PresetColors =
         {
             Color.FromArgb(0, 230, 180),   // Predator Teal
@@ -196,16 +182,6 @@ namespace PredatorControlApp
 
         private PredatorButton _btnCheckUpdates = null!;
         private bool _updateCheckRunning;
-
-        // Hardware Feature Controls
-        private PredatorToggle _switchLcdOverdrive = null!;
-        private Label _lblLcdOverdrive = null!;
-
-        private PredatorToggle _switchBacklight30s = null!;
-        private Label _lblBacklight30s = null!;
-
-        private PredatorToggle _switchWinKeyLock = null!;
-        private Label _lblWinKeyLock = null!;
 
         private static readonly string[] RgbModeNames = { "Static", "Breathing", "Neon", "Wave", "Shifting", "Zoom", "Meteor", "Twinkling", "Off" };
 
@@ -434,12 +410,6 @@ namespace PredatorControlApp
                 }
             }
 
-            else if (m.Msg == WM_DISPLAYCHANGE)
-            {
-                // A monitor was connected or disconnected — refresh external monitor section
-                BeginInvoke(new Action(RefreshExternalMonitorSection));
-            }
-
             base.WndProc(ref m);
         }
 
@@ -459,7 +429,6 @@ namespace PredatorControlApp
             Activate();
             BringToFront();
             _telemetryService?.SetPollingState(true);
-            _telemetryService?.SetSensorMask(true);
         }
 
         public void HideApp()
@@ -468,7 +437,6 @@ namespace PredatorControlApp
 
             Hide();
             _telemetryService?.SetPollingState(false);
-            _telemetryService?.SetSensorMask(false);
         }
 
         #endregion
@@ -501,120 +469,6 @@ namespace PredatorControlApp
         {
             if (InvokeRequired) { BeginInvoke(new Action(OnThemeChanged)); return; }
             ApplyCurrentTheme();
-        }
-
-
-        private void RefreshExternalMonitorSection()
-        {
-            if (_pnlExternalMonitors == null) return;
-
-            // Detect currently connected external monitors via CCD API
-            _externalMonitors = DisplayCcdController.GetExternalMonitors();
-
-            bool hasExternal = _externalMonitors.Count > 0;
-
-            // Show/hide the section header
-            if (_lblExternalDisplayHdr != null)
-                _lblExternalDisplayHdr.Visible = hasExternal;
-
-            // Clear old rows
-            _pnlExternalMonitors.Controls.Clear();
-            _pnlExternalMonitors.Height = 0;
-
-            if (!hasExternal)
-            {
-                _pnlExternalMonitors.Visible = false;
-                return;
-            }
-
-            _pnlExternalMonitors.Visible = true;
-
-            int rowH = S(36);
-            int rowGap = S(6);
-            int dropW = S(120);
-            int btnW = S(70);
-            int gap = S(6);
-            int contentW = _pnlExternalMonitors.Width;
-            int totalH = 0;
-
-            var theme = ThemeManager.Current;
-
-            for (int mi = 0; mi < _externalMonitors.Count; mi++)
-            {
-                var mon = _externalMonitors[mi];
-                int rowY = mi * (rowH + rowGap);
-
-                // Monitor name label (left side)
-                string connType = mon.OutputTechnology switch
-                {
-                    DisplayCcdController.DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY.DISPLAYCONFIG_OUTPUT_TECHNOLOGY_HDMI => "HDMI",
-                    DisplayCcdController.DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY.DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DISPLAYPORT_EXTERNAL => "DP",
-                    DisplayCcdController.DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY.DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DVI => "DVI",
-                    _ => "EXT"
-                };
-                string labelText = $"{mon.FriendlyName}  [{connType}]";
-                var lbl = new Label
-                {
-                    Text = labelText,
-                    Location = new Point(0, rowY + (rowH - S(16)) / 2),
-                    AutoSize = false,
-                    Width = contentW - dropW - btnW - gap * 2,
-                    Height = S(18),
-                    Font = FontBody,
-                    ForeColor = theme.TextSecondary,
-                    BackColor = Color.Transparent,
-                    TextAlign = ContentAlignment.MiddleLeft
-                };
-                _pnlExternalMonitors.Controls.Add(lbl);
-
-                // Hz dropdown — populated from supported rates from OS driver only
-                var cbo = new PredatorDropDown
-                {
-                    Location = new Point(contentW - dropW - btnW - gap, rowY),
-                    Size = new Size(dropW, rowH)
-                };
-                foreach (int hz in mon.SupportedHz)
-                    cbo.Items.Add($"{hz} Hz");
-
-                // Pre-select the current rate
-                int curIdx = mon.SupportedHz.IndexOf(mon.CurrentHz);
-                cbo.SelectedIndex = curIdx >= 0 ? curIdx : 0;
-                _pnlExternalMonitors.Controls.Add(cbo);
-
-                // Apply button
-                var capturedMon = mon;
-                var capturedCbo = cbo;
-                var applyBtn = new PredatorButton
-                {
-                    Text = "Apply",
-                    Location = new Point(contentW - btnW, rowY),
-                    Size = new Size(btnW, rowH)
-                };
-                applyBtn.Click += (s, e) =>
-                {
-                    if (capturedCbo.SelectedIndex < 0) return;
-                    int targetHz = capturedMon.SupportedHz[capturedCbo.SelectedIndex];
-                    DisplayCcdController.SetExternalRefreshRate(capturedMon.GdiName, targetHz);
-                    // Re-read to confirm the change took effect
-                    BeginInvoke(new Action(RefreshExternalMonitorSection));
-                };
-                _pnlExternalMonitors.Controls.Add(applyBtn);
-
-                totalH = rowY + rowH;
-            }
-
-            _pnlExternalMonitors.Height = totalH + rowGap;
-            // New controls auto-apply the current theme via ThemeManager.ThemeChanged subscription
-            // Labels need explicit color set since they don't subscribe
-            foreach (Control c in _pnlExternalMonitors.Controls)
-            {
-                if (c is Label lbl2) lbl2.ForeColor = theme.TextSecondary;
-            }
-        }
-
-        private void ApplyExternalDisplayMode(string gdiName, int hz)
-        {
-            DisplayCcdController.SetExternalRefreshRate(gdiName, hz);
         }
 
         #endregion
@@ -691,19 +545,6 @@ namespace PredatorControlApp
             _trayMenu.Items.Add(displayMenu);
             _trayMenu.Items.Add(_trayBatteryMenu);
             _trayMenu.Items.Add(rgbMenu);
-
-            var hardwareMenu = new ToolStripMenuItem("  Hardware Features");
-            var trayWinKey = new ToolStripMenuItem("Lock Windows Key", null, (s, e) =>
-            {
-                if (_switchWinKeyLock != null) _switchWinKeyLock.Checked = !_switchWinKeyLock.Checked;
-            });
-            var trayLcdOverdrive = new ToolStripMenuItem("LCD Overdrive", null, (s, e) =>
-            {
-                if (_switchLcdOverdrive != null) _switchLcdOverdrive.Checked = !_switchLcdOverdrive.Checked;
-            });
-            hardwareMenu.DropDownItems.AddRange([trayWinKey, trayLcdOverdrive]);
-            _trayMenu.Items.Add(hardwareMenu);
-
             _trayMenu.Items.Add(new ToolStripSeparator());
             _trayMenu.Items.Add("Open Dashboard", null, (s, e) => ShowApp());
             _trayMenu.Items.Add("Exit", null, (s, e) => { _isClosing = true; Application.Exit(); });
@@ -773,7 +614,7 @@ namespace PredatorControlApp
 
             var lblClose = new Label
             {
-                Text = "●",
+                Text = "â—",
                 ForeColor = Color.FromArgb(255, 95, 86),
                 Font = new Font("Arial", 12f),
                 AutoSize = true,
@@ -784,7 +625,7 @@ namespace PredatorControlApp
             };
             var lblMin = new Label
             {
-                Text = "●",
+                Text = "â—",
                 ForeColor = Color.FromArgb(255, 189, 46),
                 Font = new Font("Arial", 12f),
                 AutoSize = true,
@@ -821,10 +662,10 @@ namespace PredatorControlApp
 
             // TELEMETRY SENSORS
             MakeLabel("CPU:", pad, y, FontBody, Color.FromArgb(120, 120, 135));
-            _lblCpuTemp = MakeLabel("--°C", pad + S(34), y, FontBodyBold, Color.White);
+            _lblCpuTemp = MakeLabel("--Â°C", pad + S(34), y, FontBodyBold, Color.White);
 
             _lblGpuHdr = MakeLabel("GPU:", ClientSize.Width / 2 + S(10), y, FontBody, Color.FromArgb(120, 120, 135));
-            _lblGpuTemp = MakeLabel("--°C", ClientSize.Width / 2 + S(46), y, FontBodyBold, Color.White);
+            _lblGpuTemp = MakeLabel("--Â°C", ClientSize.Width / 2 + S(46), y, FontBodyBold, Color.White);
 
             y += S(24);
             MakeLabel("CPU FAN:", pad, y, FontBody, Color.FromArgb(120, 120, 135));
@@ -1004,57 +845,12 @@ namespace PredatorControlApp
             _btn60Hz.Click += (s, e) => ApplyDisplayMode(60, _btn60Hz);
             _btnMaxHz.Click += (s, e) => ApplyDisplayMode(_maxHz, _btnMaxHz);
 
-            y += btnH + S(12);
-            int switchH = S(30);
-            _lblLcdOverdrive = MakeLabel("LCD Overdrive (3ms Response Boost)", pad, y, FontBody, Color.FromArgb(120, 120, 135));
-            CenterV(_lblLcdOverdrive, y, switchH);
-
-            _switchLcdOverdrive = new PredatorToggle
-            {
-                Location = new Point(ClientSize.Width - pad - S(48), y),
-                Size = new Size(S(48), switchH)
-            };
-            _contentPanel.Controls.Add(_switchLcdOverdrive);
-
-            _switchLcdOverdrive.CheckedChanged += (s, e) =>
-            {
-                bool enable = _switchLcdOverdrive.Checked;
-                SaveState("LcdOverdrive", enable ? 1 : 0);
-                Task.Run(() =>
-                {
-                    try { _wmi.SetLcdOverdrive(enable); } catch { }
-                });
-            };
-
-            y += switchH + S(16);
-            AddSeparator(y);
-
-            // EXTERNAL DISPLAY(S)
-            y += S(18);
-            _lblExternalDisplayHdr = MakeLabel("EXTERNAL DISPLAY(S)", pad, y, FontSectionHeader, Color.FromArgb(120, 120, 135));
-
-            y += S(24);
-            _pnlExternalMonitors = new Panel
-            {
-                Location = new Point(pad, y),
-                Width = contentW,
-                Height = 0,
-                BackColor = Color.Transparent
-            };
-            _contentPanel.Controls.Add(_pnlExternalMonitors);
-
-            // Do initial detection and render the section (or hide it if no monitors)
-            RefreshExternalMonitorSection();
-
-            // Reserve y-space that RefreshExternalMonitorSection occupies
-            y += _pnlExternalMonitors.Height + S(8);
-
             // BATTERY CHARGE LIMIT
             y += btnH + S(28);
             MakeSectionHeader("BATTERY CHARGE LIMIT", pad, y);
 
             y += S(24);
-            switchH = S(30);
+            int switchH = S(30);
             _lblBatteryStatus = MakeLabel("Full Charge (100%)", pad, y, FontBody, Color.FromArgb(120, 120, 135));
             CenterV(_lblBatteryStatus, y, switchH);
 
@@ -1110,28 +906,8 @@ namespace PredatorControlApp
             _rgbDropDown.SelectedIndex = 3; // Wave
             _contentPanel.Controls.Add(_rgbDropDown);
 
-            // 4-Zone Keyboard Lighting Controls
-            y += dropH + S(16);
-            MakeLabel("KEYBOARD 4-ZONE CONFIG:", pad, y, FontSectionHeader, Color.FromArgb(120, 120, 135));
-
-            y += S(20);
-            int zoneBtnW = (contentW - 4 * gap) / 5;
-            _btnAllZones = MakeButton("All Zones", pad, y, zoneBtnW, S(30));
-            _btnAllZones.IsActive = true;
-            _btnAllZones.ColorIndicator = _currentZoneColors[0];
-            _btnAllZones.Click += (s, e) => SelectZone(-1);
-
-            string[] zoneLabels = { "Zone 1", "Zone 2", "Zone 3", "Zone 4" };
-            for (int z = 0; z < 4; z++)
-            {
-                int zIdx = z;
-                _btnZones[z] = MakeButton(zoneLabels[z], pad + (zoneBtnW + gap) * (z + 1), y, zoneBtnW, S(30));
-                _btnZones[z].ColorIndicator = _currentZoneColors[z];
-                _btnZones[z].Click += (s, e) => SelectZone(zIdx);
-            }
-
             // Quick Preset Color Chips
-            y += S(30) + S(16);
+            y += dropH + S(16);
             MakeLabel("QUICK COLOR PRESETS:", pad, y, FontSectionHeader, Color.FromArgb(120, 120, 135));
 
             y += S(20);
@@ -1145,14 +921,9 @@ namespace PredatorControlApp
             }
 
             y += S(28) + S(12);
-            _btnCustomColor = MakeButton("🎨  Custom Color...", pad, y, contentW, btnH);
+            _btnCustomColor = MakeButton("ðŸŽ¨  Custom Color...", pad, y, contentW, btnH);
             _btnCustomColor.Click += (s, e) =>
             {
-                if (_selectedZone >= 0 && _selectedZone < 4)
-                    _colorPicker.Color = _currentZoneColors[_selectedZone];
-                else
-                    _colorPicker.Color = _currentZoneColors[0];
-
                 if (_colorPicker.ShowDialog() == DialogResult.OK)
                 {
                     ApplyPresetColor(_colorPicker.Color);
@@ -1194,61 +965,10 @@ namespace PredatorControlApp
 
             UpdateRgbControlsState(_rgbDropDown.SelectedIndex);
 
-            y += S(28) + S(12);
-            _lblBacklight30s = MakeLabel("Backlight 30-Sec Idle Sleep", pad, y, FontBody, Color.FromArgb(120, 120, 135));
-            CenterV(_lblBacklight30s, y, switchH);
-
-            _switchBacklight30s = new PredatorToggle
-            {
-                Location = new Point(ClientSize.Width - pad - S(48), y),
-                Size = new Size(S(48), switchH)
-            };
-            _contentPanel.Controls.Add(_switchBacklight30s);
-
-            _switchBacklight30s.CheckedChanged += (s, e) =>
-            {
-                bool enable = _switchBacklight30s.Checked;
-                SaveState("Backlight30s", enable ? 1 : 0);
-                Task.Run(() =>
-                {
-                    try { _wmi.SetBacklight30s(enable); } catch { }
-                });
-            };
-
-            // SYSTEM & HARDWARE CONTROLS
-            y += switchH + S(22);
-            AddSeparator(y);
-
-            y += S(18);
-            MakeSectionHeader("SYSTEM & HARDWARE CONTROLS", pad, y);
-
-            // Windows & Menu Key Lock
-            y += S(24);
-            _lblWinKeyLock = MakeLabel("Lock Windows & Menu Keys", pad, y, FontBody, Color.FromArgb(120, 120, 135));
-            CenterV(_lblWinKeyLock, y, switchH);
-
-            _switchWinKeyLock = new PredatorToggle
-            {
-                Location = new Point(ClientSize.Width - pad - S(48), y),
-                Size = new Size(S(48), switchH)
-            };
-            _contentPanel.Controls.Add(_switchWinKeyLock);
-
-            _switchWinKeyLock.CheckedChanged += (s, e) =>
-            {
-                bool lockKeys = _switchWinKeyLock.Checked;
-                PredatorKeyHook.SetWinKeyLocked(lockKeys);
-                SaveState("LockWinKey", lockKeys ? 1 : 0);
-                Task.Run(() =>
-                {
-                    try { _wmi.SetWinKeyLock(lockKeys); } catch { }
-                });
-            };
-
             // GAME SYNC
-            y += switchH + S(22);
+            y += btnH + S(28);
             AddSeparator(y);
-            y += S(18);
+            y += S(20);
             MakeSectionHeader("GAME SYNC", pad, y);
 
             y += S(24);
@@ -1266,11 +986,11 @@ namespace PredatorControlApp
             _switchGameSync.CheckedChanged += (s, e) =>
             {
                 _gameSync.IsEnabled = _switchGameSync.Checked;
-                _lblGameSyncStatus.Text = _switchGameSync.Checked ? "Active — Monitoring" : "Disabled";
+                _lblGameSyncStatus.Text = _switchGameSync.Checked ? "Active â€” Monitoring" : "Disabled";
             };
 
             y += syncSwitchH + S(10);
-            _btnConfigureGames = MakeButton("🎮  Configure Executables", pad, y, contentW, btnH);
+            _btnConfigureGames = MakeButton("ðŸŽ®  Configure Executables", pad, y, contentW, btnH);
             _btnConfigureGames.Click += (s, e) =>
             {
                 using var form = new GameSyncForm(_gameSync, _maxHz);
@@ -1289,53 +1009,24 @@ namespace PredatorControlApp
             var lblVersion = MakeLabel($"Version {Updater.CurrentText}", pad, y, FontBody, Color.FromArgb(120, 120, 135));
             CenterV(lblVersion, y, updBtnH);
 
-            _btnCheckUpdates = MakeButton("⬇  Check for Updates", ClientSize.Width - pad - updBtnW, y, updBtnW, updBtnH);
+            _btnCheckUpdates = MakeButton("â¬‡  Check for Updates", ClientSize.Width - pad - updBtnW, y, updBtnW, updBtnH);
             _btnCheckUpdates.Click += async (s, e) => await CheckForUpdatesAsync();
 
             _contentPanel.AutoScrollMinSize = new Size(0, y + updBtnH + S(50));
-        }
-
-        private void SelectZone(int zoneIndex)
-        {
-            _selectedZone = zoneIndex;
-            if (_btnAllZones != null) _btnAllZones.IsActive = (zoneIndex == -1);
-            for (int z = 0; z < 4; z++)
-            {
-                if (_btnZones[z] != null) _btnZones[z].IsActive = (zoneIndex == z);
-            }
-
-            Color activeColor = (zoneIndex >= 0 && zoneIndex < 4) ? _currentZoneColors[zoneIndex] : _currentZoneColors[0];
-            _colorPicker.Color = activeColor;
-            if (_btnCustomColor != null)
-                _btnCustomColor.ColorIndicator = activeColor;
         }
 
         private void ApplyPresetColor(Color c)
         {
             _colorPicker.Color = c;
 
-            if (_selectedZone == -1)
+            // Automatically switch to Static if currently in an animated mode
+            if (_rgbDropDown.SelectedIndex != 0 && _rgbDropDown.SelectedIndex != 1)
             {
-                // Apply to ALL 4 zones
-                for (int i = 0; i < 4; i++)
-                {
-                    _currentZoneColors[i] = c;
-                    if (_btnZones[i] != null)
-                        _btnZones[i].ColorIndicator = c;
-                    SaveState($"ZoneColor_{i}", c.ToArgb());
-                }
-                if (_btnAllZones != null)
-                    _btnAllZones.ColorIndicator = c;
+                _rgbDropDown.SelectedIndex = 0;
             }
-            else if (_selectedZone >= 0 && _selectedZone < 4)
-            {
-                // Apply to specific zone
-                _currentZoneColors[_selectedZone] = c;
-                if (_btnZones[_selectedZone] != null)
-                    _btnZones[_selectedZone].ColorIndicator = c;
 
-                SaveState($"ZoneColor_{_selectedZone}", c.ToArgb());
-            }
+            int mode = _rgbDropDown.SelectedIndex == 8 ? 0 : _rgbDropDown.SelectedIndex;
+            _wmi.SetKeyboardColor(c, mode);
 
             if (_btnCustomColor != null)
                 _btnCustomColor.ColorIndicator = c;
@@ -1343,37 +1034,13 @@ namespace PredatorControlApp
             SaveState("RGB_R", c.R);
             SaveState("RGB_G", c.G);
             SaveState("RGB_B", c.B);
-
-            // Only switch to Static if currently in a mode that doesn't support custom colors (Neon, Wave, Off)
-            if (_rgbDropDown.SelectedIndex == 2 || _rgbDropDown.SelectedIndex == 3 || _rgbDropDown.SelectedIndex == 8)
-            {
-                _rgbDropDown.SelectedIndex = 0; // Triggers ApplyRgbModeFromDropdown(0) with updated zone colors
-                return;
-            }
-
-            int mode = _rgbDropDown.SelectedIndex;
-
-            if (_selectedZone == -1)
-            {
-                _wmi.SetKeyboardColor(c, mode);
-            }
-            else if (_selectedZone >= 0 && _selectedZone < 4)
-            {
-                _wmi.SetSingleZoneColor(_selectedZone, c, mode);
-            }
         }
 
         private void UpdateRgbControlsState(int mode)
         {
-            // Static (0), Breathing (1), Shifting (4), Zoom (5), Meteor (6), and Twinkling (7) support custom color customization.
-            // Only Neon (2), Wave (3), and Off (8) do not support custom colors.
-            bool colorsEnabled = (mode != 2 && mode != 3 && mode != 8);
-
-            if (_btnAllZones != null) _btnAllZones.Enabled = colorsEnabled;
-            for (int z = 0; z < 4; z++)
-            {
-                if (_btnZones[z] != null) _btnZones[z].Enabled = colorsEnabled;
-            }
+            // Only Static (0) and Breathing (1) support custom color customization.
+            // Animated modes (Neon, Wave, Shifting, Zoom, Meteor, Twinkling, Off) control colors firmware-wide.
+            bool colorsEnabled = (mode == 0 || mode == 1);
 
             for (int i = 0; i < _btnPresetColors.Length; i++)
             {
@@ -1490,36 +1157,12 @@ namespace PredatorControlApp
                 if (_btn60Hz != null) _btn60Hz.Width = dispBtnW;
                 if (_btnMaxHz != null) { _btnMaxHz.Left = pad + dispBtnW + gap; _btnMaxHz.Width = dispBtnW; }
 
-                // LCD Overdrive & Backlight 30s Switches
-                if (_switchLcdOverdrive != null) _switchLcdOverdrive.Left = ClientSize.Width - pad - S(48);
-                if (_switchBacklight30s != null) _switchBacklight30s.Left = ClientSize.Width - pad - S(48);
-
                 // Battery Limit & Startup Switches
                 if (_switchBatteryLimit != null) _switchBatteryLimit.Left = ClientSize.Width - pad - S(48);
                 if (_switchStartWithWindows != null) _switchStartWithWindows.Left = ClientSize.Width - pad - S(48);
 
-                // System & Hardware Controls
-                if (_switchWinKeyLock != null) _switchWinKeyLock.Left = ClientSize.Width - pad - S(48);
-
-
                 // Keyboard RGB controls
                 if (_rgbDropDown != null) _rgbDropDown.Width = contentW;
-
-                // Keyboard 4-Zone controls
-                int zoneBtnW = (contentW - 4 * gap) / 5;
-                if (_btnAllZones != null)
-                {
-                    _btnAllZones.Left = pad;
-                    _btnAllZones.Width = zoneBtnW;
-                }
-                for (int z = 0; z < 4; z++)
-                {
-                    if (_btnZones[z] != null)
-                    {
-                        _btnZones[z].Left = pad + (zoneBtnW + gap) * (z + 1);
-                        _btnZones[z].Width = zoneBtnW;
-                    }
-                }
 
                 int preW = (contentW - 5 * gap) / 6;
                 for (int i = 0; i < 6; i++)
@@ -1849,23 +1492,14 @@ namespace PredatorControlApp
             }
             else if (mode == 0) // Static
             {
+                Color c = _colorPicker.Color;
+                _wmi.SetRgbMode(0, c.R, c.G, c.B, bright, speed, 0);
                 _speedSlider.Enabled = false;
-                _wmi.SetBrightness(bright);
-                _wmi.Set4ZoneColors(_currentZoneColors, 0);
             }
-            else if (mode == 2 || mode == 3) // Neon (2), Wave (3) - fixed firmware rainbow animations
+            else
             {
+                _wmi.SetRgbMode(mode, _wmi.LastR, _wmi.LastG, _wmi.LastB, bright, speed, 0);
                 _speedSlider.Enabled = true;
-                _wmi.SetBrightness(bright);
-                _wmi.SetSpeed(speed);
-                _wmi.SetRgbMode(mode, _currentZoneColors[0].R, _currentZoneColors[0].G, _currentZoneColors[0].B, bright, speed, 0);
-            }
-            else // Breathing (1), Shifting (4), Zoom (5), Meteor (6), Twinkling (7) - custom colors supported
-            {
-                _speedSlider.Enabled = true;
-                _wmi.SetBrightness(bright);
-                _wmi.SetSpeed(speed);
-                _wmi.Set4ZoneColors(_currentZoneColors, mode);
             }
 
             if (_rgbDropDown.SelectedIndex != mode)
@@ -1915,8 +1549,6 @@ namespace PredatorControlApp
                 RgbR = _wmi.LastR,
                 RgbG = _wmi.LastG,
                 RgbB = _wmi.LastB,
-                WasWinKeyLocked = _switchWinKeyLock?.Checked ?? false,
-                WasLcdOverdriveEnabled = _switchLcdOverdrive?.Checked ?? true
             };
         }
 
@@ -1999,21 +1631,6 @@ namespace PredatorControlApp
             if (profile.BatteryLimit >= 0)
                 ApplyBatteryLimit(profile.BatteryLimit == 1);
 
-            if (profile.LockWinKey >= 0)
-            {
-                bool lockKeys = profile.LockWinKey == 1;
-                if (_switchWinKeyLock != null) _switchWinKeyLock.Checked = lockKeys;
-                PredatorKeyHook.SetWinKeyLocked(lockKeys);
-                try { _wmi.SetWinKeyLock(lockKeys); } catch { }
-            }
-
-            if (profile.LcdOverdrive >= 0)
-            {
-                bool enableLcd = profile.LcdOverdrive == 1;
-                if (_switchLcdOverdrive != null) _switchLcdOverdrive.Checked = enableLcd;
-                try { _wmi.SetLcdOverdrive(enableLcd); } catch { }
-            }
-
             await Task.Delay(500);
             if (IsDisposed) return;
 
@@ -2084,19 +1701,6 @@ namespace PredatorControlApp
                 ApplyDisplayMode(snap.RefreshRate, snap.RefreshRate <= 60 ? _btn60Hz : _btnMaxHz);
 
             ApplyBatteryLimit(snap.BatteryLimit == 1);
-
-            if (_switchWinKeyLock != null)
-            {
-                _switchWinKeyLock.Checked = snap.WasWinKeyLocked;
-                PredatorKeyHook.SetWinKeyLocked(snap.WasWinKeyLocked);
-                try { _wmi.SetWinKeyLock(snap.WasWinKeyLocked); } catch { }
-            }
-
-            if (_switchLcdOverdrive != null)
-            {
-                _switchLcdOverdrive.Checked = snap.WasLcdOverdriveEnabled;
-                try { _wmi.SetLcdOverdrive(snap.WasLcdOverdriveEnabled); } catch { }
-            }
 
             await Task.Delay(500);
             if (IsDisposed) return;
@@ -2230,25 +1834,6 @@ namespace PredatorControlApp
                     }
                 }
 
-                // Load 4-Zone Colors
-                for (int z = 0; z < 4; z++)
-                {
-                    int savedArgb = GetInt(key, $"ZoneColor_{z}", -1, int.MinValue, int.MaxValue);
-                    if (savedArgb != -1)
-                    {
-                        _currentZoneColors[z] = Color.FromArgb(savedArgb);
-                    }
-                    else
-                    {
-                        _currentZoneColors[z] = Color.FromArgb(savedR, savedG, savedB);
-                    }
-
-                    if (_btnZones[z] != null)
-                        _btnZones[z].ColorIndicator = _currentZoneColors[z];
-                }
-                if (_btnAllZones != null)
-                    _btnAllZones.ColorIndicator = _currentZoneColors[0];
-
                 int clampedMode = Math.Clamp(savedRgbMode, 0, 8);
                 ApplyRgbModeFromDropdown(clampedMode);
 
@@ -2284,22 +1869,6 @@ namespace PredatorControlApp
                 {
                     Task.Run(() => { try { SetStartupEnabled(true); } catch { } });
                 }
-
-                // LCD Overdrive
-                int savedLcdOverdrive = GetInt(key, "LcdOverdrive", 1, 0, 1);
-                if (_switchLcdOverdrive != null) _switchLcdOverdrive.Checked = (savedLcdOverdrive == 1);
-                Task.Run(() => { try { _wmi.SetLcdOverdrive(savedLcdOverdrive == 1); } catch { } });
-
-                // Backlight 30s Sleep
-                int savedBacklight30s = GetInt(key, "Backlight30s", 1, 0, 1);
-                if (_switchBacklight30s != null) _switchBacklight30s.Checked = (savedBacklight30s == 1);
-                Task.Run(() => { try { _wmi.SetBacklight30s(savedBacklight30s == 1); } catch { } });
-
-                // Windows Key Lock
-                int savedWinKeyLock = GetInt(key, "LockWinKey", 0, 0, 1);
-                if (_switchWinKeyLock != null) _switchWinKeyLock.Checked = (savedWinKeyLock == 1);
-                PredatorKeyHook.SetWinKeyLocked(savedWinKeyLock == 1);
-                Task.Run(() => { try { _wmi.SetWinKeyLock(savedWinKeyLock == 1); } catch { } });
             }
             catch { }
         }
@@ -2391,16 +1960,16 @@ namespace PredatorControlApp
             _cpuFanRpm = snap.CpuFanRpm;
             _gpuFanRpm = snap.GpuFanRpm;
 
-            // Audit: check .HasValue and never format as "CPU: °C"
-            _lblCpuTemp.Text = _cpuTemp.HasValue ? $"{_cpuTemp.Value}°C" : "--°C";
-            _lblGpuTemp.Text = _gpuTemp.HasValue ? $"{_gpuTemp.Value}°C" : "--°C";
+            // Audit: check .HasValue and never format as "CPU: Â°C"
+            _lblCpuTemp.Text = _cpuTemp.HasValue ? $"{_cpuTemp.Value}Â°C" : "--Â°C";
+            _lblGpuTemp.Text = _gpuTemp.HasValue ? $"{_gpuTemp.Value}Â°C" : "--Â°C";
             _lblCpuTemp.ForeColor = TempColor(_cpuTemp ?? 0);
             _lblGpuTemp.ForeColor = TempColor(_gpuTemp ?? 0);
 
             _lblCpuRpm.Text = _cpuFanRpm.HasValue ? $"{_cpuFanRpm.Value} RPM" : "-- RPM";
             _lblGpuRpm.Text = _gpuFanRpm.HasValue ? $"{_gpuFanRpm.Value} RPM" : "-- RPM";
 
-            _trayIcon.Text = $"Predator Control\nCPU: {(_cpuTemp.HasValue ? $"{_cpuTemp.Value}°C" : "--°C")}  GPU: {(_gpuTemp.HasValue ? $"{_gpuTemp.Value}°C" : "--°C")}";
+            _trayIcon.Text = $"Predator Control\nCPU: {(_cpuTemp.HasValue ? $"{_cpuTemp.Value}Â°C" : "--Â°C")}  GPU: {(_gpuTemp.HasValue ? $"{_gpuTemp.Value}Â°C" : "--Â°C")}";
 
             if (_fanCurveForm != null && !_fanCurveForm.IsDisposed)
                 _fanCurveForm.UpdateTemps(_cpuTemp ?? 0, _gpuTemp ?? 0);
@@ -2733,7 +2302,7 @@ namespace PredatorControlApp
         private async Task PromptUpdateAsync(UpdateInfo info)
         {
             bool accepted = Updater.ShowNotes(this, "Update available",
-                $"Version {info.Version.ToString(3)} is available — you have v{Updater.CurrentText}",
+                $"Version {info.Version.ToString(3)} is available â€” you have v{Updater.CurrentText}",
                 info.Notes, confirm: true);
 
             if (!accepted) return;
@@ -2741,7 +2310,7 @@ namespace PredatorControlApp
             try
             {
                 _btnCheckUpdates.Enabled = false;
-                _btnCheckUpdates.Text = "Downloading update…";
+                _btnCheckUpdates.Text = "Downloading updateâ€¦";
                 await Updater.ApplyAsync(info);
 
                 _isClosing = true;
@@ -2750,7 +2319,7 @@ namespace PredatorControlApp
             catch (Exception ex)
             {
                 _btnCheckUpdates.Enabled = true;
-                _btnCheckUpdates.Text = $"⬇  Check for Updates  (v{Updater.CurrentText})";
+                _btnCheckUpdates.Text = $"â¬‡  Check for Updates  (v{Updater.CurrentText})";
                 MessageBox.Show(this, $"Update failed:\n{ex.Message}",
                     "Predator Control", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }

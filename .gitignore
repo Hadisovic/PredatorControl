@@ -1,0 +1,10 @@
+# Build outputs
+bin/
+obj/
+src/bin/
+src/obj/
+src/Debug/
+src/Release/
+*.user
+*.suo
+.vs/

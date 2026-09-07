@@ -5,15 +5,38 @@
 # 🪼 Predator Control
 
 [![Version](https://img.shields.io/badge/version-1.4.1-00E5FF?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Hadisovic/PredatorControl/releases)
+[![Jelli UI](https://img.shields.io/badge/Jelli%20UI-Coming%20Soon%20%E2%9C%A8-FF69B4?style=for-the-badge&logo=sparkles&logoColor=white)](#-jelli-ui--coming-soon)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-00B4CC?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/Hadisovic/PredatorControl)
 [![Framework](https://img.shields.io/badge/.NET-10.0%20Windows-512BD4?style=for-the-badge&logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/)
 [![License](https://img.shields.io/badge/license-MIT-2ED573?style=for-the-badge)](LICENSE)
 [![RAM](https://img.shields.io/badge/RAM%20Usage-%7E18%20MB-FF6B35?style=for-the-badge&logo=memory&logoColor=white)](https://github.com/Hadisovic/PredatorControl)
 
+<br/>
+
 **Predator Control** is a lightweight, bloat-free alternative to Acer PredatorSense for **Acer Predator & Nitro** laptops.
-Direct ACPI WMI hardware control, **~95% less RAM**, zero background services, and a cute jellyfish theme! 🪼
+Direct ACPI WMI hardware control, **~95% less RAM**, zero background services!
 
 </div>
+
+> [!NOTE]
+> ### 🪼 Jelli Cute UI Interface — Coming Soon!
+> The backend ACPI WMI hardware control engine is fully operational and rock-solid (~18 MB RAM, zero bloat). 
+> The brand-new **Jelli cute jellyfish-themed user interface** is currently in active development and will be released in an upcoming major update! Stay tuned!
+
+---
+
+## 🪼 Jelli UI — Coming Soon!
+
+> 🚧 **Status:** In Active Development & Design Phase ✨
+
+Predator Control is designed to be both featherlight and delightful. While the current release features a clean, high-performance dark dashboard, the upcoming **Jelli UI** overhaul is bringing:
+
+- 🌸 **Cute Bioluminescent Jellyfish Mascot**: An interactive Jelli companion that reacts to your laptop's thermals, fan speeds, and active power profiles.
+- 🌊 **Modern Glassmorphism Design**: Deep ocean dark backdrop with glowing `#00E5FF` neon teal and soft coral accents.
+- 🪶 **Zero-Bloat Philosophy**: Handcrafted for near-zero CPU wakeups and minimal memory footprint (< 25 MB RAM).
+- 🎛️ **Quick Floating Widget & Tray Flyout**: Instant performance cycling and thermal checks without opening full windows.
+
+*The core ACPI WMI engine is completely functional today — the full Jelli visual interface will roll out in the upcoming release.*
 
 ---
 
@@ -32,12 +55,6 @@ Predator Control replaces all of that with direct ACPI WMI calls to your laptop'
 | **Window Toggle Latency** | 2.5 – 5.0 s | **< 50 ms** | 🟢 Instant launch |
 | **Mode Switch Latency** | 500 – 1200 ms | **< 30 ms** | 🟢 Direct EC write |
 | **Game Focus Stealing** | ❌ Focus steals | **✅ Never** (`WS_EX_NOACTIVATE`) | 🟢 Game-safe OSD |
-
----
-
-## 🪼 Jelli — The Mascot
-
-Predator Control features **Jelli**, a cute bioluminescent jellyfish mascot, bringing a smooth deep-sea ocean vibe (`#00E5FF` neon teal) to laptop control.
 
 ---
 
@@ -113,6 +130,17 @@ PredatorControl/
 ├── README.md                      # Project documentation
 └── .gitignore                     # Git ignore rules
 ```
+
+---
+
+## 🗺️ Roadmap
+
+- [ ] 🪼 **Jelli UI Interface**: Complete cute jellyfish visual overhaul & interactive mascot (**In Development 🚧**)
+- [ ] 🎮 **Raw Input HID Hook**: Native hardware Predator Key sniffing (`UsagePage 0xFFA0`)
+- [ ] ⚡ **ACPI Event Sniffing**: Deep `AcerEvent` / `APGeEvent` mapping
+- [ ] 🌊 **RGB Wave Direction**: Direction toggle (Left-to-Right / Right-to-Left)
+- [ ] 🔋 **USB Power-Off Charging**: Direct firmware toggle
+- [ ] 🩺 **Hardware Health Diagnostics**: Battery wear % & SSD S.M.A.R.T. readout
 
 ---
 

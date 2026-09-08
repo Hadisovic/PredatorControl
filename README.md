@@ -206,6 +206,15 @@ To test Predator Control without completely uninstalling OEM software:
 
 ---
 
+---
+
+## 💡 Credits & Attribution
+
+Special thanks and recognition to **[@supesonly](https://github.com/supesonly)** for the foundational inspiration and project base:
+* [supesonly/Acer-P-Helper](https://github.com/supesonly/Acer-P-Helper)
+
+---
+
 <div align="center">
 
 **Made with 🪼 and neon teal**

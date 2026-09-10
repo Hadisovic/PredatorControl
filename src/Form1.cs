@@ -671,6 +671,7 @@ namespace PredatorControlApp
             _trayIcon.Text = "Predator Control";
             try { _trayIcon.Visible = true; } catch { }
             _trayIcon.DoubleClick += (s, e) => ShowApp();
+            _trayIcon.MouseClick += (s, e) => { if (e.Button == MouseButtons.Left) ShowApp(); };
         }
 
         private void BuildTrayMenu()
@@ -2207,6 +2208,17 @@ namespace PredatorControlApp
                     key.SetValue(name, value);
                 }
                 catch { }
+
+                // Mirror hardware states to HKLM so boot-time task can enforce them before user logon
+                if (name is "BatteryLimit" or "Power" or "Fan")
+                {
+                    try
+                    {
+                        using var hklmKey = Registry.LocalMachine.CreateSubKey(@"SOFTWARE\PredatorControl");
+                        hklmKey?.SetValue(name, value);
+                    }
+                    catch { }
+                }
             }, 300);
         }
 
@@ -2633,6 +2645,7 @@ namespace PredatorControlApp
         #region Startup Task Registration
 
         private const string StartupTaskName = "PredatorControl";
+        private const string BootTaskName = "PredatorControlBoot";
 
         private static bool IsStartupEnabled()
         {
@@ -2644,31 +2657,51 @@ namespace PredatorControlApp
             RemoveLegacyRunKey();
 
             if (!enable)
+            {
+                RunSchtasks($"/Delete /TN \"{BootTaskName}\" /F");
                 return RunSchtasks($"/Delete /TN \"{StartupTaskName}\" /F") == 0 || !IsStartupEnabled();
+            }
 
+            // 1. Register main interactive task: triggers immediately at user logon with 0 delay and correct working directory
             string xmlPath = Path.Combine(Path.GetTempPath(), "PredatorControlStartup.xml");
+            bool logonOk = false;
             try
             {
                 File.WriteAllText(xmlPath, BuildStartupTaskXml(), Encoding.Unicode);
-                return RunSchtasks($"/Create /TN \"{StartupTaskName}\" /XML \"{xmlPath}\" /F") == 0;
+                logonOk = RunSchtasks($"/Create /TN \"{StartupTaskName}\" /XML \"{xmlPath}\" /F") == 0;
             }
-            catch { return false; }
+            catch { }
             finally
             {
                 try { File.Delete(xmlPath); } catch { }
             }
+
+            // 2. Register machine early boot task: triggers at system boot (before logon) as SYSTEM to lock 80% battery limit
+            string bootXmlPath = Path.Combine(Path.GetTempPath(), "PredatorControlBoot.xml");
+            try
+            {
+                File.WriteAllText(bootXmlPath, BuildBootTaskXml(), Encoding.Unicode);
+                RunSchtasks($"/Create /TN \"{BootTaskName}\" /XML \"{bootXmlPath}\" /F");
+            }
+            catch { }
+            finally
+            {
+                try { File.Delete(bootXmlPath); } catch { }
+            }
+
+            return logonOk;
         }
 
         private static string BuildStartupTaskXml()
         {
-            string exePath = Application.ExecutablePath;
+            string exePath = Environment.ProcessPath ?? Application.ExecutablePath;
             if (exePath.Contains("PredatorSense", StringComparison.OrdinalIgnoreCase) ||
                 exePath.Contains("Prerequisites", StringComparison.OrdinalIgnoreCase) ||
                 exePath.Contains("NitroSense", StringComparison.OrdinalIgnoreCase))
             {
                 string[] candidates =
                 {
-                    @"C:\Users\youse\Downloads\PredatorControl-standalone (1).exe",
+                    @"C:\Users\youse\Downloads\PredatorControl\PredatorControl-standalone.exe",
                     @"C:\Users\youse\Downloads\PredatorControl-standalone.exe",
                     @"C:\Users\youse\Downloads\PredatorControl-Unpacked\PredatorControlApp.exe"
                 };
@@ -2677,8 +2710,11 @@ namespace PredatorControlApp
                     if (File.Exists(c)) { exePath = c; break; }
                 }
             }
+            string workingDir = Path.GetDirectoryName(exePath) ?? "";
             string exe = System.Security.SecurityElement.Escape(exePath);
-            string user = System.Security.SecurityElement.Escape(WindowsIdentity.GetCurrent().Name);
+            string dir = System.Security.SecurityElement.Escape(workingDir);
+            string userSid = WindowsIdentity.GetCurrent().User?.Value ?? "";
+            string user = System.Security.SecurityElement.Escape(string.IsNullOrEmpty(userSid) ? WindowsIdentity.GetCurrent().Name : userSid);
 
             return $@"<?xml version=""1.0"" encoding=""UTF-16""?>
 <Task version=""1.2"" xmlns=""http://schemas.microsoft.com/windows/2004/02/mit/task"">
@@ -2689,6 +2725,7 @@ namespace PredatorControlApp
     <LogonTrigger>
       <Enabled>true</Enabled>
       <UserId>{user}</UserId>
+      <Delay>PT0S</Delay>
     </LogonTrigger>
   </Triggers>
   <Principals>
@@ -2699,10 +2736,10 @@ namespace PredatorControlApp
     </Principal>
   </Principals>
   <Settings>
-    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <MultipleInstancesPolicy>Parallel</MultipleInstancesPolicy>
     <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
     <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
-    <AllowHardTerminate>false</AllowHardTerminate>
+    <AllowHardTerminate>true</AllowHardTerminate>
     <StartWhenAvailable>true</StartWhenAvailable>
     <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
     <IdleSettings>
@@ -2715,12 +2752,75 @@ namespace PredatorControlApp
     <RunOnlyIfIdle>false</RunOnlyIfIdle>
     <WakeToRun>false</WakeToRun>
     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
-    <Priority>1</Priority>
+    <Priority>4</Priority>
   </Settings>
   <Actions Context=""Author"">
     <Exec>
       <Command>{exe}</Command>
       <Arguments>-hidden</Arguments>
+      <WorkingDirectory>{dir}</WorkingDirectory>
+    </Exec>
+  </Actions>
+</Task>";
+        }
+
+        private static string BuildBootTaskXml()
+        {
+            string exePath = Environment.ProcessPath ?? Application.ExecutablePath;
+            if (exePath.Contains("PredatorSense", StringComparison.OrdinalIgnoreCase) ||
+                exePath.Contains("Prerequisites", StringComparison.OrdinalIgnoreCase) ||
+                exePath.Contains("NitroSense", StringComparison.OrdinalIgnoreCase))
+            {
+                string[] candidates =
+                {
+                    @"C:\Users\youse\Downloads\PredatorControl\PredatorControl-standalone.exe",
+                    @"C:\Users\youse\Downloads\PredatorControl-standalone.exe",
+                    @"C:\Users\youse\Downloads\PredatorControl-Unpacked\PredatorControlApp.exe"
+                };
+                foreach (var c in candidates)
+                {
+                    if (File.Exists(c)) { exePath = c; break; }
+                }
+            }
+            string workingDir = Path.GetDirectoryName(exePath) ?? "";
+            string exe = System.Security.SecurityElement.Escape(exePath);
+            string dir = System.Security.SecurityElement.Escape(workingDir);
+
+            return $@"<?xml version=""1.0"" encoding=""UTF-16""?>
+<Task version=""1.2"" xmlns=""http://schemas.microsoft.com/windows/2004/02/mit/task"">
+  <RegistrationInfo>
+    <Description>Enforces Predator Control battery charge limiter at machine boot.</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <BootTrigger>
+      <Enabled>true</Enabled>
+    </BootTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id=""Author"">
+      <UserId>S-1-5-18</UserId>
+      <LogonType>ServiceAccount</LogonType>
+      <RunLevel>HighestAvailable</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>true</Hidden>
+    <ExecutionTimeLimit>PT30S</ExecutionTimeLimit>
+    <Priority>1</Priority>
+  </Settings>
+  <Actions Context=""Author"">
+    <Exec>
+      <Command>{exe}</Command>
+      <Arguments>--boot-limit</Arguments>
+      <WorkingDirectory>{dir}</WorkingDirectory>
     </Exec>
   </Actions>
 </Task>";

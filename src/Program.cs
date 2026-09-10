@@ -52,17 +52,32 @@ namespace PredatorControlApp
             // within the first few milliseconds of execution to prevent the 1% charge creep on startup.
             try
             {
-                using var regKey = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"SOFTWARE\PredatorControl");
-                if (regKey != null)
+                bool enableLimit = false;
+                // 1. Check HKLM first (machine boot mirror, accessible to SYSTEM before user logon)
+                using (var hklmKey = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\PredatorControl"))
                 {
-                    object? val = regKey.GetValue("BatteryLimit");
-                    bool enableLimit = false;
-                    if (val is int i) enableLimit = i == 1;
-                    else if (val != null && int.TryParse(val.ToString(), out int p)) enableLimit = p == 1;
-
-                    using var wmiEarly = new WmiController();
-                    wmiEarly.SetBatteryChargeLimit(enableLimit);
+                    if (hklmKey != null)
+                    {
+                        object? val = hklmKey.GetValue("BatteryLimit");
+                        if (val is int i) enableLimit = i == 1;
+                        else if (val != null && int.TryParse(val.ToString(), out int p)) enableLimit = p == 1;
+                    }
                 }
+
+                // 2. If not found in HKLM, check CurrentUser
+                if (!enableLimit)
+                {
+                    using var regKey = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"SOFTWARE\PredatorControl");
+                    if (regKey != null)
+                    {
+                        object? val = regKey.GetValue("BatteryLimit");
+                        if (val is int i) enableLimit = i == 1;
+                        else if (val != null && int.TryParse(val.ToString(), out int p)) enableLimit = p == 1;
+                    }
+                }
+
+                using var wmiEarly = new WmiController();
+                wmiEarly.SetBatteryChargeLimit(enableLimit);
             }
             catch { }
 

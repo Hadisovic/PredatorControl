@@ -288,13 +288,49 @@ namespace PredatorControlApp
 
         public void SetPowerMode(byte mode)
         {
+            // 1. Dual-dispatch to Acer OEM Agent Service (TCP socket & named pipe)
+            // This actively communicates with AcerAgentService / AcerHardwareService
+            // and sets PL1/PL2 power ceilings, GPU overclocking, and hardware mode state.
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await AcerAgentClient.SetOperatingModeAsync(mode);
+                }
+                catch { }
+            });
+
+            // 2. Direct ACPI WMI dispatch on root\WMI\AcerGamingFunction
+            // Dual-profile dispatch: raw mode byte, configuration packet, and misc setting register 0x0B
+            SendCommand("SetGamingProfile", (ulong)mode);
+            SendCommand("SetGamingProfile", 0x01000000UL | (ulong)mode);
             SendCommand("SetGamingMiscSetting", (ulong)0x0B | ((ulong)mode << 8));
+
+            // 3. Windows Power Plan Overlay synchronization
             SyncWindowsPowerMode(mode);
         }
 
         public void SetFanBehavior(byte mode)
         {
+            // 1. Direct ACPI WMI Fan Behavior command
             SendCommand("SetGamingFanBehavior", (ulong)(0x09 | ((ulong)mode << 16) | ((ulong)mode << 22)));
+
+            // 2. Dual-dispatch to Acer OEM Agent Service
+            // Mode mapping: 0x02 (Max) -> 1, 0x03 (Custom) -> 2, 0x01 (Auto) -> 0
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    int agentFanMode = mode switch
+                    {
+                        0x02 => 1, // Max
+                        0x03 => 2, // Custom
+                        _ => 0     // Auto
+                    };
+                    await AcerAgentClient.SetFanModeAsync(agentFanMode);
+                }
+                catch { }
+            });
 
             if (mode == 0x03)
                 SetFanSpeed(_customCpuFanSpeed, _customGpuFanSpeed);
@@ -305,6 +341,15 @@ namespace PredatorControlApp
             _customCpuFanSpeed = cpuSpeed;
             _customGpuFanSpeed = gpuSpeed;
 
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await AcerAgentClient.SetCustomFanSpeedAsync(cpuSpeed, gpuSpeed);
+                }
+                catch { }
+            });
+
             var (cpuOk, _) = SendCommand("SetGamingFanSpeed", 0x01UL | ((ulong)cpuSpeed << 8));
             var (gpuOk, _) = SendCommand("SetGamingFanSpeed", 0x04UL | ((ulong)gpuSpeed << 8));
             return cpuOk && gpuOk;
@@ -313,6 +358,14 @@ namespace PredatorControlApp
         public bool SetCpuFanSpeed(byte speed)
         {
             _customCpuFanSpeed = speed;
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await AcerAgentClient.SetCustomFanSpeedAsync(_customCpuFanSpeed, _customGpuFanSpeed);
+                }
+                catch { }
+            });
             var (ok, _) = SendCommand("SetGamingFanSpeed", 0x01UL | ((ulong)speed << 8));
             return ok;
         }
@@ -320,6 +373,14 @@ namespace PredatorControlApp
         public bool SetGpuFanSpeed(byte speed)
         {
             _customGpuFanSpeed = speed;
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await AcerAgentClient.SetCustomFanSpeedAsync(_customCpuFanSpeed, _customGpuFanSpeed);
+                }
+                catch { }
+            });
             var (ok, _) = SendCommand("SetGamingFanSpeed", 0x04UL | ((ulong)speed << 8));
             return ok;
         }

@@ -1,4 +1,4 @@
-﻿# Build outputs
+# Build outputs
 bin/
 obj/
 src/bin/
@@ -15,6 +15,7 @@ revisions/*/Release/
 
 # Standalone exe outputs at root level
 win-x64/
+standalone/
 
 # Backup files
 *.bak

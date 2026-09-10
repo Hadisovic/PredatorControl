@@ -197,8 +197,6 @@ namespace PredatorControlApp
         private PredatorButton _btnCheckUpdates = null!;
         private bool _updateCheckRunning;
 
-        private PredatorButton? _fanModeBeforeTurbo = null;
-
         // Hardware Feature Controls
         private PredatorToggle _switchLcdOverdrive = null!;
         private Label _lblLcdOverdrive = null!;
@@ -1711,24 +1709,6 @@ namespace PredatorControlApp
             _wmi.SetPowerMode(mode);
             HighlightBtn(btn, ref _activePowerBtn);
             SaveState("Power", mode);
-
-            // Turbo mode handling: automatically kick fans to Max
-            if (mode == 0x05)
-            {
-                if (_activeFanBtn != _btnMaxFan && _activeFanBtn != null)
-                {
-                    _fanModeBeforeTurbo = _activeFanBtn;
-                }
-                ApplyFanMode(0x02, _btnMaxFan);
-            }
-            else if (_fanModeBeforeTurbo != null)
-            {
-                // When switching out of Turbo, restore previous fan mode (e.g. Auto)
-                var restoreBtn = _fanModeBeforeTurbo;
-                _fanModeBeforeTurbo = null;
-                byte restoreMode = (restoreBtn == _btnCustomFan) ? (byte)0x03 : (byte)0x01;
-                ApplyFanMode(restoreMode, restoreBtn);
-            }
 
             _lblPowerStatus.Text = mode switch
             {

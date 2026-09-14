@@ -28,19 +28,19 @@ namespace PredatorControlApp
         private static readonly Guid OVERLAY_BALANCED = new("00000000-0000-0000-0000-000000000000");
         private static readonly Guid OVERLAY_PERFORMANCE = new("ded574b5-45a0-4f42-8737-46345c09c238");
 
-        private byte _lastR = 0, _lastG = 200, _lastB = 150;
+        private byte _lastR = 0, _lastG = 230, _lastB = 180;
         private byte _brightness = 100;
         private byte _speed = 5;
         private byte _direction = 0;
-        private int _lastMode = 3;
+        private int _lastMode = 0;
 
         // 4-zone (or 3-zone mapped) keyboard colors
         private Color[] _zoneColors = new Color[4]
         {
-            Color.FromArgb(0, 200, 160),
-            Color.FromArgb(0, 200, 160),
-            Color.FromArgb(0, 200, 160),
-            Color.FromArgb(0, 200, 160)
+            Color.FromArgb(0, 230, 180),
+            Color.FromArgb(0, 230, 180),
+            Color.FromArgb(0, 230, 180),
+            Color.FromArgb(0, 230, 180)
         };
 
         private byte _customCpuFanSpeed = 50;
@@ -467,6 +467,10 @@ namespace PredatorControlApp
                         payload[9] = 1;
                         SendLedCommand(payload);
                         SyncLightingProfileIni();
+                        _ = Task.Run(async () =>
+                        {
+                            try { await AcerAgentClient.Set4ZoneLightingAsync(_zoneColors, _brightness); } catch { }
+                        });
                     }
                     else // Animated: color applies to entire keyboard
                     {
@@ -593,6 +597,11 @@ namespace PredatorControlApp
                 payload[9] = (byte)(mode == 8 ? 0 : 1);
                 SendLedCommand(payload);
                 SyncLightingProfileIni();
+
+                _ = Task.Run(async () =>
+                {
+                    try { await AcerAgentClient.Set4ZoneLightingAsync(_zoneColors, _brightness); } catch { }
+                });
             });
         }
 
@@ -607,6 +616,18 @@ namespace PredatorControlApp
             _brightness = 0;
             _lastMode = 8;
             QueueLightingTask(() => ApplyLightingModeCore(8));
+        }
+
+        public void ApplyLightingSynchronous(Color[] zones, int mode = 0, byte brightness = 100)
+        {
+            if (zones != null && zones.Length >= 4)
+            {
+                for (int i = 0; i < 4; i++) _zoneColors[i] = zones[i];
+                _lastR = zones[0].R; _lastG = zones[0].G; _lastB = zones[0].B;
+                _lastMode = mode;
+                _brightness = brightness;
+                Apply4ZoneLightingCore(mode);
+            }
         }
 
         private void ApplyLightingModeCore(int mode)
@@ -624,6 +645,15 @@ namespace PredatorControlApp
             payload[9] = (byte)(mode == 8 ? 0 : 1);
             SendLedCommand(payload);
             SyncLightingProfileIni();
+
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await AcerAgentClient.SetRgbEffectAsync(mode, Color.FromArgb(_lastR, _lastG, _lastB), _brightness, _speed, _direction);
+                }
+                catch { }
+            });
         }
 
         private void Apply4ZoneLightingCore(int mode)
@@ -647,9 +677,14 @@ namespace PredatorControlApp
             payload[9] = (byte)(mode == 8 ? 0 : 1);
             SendLedCommand(payload);
             SyncLightingProfileIni();
+
+            _ = Task.Run(async () =>
+            {
+                try { await AcerAgentClient.Set4ZoneLightingAsync(_zoneColors, _brightness); } catch { }
+            });
         }
 
-        private void SyncLightingProfileIni()
+        public void SyncLightingProfileIni()
         {
             try
             {
@@ -669,12 +704,29 @@ namespace PredatorControlApp
                     _ => "AcerECKeyboard Device_STATIC"
                 };
 
-                int activeModeVal = _lastMode == 8 ? 0 : (_lastMode + 1);
+                // AcerLightingService 1-based indexing: Mode1 is Direct, Mode2 is STATIC, Mode3 is BREATHING, etc.
+                // Mode 8 is Off -> ActiveMode 0.
+                int activeModeVal = _lastMode == 8 ? 0 : (_lastMode + 2);
                 WritePrivateProfileString("AcerECKeyboard Device", "ActiveMode", activeModeVal.ToString(), iniPath);
-                WritePrivateProfileString(modeSection, "brightness", _brightness.ToString(), iniPath);
-                WritePrivateProfileString(modeSection, "speed", _speed.ToString(), iniPath);
+
                 string colorHex = $"0X{_lastR:x2}{_lastG:x2}{_lastB:x2}";
-                WritePrivateProfileString(modeSection, "color", colorHex, iniPath);
+
+                // Always ensure STATIC section has valid user color and brightness (never 000000 or uninitialized)
+                WritePrivateProfileString("AcerECKeyboard Device_STATIC", "color", colorHex, iniPath);
+                WritePrivateProfileString("AcerECKeyboard Device_STATIC", "brightness", _brightness.ToString(), iniPath);
+                WritePrivateProfileString("AcerECKeyboard Device_STATIC", "speed", _speed.ToString(), iniPath);
+
+                if (_lastMode != 0 && _lastMode != 8)
+                {
+                    WritePrivateProfileString(modeSection, "brightness", _brightness.ToString(), iniPath);
+                    WritePrivateProfileString(modeSection, "speed", _speed.ToString(), iniPath);
+                    WritePrivateProfileString(modeSection, "color", colorHex, iniPath);
+                }
+
+                // Neutralize legacy Acer Amber presets in factory default sections so fallback never turns amber
+                WritePrivateProfileString("AcerECKeyboard Device_WAVE", "color", "0X00dcff", iniPath);
+                WritePrivateProfileString("AcerECKeyboard Device_BREATHING", "color", "0X00dcff", iniPath);
+                WritePrivateProfileString("AcerECKeyboard Device_SHIFTING", "color", "0X00dcff", iniPath);
 
                 for (int i = 0; i < 4; i++)
                 {

@@ -310,6 +310,30 @@ namespace PredatorControlApp
                 Updater.ShowPendingNotes(this);
                 if (Environment.CommandLine.Contains("-hidden")) HideApp();
                 CheckPredatorSenseConflict();
+
+                // Delayed settling guard: Acer services (AcerLightingService / AcerAgentService)
+                // complete their boot/logon initialization 1-4 seconds after user login.
+                // Re-assert user's saved RGB profile to prevent late-boot stomping back to Amber.
+                Task.Run(async () =>
+                {
+                    await Task.Delay(2500);
+                    if (!IsDisposed)
+                    {
+                        BeginInvoke(() =>
+                        {
+                            try { ApplyRgbModeFromDropdown(_rgbDropDown.SelectedIndex); } catch { }
+                        });
+                    }
+
+                    await Task.Delay(2500);
+                    if (!IsDisposed)
+                    {
+                        BeginInvoke(() =>
+                        {
+                            try { ApplyRgbModeFromDropdown(_rgbDropDown.SelectedIndex); } catch { }
+                        });
+                    }
+                });
             };
         }
 
@@ -2218,7 +2242,8 @@ namespace PredatorControlApp
                 catch { }
 
                 // Mirror hardware states to HKLM so boot-time task can enforce them before user logon
-                if (name is "BatteryLimit" or "Power" or "Fan")
+                if (name is "BatteryLimit" or "Power" or "Fan" or "RGB_Mode" or "RGB_R" or "RGB_G" or "RGB_B" or "Brightness" or "RGB_Speed"
+                    || name.StartsWith("ZoneColor_"))
                 {
                     try
                     {
@@ -2250,13 +2275,13 @@ namespace PredatorControlApp
                 using var key = Registry.CurrentUser.CreateSubKey(@"SOFTWARE\PredatorControl");
                 int savedPower = GetInt(key, "Power", 0x01, 0x00, 0xFF);
                 int savedFan = GetInt(key, "Fan", 0x01, 0x00, 0xFF);
-                int savedRgbMode = GetInt(key, "RGB_Mode", 3, 0, 8);
+                int savedRgbMode = GetInt(key, "RGB_Mode", 0, 0, 8);
                 int savedBrightness = GetInt(key, "Brightness", 100, 0, 100);
                 int savedSpeed = GetInt(key, "RGB_Speed", 50, 1, 100);
 
                 int savedR = GetInt(key, "RGB_R", 0, 0, 255);
-                int savedG = GetInt(key, "RGB_G", 200, 0, 255);
-                int savedB = GetInt(key, "RGB_B", 150, 0, 255);
+                int savedG = GetInt(key, "RGB_G", 230, 0, 255);
+                int savedB = GetInt(key, "RGB_B", 180, 0, 255);
                 _colorPicker.Color = Color.FromArgb(savedR, savedG, savedB);
 
                 _brightnessSlider.Value = Math.Clamp(savedBrightness, 0, 100);
@@ -2348,6 +2373,24 @@ namespace PredatorControlApp
                 var activeColor = Color.FromArgb(savedR, savedG, savedB);
                 if (_btnCustomColor != null)
                     _btnCustomColor.ColorIndicator = activeColor;
+
+                try
+                {
+                    using var hklmKey = Registry.LocalMachine.CreateSubKey(@"SOFTWARE\PredatorControl");
+                    if (hklmKey != null)
+                    {
+                        hklmKey.SetValue("RGB_Mode", clampedMode);
+                        hklmKey.SetValue("Brightness", savedBrightness);
+                        hklmKey.SetValue("RGB_R", savedR);
+                        hklmKey.SetValue("RGB_G", savedG);
+                        hklmKey.SetValue("RGB_B", savedB);
+                        for (int z = 0; z < 4; z++)
+                        {
+                            hklmKey.SetValue($"ZoneColor_{z}", _currentZoneColors[z].ToArgb());
+                        }
+                    }
+                }
+                catch { }
 
                 if (_wmi.IsBatteryControlSupported())
                 {
@@ -2684,12 +2727,12 @@ namespace PredatorControlApp
                 try { File.Delete(xmlPath); } catch { }
             }
 
-            // 2. Register machine early boot task: triggers at system boot (before logon) as SYSTEM to lock 80% battery limit
+            // 2. Register machine early boot task: triggers at system boot (before logon) as SYSTEM to lock 80% battery limit and apply saved RGB profile
             string bootXmlPath = Path.Combine(Path.GetTempPath(), "PredatorControlBoot.xml");
             try
             {
                 File.WriteAllText(bootXmlPath, BuildBootTaskXml(), Encoding.Unicode);
-                RunSchtasks($"/Create /TN \"{BootTaskName}\" /XML \"{bootXmlPath}\" /F");
+                RunSchtasks($"/Create /TN \"{BootTaskName}\" /XML \"{bootXmlPath}\" /RU \"NT AUTHORITY\\SYSTEM\" /F");
             }
             catch { }
             finally

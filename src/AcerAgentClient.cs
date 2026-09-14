@@ -443,14 +443,51 @@ namespace PredatorControlApp
             }
 
             int bVal = Math.Clamp((int)Math.Round(brightness * 5.0 / 100.0), 1, 5);
+            string hexPrimary = $"#{zones[0].R:X2}{zones[0].G:X2}{zones[0].B:X2}";
             var param = new
             {
                 device = 0,
                 effect = "STATIC",
+                color = hexPrimary,
                 brightness = bVal,
                 speed = 5,
                 direction = 0,
                 LEDs = leds
+            };
+
+            return await SetDeviceDataAsync("LIGHTING", param);
+        }
+
+        /// <summary>
+        /// Sets animated or mode-based keyboard RGB lighting via OEM Agent Service LIGHTING command.
+        /// </summary>
+        public static async Task<bool> SetRgbEffectAsync(int mode, Color c, byte brightness, byte speed, byte direction)
+        {
+            string effectName = mode switch
+            {
+                0 => "STATIC",
+                1 => "BREATHING",
+                2 => "NEON",
+                3 => "WAVE",
+                4 => "SHIFTING",
+                5 => "ZOOM",
+                6 => "METEOR",
+                7 => "TWINKLING",
+                _ => "STATIC"
+            };
+
+            int bVal = Math.Clamp((int)Math.Round(brightness * 5.0 / 100.0), 1, 5);
+            int sVal = Math.Clamp((int)Math.Round(speed * 9.0 / 100.0), 1, 9);
+            string hex = $"#{c.R:X2}{c.G:X2}{c.B:X2}";
+
+            var param = new
+            {
+                device = 0,
+                effect = effectName,
+                color = hex,
+                brightness = bVal,
+                speed = sVal,
+                direction = direction
             };
 
             return await SetDeviceDataAsync("LIGHTING", param);

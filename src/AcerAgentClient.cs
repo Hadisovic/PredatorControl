@@ -442,7 +442,7 @@ namespace PredatorControlApp
                 leds[i] = new { LED_id = i, color = hex, status = 1 };
             }
 
-            int bVal = Math.Clamp((int)Math.Round(brightness * 5.0 / 100.0), 1, 5);
+            int bVal = Math.Clamp((int)Math.Round(brightness * 5.0 / 100.0), 0, 5);
             string hexPrimary = $"#{zones[0].R:X2}{zones[0].G:X2}{zones[0].B:X2}";
             var param = new
             {
@@ -476,8 +476,8 @@ namespace PredatorControlApp
                 _ => "STATIC"
             };
 
-            int bVal = Math.Clamp((int)Math.Round(brightness * 5.0 / 100.0), 1, 5);
-            int sVal = Math.Clamp((int)Math.Round(speed * 9.0 / 100.0), 1, 9);
+            int bVal = Math.Clamp((int)Math.Round(brightness * 5.0 / 100.0), 0, 5);
+            int sVal = speed > 9 ? Math.Clamp((int)Math.Round(speed * 9.0 / 100.0), 1, 9) : Math.Clamp((int)speed, 1, 9);
             string hex = $"#{c.R:X2}{c.G:X2}{c.B:X2}";
 
             var param = new

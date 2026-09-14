@@ -1239,14 +1239,28 @@ namespace PredatorControlApp
             _speedSlider = new PredatorSlider { Location = new Point(ClientSize.Width / 2 + S(10), y), Size = new Size(sliderW, S(28)), Minimum = 1, Maximum = 100, Value = 50 };
             _contentPanel.Controls.Add(_speedSlider);
 
-            _brightnessSlider.ValueChanged += (s, e) => _lblBrightHdr.Text = $"BRIGHTNESS: {_brightnessSlider.Value}%";
+            _brightnessSlider.ValueChanged += (s, e) =>
+            {
+                _lblBrightHdr.Text = $"BRIGHTNESS: {_brightnessSlider.Value}%";
+                DebounceHelper.Debounce("RgbBrightnessLive", () =>
+                {
+                    _wmi.SetBrightness((byte)_brightnessSlider.Value);
+                }, 40);
+            };
             _brightnessSlider.ValueCommitted += (s, e) =>
             {
                 _wmi.SetBrightness((byte)_brightnessSlider.Value);
                 SaveState("Brightness", _brightnessSlider.Value);
             };
 
-            _speedSlider.ValueChanged += (s, e) => _lblSpeedHdr.Text = $"EFFECT SPEED: {_speedSlider.Value}%";
+            _speedSlider.ValueChanged += (s, e) =>
+            {
+                _lblSpeedHdr.Text = $"EFFECT SPEED: {_speedSlider.Value}%";
+                DebounceHelper.Debounce("RgbSpeedLive", () =>
+                {
+                    _wmi.SetSpeed(GetMappedSpeed());
+                }, 40);
+            };
             _speedSlider.ValueCommitted += (s, e) =>
             {
                 _wmi.SetSpeed(GetMappedSpeed());
@@ -1483,6 +1497,9 @@ namespace PredatorControlApp
 
             if (_btnCustomColor != null)
                 _btnCustomColor.Enabled = colorsEnabled;
+
+            if (_speedSlider != null)
+                _speedSlider.Enabled = (mode != 0 && mode != 8);
         }
 
         private void MakeSectionHeader(string label, int x, int y)
@@ -2381,6 +2398,7 @@ namespace PredatorControlApp
                     {
                         hklmKey.SetValue("RGB_Mode", clampedMode);
                         hklmKey.SetValue("Brightness", savedBrightness);
+                        hklmKey.SetValue("RGB_Speed", savedSpeed);
                         hklmKey.SetValue("RGB_R", savedR);
                         hklmKey.SetValue("RGB_G", savedG);
                         hklmKey.SetValue("RGB_B", savedB);

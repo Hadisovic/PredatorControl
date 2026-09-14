@@ -57,6 +57,7 @@ namespace PredatorControlApp
                 bool enableLimit = false;
                 int rgbMode = 0;
                 int brightness = 100;
+                int rgbSpeed = 50;
                 int rgbR = 0, rgbG = 230, rgbB = 180;
                 int[] zoneColors = new int[4] { unchecked((int)0xFF00E6B4), unchecked((int)0xFF00E6B4), unchecked((int)0xFF00E6B4), unchecked((int)0xFF00E6B4) };
 
@@ -71,6 +72,7 @@ namespace PredatorControlApp
 
                         if (hklmKey.GetValue("RGB_Mode") is int rm) rgbMode = rm;
                         if (hklmKey.GetValue("Brightness") is int br) brightness = br;
+                        if (hklmKey.GetValue("RGB_Speed") is int sp) rgbSpeed = sp;
                         if (hklmKey.GetValue("RGB_R") is int r) rgbR = r;
                         if (hklmKey.GetValue("RGB_G") is int g) rgbG = g;
                         if (hklmKey.GetValue("RGB_B") is int b) rgbB = b;
@@ -94,6 +96,7 @@ namespace PredatorControlApp
 
                         if (regKey.GetValue("RGB_Mode") is int rm) rgbMode = rm;
                         if (regKey.GetValue("Brightness") is int br) brightness = br;
+                        if (regKey.GetValue("RGB_Speed") is int sp) rgbSpeed = sp;
                         if (regKey.GetValue("RGB_R") is int r) rgbR = r;
                         if (regKey.GetValue("RGB_G") is int g) rgbG = g;
                         if (regKey.GetValue("RGB_B") is int b) rgbB = b;
@@ -116,7 +119,8 @@ namespace PredatorControlApp
                 {
                     zones[z] = Color.FromArgb(zoneColors[z]);
                 }
-                wmiEarly.ApplyLightingSynchronous(zones, rgbMode, (byte)Math.Clamp(brightness, 0, 100));
+                byte mappedEarlySpeed = (byte)Math.Clamp(Math.Round(rgbSpeed * 9.0 / 100.0), 1, 9);
+                wmiEarly.ApplyLightingSynchronous(zones, rgbMode, (byte)Math.Clamp(brightness, 0, 100), mappedEarlySpeed);
             }
             catch { }
 

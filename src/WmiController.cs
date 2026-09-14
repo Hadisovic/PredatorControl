@@ -418,8 +418,8 @@ namespace PredatorControlApp
                     }
                     catch { }
 
-                    // Inter-action pacing to prevent EC firmware buffer saturation
-                    Thread.Sleep(30);
+                    // Inter-action pacing to prevent EC firmware buffer saturation (50Hz)
+                    Thread.Sleep(20);
                 }
             });
         }
@@ -557,7 +557,7 @@ namespace PredatorControlApp
 
         public void SetSpeed(byte speed)
         {
-            _speed = speed;
+            _speed = Math.Clamp(speed, (byte)1, (byte)9);
             QueueLightingTask(() => ApplyLightingModeCore(_lastMode));
         }
 
@@ -618,7 +618,7 @@ namespace PredatorControlApp
             QueueLightingTask(() => ApplyLightingModeCore(8));
         }
 
-        public void ApplyLightingSynchronous(Color[] zones, int mode = 0, byte brightness = 100)
+        public void ApplyLightingSynchronous(Color[] zones, int mode = 0, byte brightness = 100, byte speed = 5)
         {
             if (zones != null && zones.Length >= 4)
             {
@@ -626,6 +626,7 @@ namespace PredatorControlApp
                 _lastR = zones[0].R; _lastG = zones[0].G; _lastB = zones[0].B;
                 _lastMode = mode;
                 _brightness = brightness;
+                _speed = Math.Clamp(speed, (byte)1, (byte)9);
                 Apply4ZoneLightingCore(mode);
             }
         }
@@ -644,13 +645,20 @@ namespace PredatorControlApp
             payload[8] = 0x03;
             payload[9] = (byte)(mode == 8 ? 0 : 1);
             SendLedCommand(payload);
-            SyncLightingProfileIni();
 
             _ = Task.Run(async () =>
             {
+                SyncLightingProfileIni();
                 try
                 {
-                    await AcerAgentClient.SetRgbEffectAsync(mode, Color.FromArgb(_lastR, _lastG, _lastB), _brightness, _speed, _direction);
+                    if (mode == 0)
+                    {
+                        await AcerAgentClient.Set4ZoneLightingAsync(_zoneColors, _brightness);
+                    }
+                    else
+                    {
+                        await AcerAgentClient.SetRgbEffectAsync(mode, Color.FromArgb(_lastR, _lastG, _lastB), _brightness, _speed, _direction);
+                    }
                 }
                 catch { }
             });
@@ -676,10 +684,10 @@ namespace PredatorControlApp
             payload[8] = 0x03;
             payload[9] = (byte)(mode == 8 ? 0 : 1);
             SendLedCommand(payload);
-            SyncLightingProfileIni();
 
             _ = Task.Run(async () =>
             {
+                SyncLightingProfileIni();
                 try { await AcerAgentClient.Set4ZoneLightingAsync(_zoneColors, _brightness); } catch { }
             });
         }

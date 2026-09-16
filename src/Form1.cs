@@ -824,7 +824,12 @@ namespace PredatorControlApp
 
         private async void ApplyGpuMode(int mode, PredatorButton btn, string modeName)
         {
-            if (_currentGpuMode == mode) return;
+            if (_currentGpuMode == mode)
+            {
+                if (_activeGpuModeBtn != btn)
+                    HighlightBtn(btn, ref _activeGpuModeBtn);
+                return;
+            }
 
             var result = MessageBox.Show(
                 $"Switching GPU Working Mode to {modeName} requires a system restart for hardware firmware changes to take effect.\n\nWould you like to apply this setting and restart your computer now?",
@@ -1306,6 +1311,10 @@ namespace PredatorControlApp
             _btnGpuOptimus.Click += (s, e) => ApplyGpuMode(AcerAgentClient.GPU_MODE_OPTIMUS, _btnGpuOptimus, "Optimus (Hybrid)");
             _btnGpuDiscrete.Click += (s, e) => ApplyGpuMode(AcerAgentClient.GPU_MODE_DISCRETE, _btnGpuDiscrete, "Discrete GPU Only");
             _btnGpuAuto.Click += (s, e) => ApplyGpuMode(AcerAgentClient.GPU_MODE_AUTO, _btnGpuAuto, "Auto (Advanced Optimus)");
+
+            // Default initial selection to Optimus so the button is highlighted on startup
+            HighlightBtn(_btnGpuOptimus, ref _activeGpuModeBtn);
+            _currentGpuMode = AcerAgentClient.GPU_MODE_OPTIMUS;
 
             y += btnH + S(8);
             _lblGpuRestartNotice = MakeLabel("Requires system restart to take effect in firmware", pad, y, FontBody, Color.FromArgb(120, 120, 135));
@@ -2717,30 +2726,27 @@ namespace PredatorControlApp
                 Task.Run(() => { try { _wmi.SetWinKeyLock(savedWinKeyLock == 1); } catch { } });
 
                 // GPU Working Mode (MUX Switch)
-                int savedGpuMode = GetInt(key, "GpuMode", -1, 0, 2);
-                if (savedGpuMode != -1)
+                int savedGpuMode = GetInt(key, "GpuMode", AcerAgentClient.GPU_MODE_OPTIMUS, 0, 2);
+                _currentGpuMode = savedGpuMode;
+                PredatorButton? targetBtn = savedGpuMode switch
                 {
-                    _currentGpuMode = savedGpuMode;
-                    PredatorButton? targetBtn = savedGpuMode switch
-                    {
-                        AcerAgentClient.GPU_MODE_OPTIMUS => _btnGpuOptimus,
-                        AcerAgentClient.GPU_MODE_DISCRETE => _btnGpuDiscrete,
-                        AcerAgentClient.GPU_MODE_AUTO => _btnGpuAuto,
-                        _ => null
-                    };
-                    if (targetBtn != null)
-                        HighlightBtn(targetBtn, ref _activeGpuModeBtn);
+                    AcerAgentClient.GPU_MODE_OPTIMUS => _btnGpuOptimus,
+                    AcerAgentClient.GPU_MODE_DISCRETE => _btnGpuDiscrete,
+                    AcerAgentClient.GPU_MODE_AUTO => _btnGpuAuto,
+                    _ => _btnGpuOptimus
+                };
+                if (targetBtn != null)
+                    HighlightBtn(targetBtn, ref _activeGpuModeBtn);
 
-                    ToolStripMenuItem? targetTray = savedGpuMode switch
-                    {
-                        AcerAgentClient.GPU_MODE_OPTIMUS => _trayGpuOptimus,
-                        AcerAgentClient.GPU_MODE_DISCRETE => _trayGpuDiscrete,
-                        AcerAgentClient.GPU_MODE_AUTO => _trayGpuAuto,
-                        _ => null
-                    };
-                    if (targetTray != null)
-                        CheckTrayItem(targetTray, _trayGpuOptimus, _trayGpuDiscrete, _trayGpuAuto);
-                }
+                ToolStripMenuItem? targetTray = savedGpuMode switch
+                {
+                    AcerAgentClient.GPU_MODE_OPTIMUS => _trayGpuOptimus,
+                    AcerAgentClient.GPU_MODE_DISCRETE => _trayGpuDiscrete,
+                    AcerAgentClient.GPU_MODE_AUTO => _trayGpuAuto,
+                    _ => _trayGpuOptimus
+                };
+                if (targetTray != null)
+                    CheckTrayItem(targetTray, _trayGpuOptimus, _trayGpuDiscrete, _trayGpuAuto);
 
                 // Query live hardware capability & mode from OEM service/firmware
                 Task.Run(async () =>

@@ -30,3 +30,6 @@ scratch_*.ps1
 *.deps.json
 *.runtimeconfig.json
 *.zip
+publish_standalone/
+publish_unpacked/
+*.log

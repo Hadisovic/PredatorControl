@@ -271,20 +271,22 @@ namespace PredatorControlApp
             }
         }
 
-        public (int? cpuTemp, int? gpuTemp, int? cpuFanRpm, int? gpuFanRpm) GetAllSensors(bool isPluggedIn, bool includeGpu = true)
+        public (int? cpuTemp, int? gpuTemp, int? cpuFanRpm, int? gpuFanRpm, int? gpuPowerW) GetAllSensors(bool isPluggedIn, bool includeGpu = true)
         {
             int? cpuTemp = CpuTemp;
             int? cpuRpm = CpuFanRpm;
             int? gpuTemp = (isPluggedIn && includeGpu) ? GpuTemp : null;
             int? gpuRpm = (isPluggedIn && includeGpu) ? GpuFanRpm : null;
+            int? gpuPower = (isPluggedIn && includeGpu) ? GpuPowerW : null;
 
-            return (cpuTemp, gpuTemp, cpuRpm, gpuRpm);
+            return (cpuTemp, gpuTemp, cpuRpm, gpuRpm, gpuPower);
         }
 
         public int? CpuTemp => GetSensorReading(0x01);
         public int? GpuTemp => GetSensorReading(0x0A);
         public int? CpuFanRpm => GetSensorReading(0x02);
         public int? GpuFanRpm => GetSensorReading(0x06);
+        public int? GpuPowerW => GetSensorReading(0x0D);
 
         public void SetPowerMode(byte mode)
         {

@@ -60,6 +60,8 @@ namespace PredatorControlApp
         private const int ASFW_ANY = -1;
 
         private const uint MOD_NOREPEAT = 0x4000;
+        private const uint MOD_CONTROL = 0x0002;
+        private const uint MOD_SHIFT = 0x0004;
         private const int SW_RESTORE = 9;
         private const int WM_HOTKEY = 0x0312;
         private const int WM_APPCOMMAND = 0x0319;
@@ -79,6 +81,7 @@ namespace PredatorControlApp
         private const int HOTKEY_ID_PREDATOR_APP1 = 9102;
         private const int HOTKEY_ID_PREDATOR_F24 = 9103;
         private const int HOTKEY_ID_PREDATOR_F23 = 9104;
+        private const int HOTKEY_ID_OVERLAY = 9105;
 
         #endregion
 
@@ -217,6 +220,11 @@ namespace PredatorControlApp
 
         private PredatorToggle _switchWinKeyLock = null!;
         private Label _lblWinKeyLock = null!;
+
+        private GameOverlayForm? _overlayForm;
+        private ToolStripMenuItem? _trayOverlay;
+        private PredatorToggle? _switchOverlay;
+        private Label? _lblOverlay;
 
         private static readonly string[] RgbModeNames = { "Static", "Breathing", "Neon", "Wave", "Shifting", "Zoom", "Meteor", "Twinkling", "Off" };
 
@@ -500,6 +508,35 @@ namespace PredatorControlApp
             }
         }
 
+        public void SetOverlayVisible(bool visible)
+        {
+            if (InvokeRequired) { BeginInvoke(new Action(() => SetOverlayVisible(visible))); return; }
+            if (_overlayForm == null || _overlayForm.IsDisposed)
+                _overlayForm = new GameOverlayForm();
+
+            if (visible)
+            {
+                _overlayForm.ShowOverlay();
+            }
+            else
+            {
+                _overlayForm.HideOverlay();
+            }
+
+            _telemetryService?.SetOverlayActive(visible);
+            if (_trayOverlay != null) _trayOverlay.Checked = visible;
+            if (_switchOverlay != null && _switchOverlay.Checked != visible) _switchOverlay.Checked = visible;
+            SaveState("OverlayEnabled", visible ? 1 : 0);
+        }
+
+        public void ToggleGameOverlay()
+        {
+            if (_overlayForm == null || _overlayForm.IsDisposed)
+                _overlayForm = new GameOverlayForm();
+
+            SetOverlayVisible(!_overlayForm.Visible);
+        }
+
         protected override void OnHandleCreated(EventArgs e)
         {
             base.OnHandleCreated(e);
@@ -509,6 +546,7 @@ namespace PredatorControlApp
                 RegisterHotKey(Handle, HOTKEY_ID_PREDATOR_APP1, MOD_NOREPEAT, PredatorKeyHook.VK_LAUNCH_APP1);
                 RegisterHotKey(Handle, HOTKEY_ID_PREDATOR_F24, MOD_NOREPEAT, PredatorKeyHook.VK_F24);
                 RegisterHotKey(Handle, HOTKEY_ID_PREDATOR_F23, MOD_NOREPEAT, PredatorKeyHook.VK_F23);
+                RegisterHotKey(Handle, HOTKEY_ID_OVERLAY, MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, (uint)Keys.O);
             }
             catch { }
         }
@@ -521,6 +559,7 @@ namespace PredatorControlApp
                 UnregisterHotKey(Handle, HOTKEY_ID_PREDATOR_APP1);
                 UnregisterHotKey(Handle, HOTKEY_ID_PREDATOR_F24);
                 UnregisterHotKey(Handle, HOTKEY_ID_PREDATOR_F23);
+                UnregisterHotKey(Handle, HOTKEY_ID_OVERLAY);
             }
             catch { }
             base.OnHandleDestroyed(e);
@@ -564,6 +603,11 @@ namespace PredatorControlApp
                 else if (id == HOTKEY_ID_PREDATOR_F24 || id == HOTKEY_ID_PREDATOR_F23)
                 {
                     _predatorKeyHook?.TriggerModeKey();
+                    return;
+                }
+                else if (id == HOTKEY_ID_OVERLAY)
+                {
+                    ToggleGameOverlay();
                     return;
                 }
             }
@@ -917,6 +961,12 @@ namespace PredatorControlApp
             });
             hardwareMenu.DropDownItems.AddRange([trayWinKey, trayLcdOverdrive]);
             _trayMenu.Items.Add(hardwareMenu);
+
+            _trayOverlay = new ToolStripMenuItem("  Gaming Overlay (Ctrl+Shift+O)", null, (s, e) => ToggleGameOverlay())
+            {
+                CheckOnClick = true
+            };
+            _trayMenu.Items.Add(_trayOverlay);
 
             _trayMenu.Items.Add(new ToolStripSeparator());
             _trayMenu.Items.Add("Open Dashboard", null, (s, e) => ShowApp());
@@ -1485,8 +1535,21 @@ namespace PredatorControlApp
             y += S(18);
             MakeSectionHeader("SYSTEM & HARDWARE CONTROLS", pad, y);
 
-            // Windows & Menu Key Lock
+            // In-Game Gaming Overlay HUD
             y += S(24);
+            _lblOverlay = MakeLabel("Gaming Overlay HUD (Ctrl+Shift+O)", pad, y, FontBody, Color.FromArgb(120, 120, 135));
+            CenterV(_lblOverlay, y, switchH);
+
+            _switchOverlay = new PredatorToggle
+            {
+                Location = new Point(ClientSize.Width - pad - S(48), y),
+                Size = new Size(S(48), switchH)
+            };
+            _contentPanel.Controls.Add(_switchOverlay);
+            _switchOverlay.CheckedChanged += (s, e) => SetOverlayVisible(_switchOverlay.Checked);
+
+            // Windows & Menu Key Lock
+            y += switchH + S(12);
             _lblWinKeyLock = MakeLabel("Lock Windows & Menu Keys", pad, y, FontBody, Color.FromArgb(120, 120, 135));
             CenterV(_lblWinKeyLock, y, switchH);
 
@@ -2640,6 +2703,13 @@ namespace PredatorControlApp
                 if (_switchBacklight30s != null) _switchBacklight30s.Checked = (savedBacklight30s == 1);
                 Task.Run(() => { try { _wmi.SetBacklight30s(savedBacklight30s == 1); } catch { } });
 
+                // Gaming Overlay HUD
+                int savedOverlay = GetInt(key, "OverlayEnabled", 0, 0, 1);
+                if (savedOverlay == 1)
+                {
+                    BeginInvoke(() => SetOverlayVisible(true));
+                }
+
                 // Windows Key Lock
                 int savedWinKeyLock = GetInt(key, "LockWinKey", 0, 0, 1);
                 if (_switchWinKeyLock != null) _switchWinKeyLock.Checked = (savedWinKeyLock == 1);
@@ -2855,6 +2925,9 @@ namespace PredatorControlApp
 
             if (_fanCurveForm != null && !_fanCurveForm.IsDisposed)
                 _fanCurveForm.UpdateTemps(_cpuTemp ?? 0, _gpuTemp ?? 0);
+
+            if (_overlayForm != null && !_overlayForm.IsDisposed && _overlayForm.Visible)
+                _overlayForm.UpdateSnapshot(snap);
 
             ApplyFanCurve();
         }

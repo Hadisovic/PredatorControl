@@ -16,6 +16,7 @@ namespace PredatorControlApp
                 _colorPicker?.Dispose();
                 _fanCurveForm?.Dispose();
                 _ipc?.Dispose();
+                _overlayForm?.Dispose();
                 components?.Dispose();
             }
             base.Dispose(disposing);

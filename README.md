@@ -96,10 +96,11 @@ Predator Control replaces all of that with direct ACPI WMI calls to your laptop'
 - 🖱️ **GPU MUX Switch**: Optimus, Discrete (NVIDIA Only), and Advanced Optimus.
 - 🖥️ **Refresh Rate Switcher**: Switch internal display (60Hz ↔ 165Hz/240Hz) and external monitors via Win32 CCD API.
 
-### 🎮 OSD & Game Sync
-- 🌊 **Floating OSD HUD**: Focus-safe banner with custom neon vector emblems.
+### 🎮 OSD & In-Game Gaming Overlay
+- ⚡ **In-Game Gaming Overlay HUD (G-Helper Style)**: Real-time neon green FPS counter (powered by zero-injection Windows ETW kernel Present monitoring), CPU/GPU temperatures, fan RPMs, wattage, 60-second rolling sparkline performance graph, and battery gauge. Toggle with `Ctrl + Shift + O`, drag anywhere with `Ctrl + Shift + Drag`.
+- 🌊 **Floating Mode OSD**: Focus-safe banner with custom neon vector emblems on profile changes.
 - 🎮 **Game Sync Profiles**: Automatically binds performance, fans, and RGB to game `.exe` launches.
-- 🔑 **Predator Key Intercept**: Hardware key hook + OEM launcher redirection.
+- 🔑 **Dedicated Predator Key Intercept**: Low-level hardware hook (`WH_KEYBOARD_LL`) intercepting Acer scan code `0x75` (`VK_0xFF`) to toggle the app window instantly.
 
 ---
 
@@ -111,6 +112,8 @@ PredatorControl/
 │   ├── Form1.cs                   # Main UI, layout, and IPC handlers
 │   ├── WmiController.cs           # ACPI WMI hardware driver (Power, Fans, RGB, Battery)
 │   ├── PredatorKeyHook.cs         # WH_KEYBOARD_LL low-level keyboard hook
+│   ├── GameOverlayForm.cs         # In-Game Gaming Overlay HUD (G-Helper style)
+│   ├── EtwFpsMonitor.cs           # Kernel ETW DxgKrnl / DXGI Present FPS monitor
 │   ├── OSDOverlayForm.cs          # Focus-safe floating HUD overlay
 │   ├── DisplayCcdController.cs    # Win32 CCD display & refresh rate switcher
 │   ├── SingleInstanceIpc.cs       # Named Pipe server & client for single-instance IPC

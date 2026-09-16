@@ -35,11 +35,16 @@
    - [Developing Custom Low-Level Diagnostic Tools (`KeySniffer`)](#developing-custom-low-level-diagnostic-tools-keysniffer)
    - [The Hardware Revelation: VK=0xFF & SC=0x75](#the-hardware-revelation-vk0xff--sc0x75)
    - [Implementation & Breakthrough Confirmation](#implementation--breakthrough-confirmation)
-8. [Phase 7: Roadmap & Next Objectives](#8-phase-7-roadmap--next-objectives)
-   - [Feature 2: Lightweight In-Game OSD / Overlay](#feature-2-lightweight-in-game-osd--overlay)
+8. [Phase 7: In-Game Gaming Overlay HUD (G-Helper Style) & ETW Engine](#8-phase-7-in-game-gaming-overlay-hud-g-helper-style--etw-engine)
+   - [Architecture & Design Decisions](#architecture--design-decisions)
+   - [Zero-Injection Kernel ETW Present Monitoring](#zero-injection-kernel-etw-present-monitoring)
+   - [Double-Buffered GDI+ Canvas & 60s Sparklines](#double-buffered-gdi-canvas--60s-sparklines)
+   - [Click-Through & Interactive Dragging](#click-through--interactive-dragging)
+   - [Controls & Persistence](#controls--persistence)
+9. [Phase 8: Roadmap & Next Objectives](#9-phase-8-roadmap--next-objectives)
    - [Feature 3: Parallelized GPU Telemetry & iGPU Support](#feature-3-parallelized-gpu-telemetry--igpu-support)
-9. [Complete Git Commit Chronology](#9-complete-git-commit-chronology)
-10. [Architecture & Reference Index](#10-architecture--reference-index)
+10. [Complete Git Commit Chronology](#10-complete-git-commit-chronology)
+11. [Architecture & Reference Index](#11-architecture--reference-index)
 
 ---
 
@@ -247,26 +252,53 @@ Committed as `5d793a9` and pushed to `origin/Revs`.
 
 ---
 
-## 8. Phase 7: Roadmap & Next Objectives
+---
 
-With the Predator Key hardware toggle fully operational, the project enters its next planned phases:
+## 8. Phase 7: In-Game Gaming Overlay HUD (G-Helper Style) & ETW Engine
 
-### Feature 2: Lightweight In-Game OSD / Overlay
-- **Objective:** Minimalist, transparent, hardware-accelerated overlay showing live performance stats during gaming (similar to G-Helper / RTSS).
-- **Architecture:**
-  - `src/GameOverlayForm.cs`: Borderless, `WS_EX_TRANSPARENT`, `WS_EX_TOPMOST`, `WS_EX_TOOLWINDOW` overlay window.
-  - `src/EtwFpsCounter.cs`: Real-time FPS & 1% low frame time counter utilizing ETW (Event Tracing for Windows) / DXGI events with zero external DLLs.
-  - Toggle hotkey: Configurable key or dedicated Predator key short/long press.
+Following user request and reference design (matching G-Helper's in-game telemetry OSD), a complete gaming overlay HUD was designed and integrated into version **1.1.5**.
 
-### Feature 3: Parallelized GPU Telemetry & iGPU Support
-- **Objective:** Fix slow WMI sensor updates on discrete GPU and add integrated GPU telemetry.
-- **Architecture:**
-  - In `WmiController.cs`, parallelize sensor reads using `Task.WhenAll` across CPU temp, GPU temp, CPU wattage, and GPU clock queries to eliminate serial polling lag.
-  - Query Intel / AMD integrated GPU telemetry alongside the NVIDIA RTX dGPU.
+### Architecture & Design Decisions
+1. **Zero Game Injection**: Traditional overlays inject DLLs (Detours / MinHook) into DirectX / Vulkan swapchains, risking anti-cheat bans (Easy Anti-Cheat, BattlEye, Ricochet, Vanguard). PredatorControl implements a 100% external, kernel-level ETW (Event Tracing for Windows) frame monitor that never touches game memory.
+2. **Double-Buffered Canvas**: Built using high-performance GDI+ rendering with smooth anti-aliased geometry, dark translucent backdrop (`#E10C1018`), neon cyan borders (`#4600E5FF`), and dual neon metrics (Green `#00FF80` for GPU, Teal `#00E5FF` for CPU).
+3. **True Click-Through with Interactive Dragging**:
+   - In standard mode, the window has `WS_EX_TRANSPARENT | WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW`, allowing mouse clicks to pass straight through to the game with zero latency.
+   - When holding `Ctrl + Shift`, `GameOverlayForm` removes `WS_EX_TRANSPARENT`, displays a glowing drag bar hint, and allows dragging anywhere on the screen with left mouse click.
+   - Screen coordinates are saved to `HKCU\Software\PredatorControl\OverlayX` and `OverlayY`.
+
+### Zero-Injection Kernel ETW Present Monitoring (`EtwFpsMonitor.cs`)
+- Uses Windows Event Tracing via `advapi32.dll` (`StartTraceW`, `ControlTraceW`, `EnableTraceEx2`, `OpenTraceW`, `ProcessTrace`).
+- Target Providers:
+  - Windows 11: `Microsoft-Windows-DxgKrnl` (`{802EC45A-1E99-4B83-9920-87C98277BA9D}`) — Event ID 184 (`Present_Info`).
+  - Windows 10: `Microsoft-Windows-DXGI` (`{CA11C036-0102-4A2D-A6AD-F03CFED5D3C9}`) — Event ID 42 (`Present_Info`).
+- In-kernel event filtering (`EVENT_FILTER_TYPE_EVENT_ID`) delivers only Present timestamps directly into a lock-free QPC ring buffer.
+- Auto-tracks active foreground window (`GetForegroundWindow` / `GetWindowThreadProcessId`) and filters out desktop shells (`explorer.exe`, `dwm.exe`).
+
+### Double-Buffered GDI+ Canvas & 60s Sparklines
+- **Large Neon FPS Counter**: Prominent 32pt bold header display.
+- **60-Second Real-Time Sparkline**: Rolling performance history rendering CPU and GPU loads with antialiased gradients and min/max baseline markers.
+- **Dual Thermals & Fan Tachometers**: CPU & GPU temperatures (°C) and live fan RPMs.
+- **System Power & Battery Gauge**: Active GPU wattage (Acer EC sensor `0x0D`), battery charge percentage, and AC plugged/charging status.
+
+### Controls & Persistence
+- **Global Hotkey**: `Ctrl + Shift + O` (registered via Win32 `RegisterHotKey`).
+- **Tray Menu**: Quick toggle item in the system tray menu (`Gaming Overlay (Ctrl+Shift+O)`).
+- **Dashboard Switch**: Hardware toggle in System & Hardware Controls panel.
+- **State Persistence**: Preserved across reboots via `HKCU\Software\PredatorControl\OverlayEnabled`.
 
 ---
 
-## 9. Complete Git Commit Chronology
+## 9. Phase 8: Roadmap & Next Objectives
+
+### Feature 3: Parallelized GPU Telemetry & iGPU Support
+- **Objective**: Accelerate GPU sensor refresh latency on discrete NVIDIA RTX GPUs and add integrated Intel/AMD GPU telemetry.
+- **Key Architecture**:
+  - Parallelize sensor reads via asynchronous task batching to avoid serial EC bus round-trips.
+  - Add integrated graphics metrics (frequency, load, memory) alongside discrete GPU stats.
+
+---
+
+## 10. Complete Git Commit Chronology
 
 ```text
 ed44fb6 2026-09-08 rev_00: base busted state with backups and revisions
@@ -302,18 +334,22 @@ daeb3a7 2026-09-16 Add automatic Acer OEM services optimization to silence bloat
 1b3d7d6 2026-09-16 feat: enforce High CPU Priority class, logon task priority, and IFEO registration
 4b8850c 2026-09-16 fix: Predator key true toggle -- hides app regardless of focus state
 5d793a9 2026-09-16 fix: Predator key -- add confirmed hardware codes VK=0xFF SC=0x75 captured via sniffer
+(next)  2026-09-17 feat: implement in-game Gaming Overlay HUD (G-Helper style) with ETW FPS counter
 ```
 
 ---
 
-## 10. Architecture & Reference Index
+## 11. Architecture & Reference Index
 
 ### Key Codebase Files
 - **`src/Program.cs`**: Single instance enforcement (Mutex), High CPU priority assignment, application bootstrap.
 - **`src/Form1.cs`**: Primary UI form, sensor telemetry polling timer, service optimization trigger, hardware profile dispatchers.
 - **`src/PredatorKeyHook.cs`**: Low-level Win32 keyboard hook (`WH_KEYBOARD_LL`) capturing `VK=0xFF`, `SC=0x75` to toggle the app window.
+- **`src/GameOverlayForm.cs`**: In-game Gaming Overlay HUD with GDI+ rendering, click-through, dragging, and sparklines.
+- **`src/EtwFpsMonitor.cs`**: Zero-injection kernel ETW Present monitor (`DxgKrnl` / `DXGI`) for real-time FPS calculation.
 - **`src/AcerAgentClient.cs`**: Windows Named Pipe client communicating directly with `\\.\pipe\AcerAgentPipe` (`AASSvc`).
 - **`src/WmiController.cs`**: WMI interface interacting with `root\wmi` Acer hardware classes.
+- **`src/TelemetryService.cs`**: Background telemetry worker polling hardware sensors, power, battery, and CPU usage.
 - **`src/StartupManager.cs`**: Windows Task Scheduler integration for zero-delay, elevated startup.
 - **`tools/KeySniffer.ps1`**: Standalone PowerShell Win32 keyboard hook sniffer for hardware key diagnostics.
 - **`disable_acer_bloatware.bat`**: Utility script to disable 6 background Acer telemetry services.

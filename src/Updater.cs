@@ -15,7 +15,11 @@ namespace PredatorControlApp
     [SupportedOSPlatform("windows")]
     internal static class Updater
     {
-        private const string ReleasesApi = "https://api.github.com/repos/Hadisovic/PredatorControl/releases";
+        private static readonly string[] ReleasesEndpoints =
+        {
+            "https://api.github.com/repos/YS47/PredatorControl/releases",
+            "https://api.github.com/repos/Hadisovic/PredatorControl/releases"
+        };
         private const string RegPath = @"SOFTWARE\PredatorControl";
         private const StringComparison OIC = StringComparison.OrdinalIgnoreCase;
 
@@ -46,21 +50,28 @@ namespace PredatorControlApp
             http.DefaultRequestHeaders.UserAgent.ParseAdd("PredatorControl");
             http.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
 
-            HttpResponseMessage resp;
-            try
+            string json = string.Empty;
+            foreach (var endpoint in ReleasesEndpoints)
             {
-                resp = await http.GetAsync(ReleasesApi);
-            }
-            catch
-            {
-                return null;
+                try
+                {
+                    var resp = await http.GetAsync(endpoint);
+                    if (resp.IsSuccessStatusCode)
+                    {
+                        var content = await resp.Content.ReadAsStringAsync();
+                        if (!string.IsNullOrWhiteSpace(content) && content.TrimStart().StartsWith("["))
+                        {
+                            json = content;
+                            break;
+                        }
+                    }
+                }
+                catch { }
             }
 
-            if (resp.StatusCode == System.Net.HttpStatusCode.NotFound)
+            if (string.IsNullOrEmpty(json))
                 return null;
-            resp.EnsureSuccessStatusCode();
 
-            string json = await resp.Content.ReadAsStringAsync();
             using var doc = JsonDocument.Parse(json);
 
             var current = Current;
@@ -76,8 +87,11 @@ namespace PredatorControlApp
                      .AppendLine(Str(rel, "body").Trim().Replace("\r\n", "\n").Replace("\n", Environment.NewLine))
                      .AppendLine();
 
-                if (newest == null && PickAsset(rel, IsSelfContained) is string url)
-                    newest = new UpdateInfo(v, Str(rel, "tag_name"), "", url);
+                if (newest == null || v > newest.Version)
+                {
+                    if (PickAsset(rel, IsSelfContained) is string url)
+                        newest = new UpdateInfo(v, Str(rel, "tag_name"), "", url);
+                }
             }
 
             return newest == null ? null : newest with { Notes = notes.ToString().TrimEnd() };

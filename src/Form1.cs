@@ -488,7 +488,9 @@ namespace PredatorControlApp
         {
             if (InvokeRequired) { BeginInvoke(new Action(ToggleApp)); return; }
 
-            if (Visible && WindowState != FormWindowState.Minimized && Form.ActiveForm == this)
+            // True toggle: hide whenever the window is visible (even if not focused, e.g. pressed during gaming),
+            // show and bring to front when hidden or minimized.
+            if (Visible && WindowState != FormWindowState.Minimized)
             {
                 HideApp();
             }

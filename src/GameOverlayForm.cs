@@ -25,6 +25,11 @@ namespace PredatorControlApp
         private const int WM_NCLBUTTONDOWN = 0xA1;
         private const int HT_CAPTION = 0x2;
 
+        private const int SW_SHOWNOACTIVATE = 4;
+
+        [DllImport("user32.dll")]
+        private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
         [DllImport("user32.dll")]
         private static extern IntPtr GetForegroundWindow();
 
@@ -59,11 +64,8 @@ namespace PredatorControlApp
         private readonly System.Windows.Forms.Timer _keyStateTimer = new();
 
         private bool _isClickThrough = true;
-        private bool _isDragging = false;
-        private Point _dragCursorStart;
-        private Point _dragWindowStart;
-
         private float _dpiScale = 1.0f;
+        private float _fontDpiScale = 0f;
 
         // Telemetry State
         private int? _fps;
@@ -90,7 +92,7 @@ namespace PredatorControlApp
         private static readonly Color DimText = Color.FromArgb(200, 160, 175, 195);
         private static readonly Color BorderColor = Color.FromArgb(70, 0, 229, 255);
         private static readonly Color ChartBg = Color.FromArgb(220, 8, 12, 18);
-        private static readonly Color OverlayBg = Color.FromArgb(225, 12, 16, 24);
+        private static readonly Color OverlayBg = Color.FromArgb(12, 16, 24); // Opaque Form.BackColor (Opacity handles DWM translucency)
 
         private Font? _fontFps;
         private Font? _fontMain;
@@ -113,6 +115,7 @@ namespace PredatorControlApp
             StartPosition = FormStartPosition.Manual;
             DoubleBuffered = true;
             BackColor = OverlayBg;
+            Opacity = 0.94; // Translucent dark glass look via native Windows DWM alpha
 
             SetStyle(ControlStyles.AllPaintingInWmPaint |
                      ControlStyles.UserPaint |
@@ -153,13 +156,17 @@ namespace PredatorControlApp
                 cp.ExStyle |= WS_EX_NOACTIVATE;
                 cp.ExStyle |= WS_EX_TOOLWINDOW;
                 cp.ExStyle |= WS_EX_TOPMOST;
-                cp.ExStyle |= WS_EX_LAYERED;
-                cp.ExStyle |= WS_EX_TRANSPARENT; // Click-through by default
                 return cp;
             }
         }
 
         protected override bool ShowWithoutActivation => true;
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            SetClickThrough(true);
+        }
 
         public void ToggleOverlay()
         {
@@ -188,7 +195,12 @@ namespace PredatorControlApp
             }
 
             UpdateDpiAndLayout();
-            Show();
+            if (!Visible)
+            {
+                ShowWindow(Handle, SW_SHOWNOACTIVATE);
+                Visible = true;
+            }
+            SetClickThrough(true);
             _renderTimer.Start();
             _keyStateTimer.Start();
             Invalidate();
@@ -297,7 +309,7 @@ namespace PredatorControlApp
                 Cursor = Cursors.SizeAll;
                 Invalidate();
             }
-            else if (!shouldAllowClick && !_isClickThrough && !_isDragging)
+            else if (!shouldAllowClick && !_isClickThrough)
             {
                 SetClickThrough(true);
                 Cursor = Cursors.Default;
@@ -307,6 +319,7 @@ namespace PredatorControlApp
 
         private void SetClickThrough(bool clickThrough)
         {
+            if (!IsHandleCreated) return;
             _isClickThrough = clickThrough;
             int style = GetWindowLong(Handle, GWL_EXSTYLE);
             if (clickThrough)
@@ -324,30 +337,8 @@ namespace PredatorControlApp
             base.OnMouseDown(e);
             if (e.Button == MouseButtons.Left && !_isClickThrough)
             {
-                _isDragging = true;
-                _dragCursorStart = Cursor.Position;
-                _dragWindowStart = Location;
-            }
-        }
-
-        protected override void OnMouseMove(MouseEventArgs e)
-        {
-            base.OnMouseMove(e);
-            if (_isDragging)
-            {
-                Point current = Cursor.Position;
-                int dx = current.X - _dragCursorStart.X;
-                int dy = current.Y - _dragCursorStart.Y;
-                Location = new Point(_dragWindowStart.X + dx, _dragWindowStart.Y + dy);
-            }
-        }
-
-        protected override void OnMouseUp(MouseEventArgs e)
-        {
-            base.OnMouseUp(e);
-            if (_isDragging)
-            {
-                _isDragging = false;
+                ReleaseCapture();
+                SendMessage(Handle, WM_NCLBUTTONDOWN, HT_CAPTION, 0);
                 SavePosition();
                 CheckDragModifierKeys();
             }
@@ -367,7 +358,7 @@ namespace PredatorControlApp
             Size = new Size(w, h);
 
             int radius = (int)(8 * _dpiScale);
-            IntPtr rgn = CreateRoundRectRgn(0, 0, w, h, radius, radius);
+            IntPtr rgn = CreateRoundRectRgn(0, 0, w + 1, h + 1, radius, radius);
             SetWindowRgn(Handle, rgn, true);
 
             EnsureFonts();
@@ -375,15 +366,19 @@ namespace PredatorControlApp
 
         private void EnsureFonts()
         {
-            _fontFps?.Dispose();
-            _fontMain?.Dispose();
-            _fontSmall?.Dispose();
-            _fontLabel?.Dispose();
+            if (_fontDpiScale != _dpiScale || _fontFps == null || _fontMain == null || _fontSmall == null || _fontLabel == null)
+            {
+                _fontFps?.Dispose();
+                _fontMain?.Dispose();
+                _fontSmall?.Dispose();
+                _fontLabel?.Dispose();
 
-            _fontFps = new Font("Segoe UI", 20f * _dpiScale, FontStyle.Bold);
-            _fontMain = new Font("Segoe UI", 8.5f * _dpiScale, FontStyle.Bold);
-            _fontSmall = new Font("Segoe UI", 7.0f * _dpiScale, FontStyle.Regular);
-            _fontLabel = new Font("Segoe UI", 7.0f * _dpiScale, FontStyle.Bold);
+                _fontFps = new Font("Segoe UI", 20f * _dpiScale, FontStyle.Bold);
+                _fontMain = new Font("Segoe UI", 8.5f * _dpiScale, FontStyle.Bold);
+                _fontSmall = new Font("Segoe UI", 7.0f * _dpiScale, FontStyle.Regular);
+                _fontLabel = new Font("Segoe UI", 7.0f * _dpiScale, FontStyle.Bold);
+                _fontDpiScale = _dpiScale;
+            }
         }
 
         private void LoadPersistedPosition()
@@ -397,15 +392,19 @@ namespace PredatorControlApp
                     int y = (int)(key.GetValue("OverlayY", -1) ?? -1);
                     if (x >= 0 && y >= 0)
                     {
-                        Location = new Point(x, y);
-                        return;
+                        var screen = Screen.FromPoint(new Point(x, y)).WorkingArea;
+                        if (screen.Contains(x, y))
+                        {
+                            Location = new Point(x, y);
+                            return;
+                        }
                     }
                 }
             }
             catch { }
 
             // Default: top-left corner of primary screen with padding
-            var primary = Screen.PrimaryScreen?.Bounds ?? new Rectangle(0, 0, 1920, 1080);
+            var primary = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1920, 1080);
             Location = new Point(primary.Left + 28, primary.Top + 28);
         }
 

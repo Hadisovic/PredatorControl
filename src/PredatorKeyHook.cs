@@ -19,15 +19,18 @@ namespace PredatorControlApp
         public const uint VK_LAUNCH_APP1 = 0xB6; // 182 (Nitro / OEM App 1)
         public const uint VK_F24 = 0x87;         // 135 (Frequently mapped to Turbo / Mode)
         public const uint VK_F23 = 0x86;         // 134
+        // Confirmed hardware: Helios Predator key sends VK=0xFF SC=0x75 (captured via WH_KEYBOARD_LL sniffer)
+        public const uint VK_OEM_PREDATOR = 0xFF; // 255 — actual VK emitted by Predator logo key on this hardware
 
         // Known Acer Predator / Nitro scan codes
-        public const uint ACER_SCANCODE_PREDATOR = 0x71;     // 113 (Alias)
-        public const uint ACER_SCANCODE_PREDATOR_KEY = 0x71; // 113 (Physical Predator App Key)
-        public const uint ACER_SCANCODE_PREDATOR_ALT = 0x6C; // 108
-        public const uint ACER_SCANCODE_MODE_KEY = 0x76;     // 118 (Physical Turbo / Mode Key)
-        public const uint ACER_SCANCODE_MODE_EXT = 0x54;     // 84  (Acer extended Mode Scan Code)
-        public const uint ACER_SCANCODE_NITRO_1 = 0x6E;      // 110
-        public const uint ACER_SCANCODE_NITRO_2 = 0x6D;      // 109
+        public const uint ACER_SCANCODE_PREDATOR = 0x71;          // 113 (Alias — older firmware)
+        public const uint ACER_SCANCODE_PREDATOR_KEY = 0x71;      // 113 (Physical Predator App Key — older firmware)
+        public const uint ACER_SCANCODE_PREDATOR_ACTUAL = 0x75;   // 117 — confirmed via hardware sniffer on this unit
+        public const uint ACER_SCANCODE_PREDATOR_ALT = 0x6C;      // 108
+        public const uint ACER_SCANCODE_MODE_KEY = 0x76;          // 118 (Physical Turbo / Mode Key)
+        public const uint ACER_SCANCODE_MODE_EXT = 0x54;          // 84  (Acer extended Mode Scan Code)
+        public const uint ACER_SCANCODE_NITRO_1 = 0x6E;           // 110
+        public const uint ACER_SCANCODE_NITRO_2 = 0x6D;           // 109
         public const uint LLKHF_EXTENDED = 0x01;
 
         [StructLayout(LayoutKind.Sequential)]
@@ -203,7 +206,11 @@ namespace PredatorControlApp
             if (vkCode == VK_LAUNCH_APP2 || vkCode == VK_LAUNCH_APP1)
                 return true;
 
-            // Physical Predator key scan codes
+            // Confirmed hardware: VK=0xFF + SC=0x75 — actual Predator logo key on this unit (captured via sniffer)
+            if (vkCode == VK_OEM_PREDATOR && scanCode == ACER_SCANCODE_PREDATOR_ACTUAL)
+                return true;
+
+            // Physical Predator key scan codes (older firmware / other Acer models)
             if (scanCode == ACER_SCANCODE_PREDATOR_KEY ||
                 scanCode == ACER_SCANCODE_PREDATOR_ALT ||
                 scanCode == ACER_SCANCODE_NITRO_1 ||

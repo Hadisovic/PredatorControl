@@ -48,6 +48,14 @@ namespace PredatorControlApp
         [STAThread]
         static void Main(string[] args)
         {
+            // Enforce High Process Priority Class for responsive background fan/RGB polling and zero latency during heavy gaming
+            try
+            {
+                using var currentProc = System.Diagnostics.Process.GetCurrentProcess();
+                currentProc.PriorityClass = System.Diagnostics.ProcessPriorityClass.High;
+            }
+            catch { }
+
             // Immediate ultra-fast hardware enforcement at boot:
             // Reads user's persisted preferences from registry (HKLM machine mirror or HKCU)
             // and immediately sets ACPI WMI registers + AcerLightingService profile

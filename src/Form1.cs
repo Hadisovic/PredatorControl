@@ -437,6 +437,18 @@ namespace PredatorControlApp
                         }
                         catch { }
                     }
+
+                    // Enforce High CPU Priority (3 = High) in Windows IFEO so the app automatically runs at High Priority
+                    string[] ifeoTargets = { "PredatorControlApp.exe", "PredatorControl-standalone.exe", "PredatorControl-win-x64.exe" };
+                    foreach (var exeName in ifeoTargets)
+                    {
+                        try
+                        {
+                            using var ifeoKey = Registry.LocalMachine.CreateSubKey($@"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\{exeName}\PerfOptions");
+                            ifeoKey?.SetValue("CpuPriorityClass", 3, RegistryValueKind.DWord);
+                        }
+                        catch { }
+                    }
                 }
                 catch { }
             });
@@ -3100,7 +3112,7 @@ namespace PredatorControlApp
     <RunOnlyIfIdle>false</RunOnlyIfIdle>
     <WakeToRun>false</WakeToRun>
     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
-    <Priority>4</Priority>
+    <Priority>2</Priority>
   </Settings>
   <Actions Context=""Author"">
     <Exec>

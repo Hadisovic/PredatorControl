@@ -804,7 +804,51 @@ namespace PredatorControlApp
             }
         }
 
-        #region Hardware Features (LCD Overdrive, Backlight Sleep, Windows Key Lock)
+        #region Hardware Features (GPU MUX, LCD Overdrive, Backlight Sleep, Windows Key Lock)
+
+        /// <summary>
+        /// Queries the current GPU MUX Working Mode via Acer OEM Agent Service (Port 46933).
+        /// Returns 0 = Optimus (Hybrid), 1 = Discrete GPU, 2 = Auto / Advanced Optimus.
+        /// </summary>
+        public async Task<int?> GetGpuModeAsync()
+        {
+            return await AcerAgentClient.GetGpuModeAsync();
+        }
+
+        /// <summary>
+        /// Queries supported GPU MUX capabilities bitmask:
+        /// Bit 0 (1): Optimus
+        /// Bit 1 (2): Discrete GPU
+        /// Bit 2 (4): Auto / Advanced Optimus
+        /// </summary>
+        public async Task<int> GetGpuModeCapabilityAsync()
+        {
+            return await AcerAgentClient.GetGpuModeCapabilityAsync();
+        }
+
+        /// <summary>
+        /// Sets the GPU MUX Working Mode:
+        /// 0 = Optimus (Dynamic switching / Hybrid)
+        /// 1 = Discrete (NVIDIA GPU Only / Direct display connection)
+        /// 2 = Auto (Advanced Optimus)
+        /// Dual-dispatches to Acer OEM Agent Service (runs as LocalSystem) and direct ACPI WMI fallback.
+        /// Note: Hardware MUX switch requires a system reboot to take effect in firmware.
+        /// </summary>
+        public async Task<bool> SetGpuModeAsync(int mode)
+        {
+            // 1. Primary: OEM Agent Service (syncs registry, state, and handles permissions)
+            bool agentOk = await AcerAgentClient.SetGpuModeAsync(mode);
+
+            // 2. Direct ACPI WMI fallback (Feature ID 0x02, value = mode + 1)
+            // Reverse-engineered from AcerAgentService RVA 0x3DD90:
+            // Optimus (mode 0) -> 0x0102
+            // Discrete (mode 1) -> 0x0202
+            // Auto (mode 2)     -> 0x0302
+            ulong wmiPayload = (ulong)0x02 | (((ulong)mode + 1) << 8);
+            var (wmiOk, _) = SendCommand("SetGamingMiscSetting", wmiPayload);
+
+            return agentOk || wmiOk;
+        }
 
         public bool SetLcdOverdrive(bool enable)
         {

@@ -129,6 +129,17 @@ namespace PredatorControlApp
         private PredatorButton _btnFixedSpeed = null!, _btnFanCurve = null!;
         private PredatorButton? _activeCustomSubBtn;
         private PredatorButton _btn60Hz = null!, _btnMaxHz = null!;
+
+        // GPU Working Mode (MUX Switch)
+        private Label _lblGpuModeHdr = null!;
+        private PredatorButton _btnGpuOptimus = null!;
+        private PredatorButton _btnGpuDiscrete = null!;
+        private PredatorButton _btnGpuAuto = null!;
+        private PredatorButton? _activeGpuModeBtn;
+        private Label _lblGpuRestartNotice = null!;
+        private int? _currentGpuMode;
+        private int _gpuCapability = 7;
+
         private Label _lblExternalDisplayHdr = null!;
         private Panel _pnlExternalMonitors = null!;
         private List<DisplayCcdController.ExternalMonitorInfo> _externalMonitors = new();
@@ -213,6 +224,7 @@ namespace PredatorControlApp
                                   _trayPowerTurbo = null!, _trayPowerEco = null!;
         private ToolStripMenuItem _trayFanAuto = null!, _trayFanMax = null!, _trayFanCustom = null!;
         private ToolStripMenuItem _trayDisplay60 = null!, _trayDisplayMax = null!;
+        private ToolStripMenuItem _trayGpuOptimus = null!, _trayGpuDiscrete = null!, _trayGpuAuto = null!;
         private ToolStripMenuItem _trayBatteryLimit80 = null!, _trayBatteryLimit100 = null!;
         private ToolStripMenuItem _trayBatteryMenu = null!;
         private ToolStripMenuItem _trayRgbStatic = null!, _trayRgbBreathe = null!, _trayRgbNeon = null!,
@@ -684,6 +696,68 @@ namespace PredatorControlApp
 
         #endregion
 
+        #region GPU Working Mode (MUX Switch)
+
+        private async void ApplyGpuMode(int mode, PredatorButton btn, string modeName)
+        {
+            if (_currentGpuMode == mode) return;
+
+            var result = MessageBox.Show(
+                $"Switching GPU Working Mode to {modeName} requires a system restart for hardware firmware changes to take effect.\n\nWould you like to apply this setting and restart your computer now?",
+                "Predator Control - GPU Mode Switch",
+                MessageBoxButtons.YesNoCancel,
+                MessageBoxIcon.Question);
+
+            if (result == DialogResult.Cancel)
+                return;
+
+            bool success = await _wmi.SetGpuModeAsync(mode);
+            if (!success)
+            {
+                MessageBox.Show("Failed to apply GPU mode. Ensure Acer Agent Service is running.", "Predator Control", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            _currentGpuMode = mode;
+            HighlightBtn(btn, ref _activeGpuModeBtn);
+            SaveState("GpuMode", mode);
+
+            ToolStripMenuItem? trayItem = mode switch
+            {
+                AcerAgentClient.GPU_MODE_OPTIMUS => _trayGpuOptimus,
+                AcerAgentClient.GPU_MODE_DISCRETE => _trayGpuDiscrete,
+                AcerAgentClient.GPU_MODE_AUTO => _trayGpuAuto,
+                _ => null
+            };
+            if (trayItem != null)
+                CheckTrayItem(trayItem, _trayGpuOptimus, _trayGpuDiscrete, _trayGpuAuto);
+
+            if (result == DialogResult.Yes)
+            {
+                try
+                {
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = "shutdown.exe",
+                        Arguments = "/r /t 5 /c \"Predator Control is restarting the computer to apply GPU MUX switch changes.\"",
+                        CreateNoWindow = true,
+                        UseShellExecute = false
+                    });
+                }
+                catch { }
+            }
+            else
+            {
+                if (_lblGpuRestartNotice != null)
+                {
+                    _lblGpuRestartNotice.Text = $"Pending restart: {modeName} will be active on next boot";
+                    _lblGpuRestartNotice.ForeColor = Color.FromArgb(255, 180, 50);
+                }
+            }
+        }
+
+        #endregion
+
         #region System Tray
 
         private void SetupSystemTray()
@@ -721,6 +795,12 @@ namespace PredatorControlApp
             _trayDisplayMax = new ToolStripMenuItem($"{_maxHz} Hz", null, (s, e) => ApplyDisplayMode(_maxHz, _btnMaxHz));
             displayMenu.DropDownItems.AddRange([_trayDisplay60, _trayDisplayMax]);
 
+            var gpuMenu = new ToolStripMenuItem("  GPU Mode (MUX)");
+            _trayGpuOptimus = new ToolStripMenuItem("Optimus (Hybrid)", null, (s, e) => ApplyGpuMode(AcerAgentClient.GPU_MODE_OPTIMUS, _btnGpuOptimus, "Optimus (Hybrid)"));
+            _trayGpuDiscrete = new ToolStripMenuItem("Discrete GPU", null, (s, e) => ApplyGpuMode(AcerAgentClient.GPU_MODE_DISCRETE, _btnGpuDiscrete, "Discrete GPU Only"));
+            _trayGpuAuto = new ToolStripMenuItem("Auto (Advanced Optimus)", null, (s, e) => ApplyGpuMode(AcerAgentClient.GPU_MODE_AUTO, _btnGpuAuto, "Auto (Advanced Optimus)"));
+            gpuMenu.DropDownItems.AddRange([_trayGpuOptimus, _trayGpuDiscrete, _trayGpuAuto]);
+
             var rgbMenu = new ToolStripMenuItem("  Keyboard RGB");
             _trayRgbStatic = new ToolStripMenuItem("Static", null, (s, e) => ApplyRgbModeFromDropdown(0));
             _trayRgbBreathe = new ToolStripMenuItem("Breathing", null, (s, e) => ApplyRgbModeFromDropdown(1));
@@ -742,6 +822,7 @@ namespace PredatorControlApp
             _trayMenu.Items.Add(powerMenu);
             _trayMenu.Items.Add(fanMenu);
             _trayMenu.Items.Add(displayMenu);
+            _trayMenu.Items.Add(gpuMenu);
             _trayMenu.Items.Add(_trayBatteryMenu);
             _trayMenu.Items.Add(rgbMenu);
 
@@ -1080,6 +1161,26 @@ namespace PredatorControlApp
             };
 
             y += switchH + S(16);
+            AddSeparator(y);
+
+            // GPU WORKING MODE (MUX SWITCH)
+            y += S(18);
+            _lblGpuModeHdr = MakeLabel("GPU WORKING MODE (MUX SWITCH)", pad, y, FontSectionHeader, Color.FromArgb(120, 120, 135));
+
+            y += S(24);
+            int gpuBtnW = (contentW - 2 * gap) / 3;
+            _btnGpuOptimus = MakeButton("Optimus", pad, y, gpuBtnW, btnH);
+            _btnGpuDiscrete = MakeButton("Discrete GPU", pad + gpuBtnW + gap, y, gpuBtnW, btnH);
+            _btnGpuAuto = MakeButton("Auto (Adv)", pad + (gpuBtnW + gap) * 2, y, gpuBtnW, btnH);
+
+            _btnGpuOptimus.Click += (s, e) => ApplyGpuMode(AcerAgentClient.GPU_MODE_OPTIMUS, _btnGpuOptimus, "Optimus (Hybrid)");
+            _btnGpuDiscrete.Click += (s, e) => ApplyGpuMode(AcerAgentClient.GPU_MODE_DISCRETE, _btnGpuDiscrete, "Discrete GPU Only");
+            _btnGpuAuto.Click += (s, e) => ApplyGpuMode(AcerAgentClient.GPU_MODE_AUTO, _btnGpuAuto, "Auto (Advanced Optimus)");
+
+            y += btnH + S(8);
+            _lblGpuRestartNotice = MakeLabel("Requires system restart to take effect in firmware", pad, y, FontBody, Color.FromArgb(120, 120, 135));
+
+            y += S(22);
             AddSeparator(y);
 
             // EXTERNAL DISPLAY(S)
@@ -1606,6 +1707,12 @@ namespace PredatorControlApp
                 int dispBtnW = (contentW - gap) / 2;
                 if (_btn60Hz != null) _btn60Hz.Width = dispBtnW;
                 if (_btnMaxHz != null) { _btnMaxHz.Left = pad + dispBtnW + gap; _btnMaxHz.Width = dispBtnW; }
+
+                // GPU Working Mode (MUX Switch) buttons
+                int gpuBtnW = (contentW - 2 * gap) / 3;
+                if (_btnGpuOptimus != null) _btnGpuOptimus.Width = gpuBtnW;
+                if (_btnGpuDiscrete != null) { _btnGpuDiscrete.Left = pad + gpuBtnW + gap; _btnGpuDiscrete.Width = gpuBtnW; }
+                if (_btnGpuAuto != null) { _btnGpuAuto.Left = pad + (gpuBtnW + gap) * 2; _btnGpuAuto.Width = gpuBtnW; }
 
                 // LCD Overdrive & Backlight 30s Switches
                 if (_switchLcdOverdrive != null) _switchLcdOverdrive.Left = ClientSize.Width - pad - S(48);
@@ -2458,6 +2565,112 @@ namespace PredatorControlApp
                 if (_switchWinKeyLock != null) _switchWinKeyLock.Checked = (savedWinKeyLock == 1);
                 PredatorKeyHook.SetWinKeyLocked(savedWinKeyLock == 1);
                 Task.Run(() => { try { _wmi.SetWinKeyLock(savedWinKeyLock == 1); } catch { } });
+
+                // GPU Working Mode (MUX Switch)
+                int savedGpuMode = GetInt(key, "GpuMode", -1, 0, 2);
+                if (savedGpuMode != -1)
+                {
+                    _currentGpuMode = savedGpuMode;
+                    PredatorButton? targetBtn = savedGpuMode switch
+                    {
+                        AcerAgentClient.GPU_MODE_OPTIMUS => _btnGpuOptimus,
+                        AcerAgentClient.GPU_MODE_DISCRETE => _btnGpuDiscrete,
+                        AcerAgentClient.GPU_MODE_AUTO => _btnGpuAuto,
+                        _ => null
+                    };
+                    if (targetBtn != null)
+                        HighlightBtn(targetBtn, ref _activeGpuModeBtn);
+
+                    ToolStripMenuItem? targetTray = savedGpuMode switch
+                    {
+                        AcerAgentClient.GPU_MODE_OPTIMUS => _trayGpuOptimus,
+                        AcerAgentClient.GPU_MODE_DISCRETE => _trayGpuDiscrete,
+                        AcerAgentClient.GPU_MODE_AUTO => _trayGpuAuto,
+                        _ => null
+                    };
+                    if (targetTray != null)
+                        CheckTrayItem(targetTray, _trayGpuOptimus, _trayGpuDiscrete, _trayGpuAuto);
+                }
+
+                // Query live hardware capability & mode from OEM service/firmware
+                Task.Run(async () =>
+                {
+                    try
+                    {
+                        int cap = await _wmi.GetGpuModeCapabilityAsync();
+                        _gpuCapability = cap;
+                        int? liveMode = await _wmi.GetGpuModeAsync();
+
+                        void UpdateGpuUi()
+                        {
+                            if (_isClosing || IsDisposed) return;
+
+                            if ((_gpuCapability & 4) == 0 && _btnGpuAuto != null)
+                            {
+                                _btnGpuAuto.Visible = false;
+                                if (_trayGpuAuto != null) _trayGpuAuto.Visible = false;
+                            }
+
+                            if (liveMode.HasValue)
+                            {
+                                PredatorButton? liveBtn = liveMode.Value switch
+                                {
+                                    AcerAgentClient.GPU_MODE_OPTIMUS => _btnGpuOptimus,
+                                    AcerAgentClient.GPU_MODE_DISCRETE => _btnGpuDiscrete,
+                                    AcerAgentClient.GPU_MODE_AUTO => _btnGpuAuto,
+                                    _ => null
+                                };
+
+                                ToolStripMenuItem? liveTray = liveMode.Value switch
+                                {
+                                    AcerAgentClient.GPU_MODE_OPTIMUS => _trayGpuOptimus,
+                                    AcerAgentClient.GPU_MODE_DISCRETE => _trayGpuDiscrete,
+                                    AcerAgentClient.GPU_MODE_AUTO => _trayGpuAuto,
+                                    _ => null
+                                };
+
+                                if (_currentGpuMode == null || _currentGpuMode == liveMode.Value)
+                                {
+                                    _currentGpuMode = liveMode.Value;
+                                    if (liveBtn != null)
+                                        HighlightBtn(liveBtn, ref _activeGpuModeBtn);
+                                    if (liveTray != null)
+                                        CheckTrayItem(liveTray, _trayGpuOptimus, _trayGpuDiscrete, _trayGpuAuto);
+                                }
+                                else if (_currentGpuMode != liveMode.Value)
+                                {
+                                    // A mode switch is pending restart!
+                                    string pendingName = _currentGpuMode.Value switch
+                                    {
+                                        AcerAgentClient.GPU_MODE_OPTIMUS => "Optimus (Hybrid)",
+                                        AcerAgentClient.GPU_MODE_DISCRETE => "Discrete GPU Only",
+                                        AcerAgentClient.GPU_MODE_AUTO => "Auto (Advanced Optimus)",
+                                        _ => "Selected mode"
+                                    };
+                                    if (_lblGpuRestartNotice != null)
+                                    {
+                                        _lblGpuRestartNotice.Text = $"Pending restart: {pendingName} will be active on next boot";
+                                        _lblGpuRestartNotice.ForeColor = Color.FromArgb(255, 180, 50);
+                                    }
+                                }
+                            }
+                        }
+
+                        if (IsHandleCreated)
+                        {
+                            BeginInvoke(new Action(UpdateGpuUi));
+                        }
+                        else
+                        {
+                            for (int i = 0; i < 25 && !IsHandleCreated && !IsDisposed; i++)
+                                await Task.Delay(100);
+
+                            if (IsHandleCreated && !IsDisposed)
+                                BeginInvoke(new Action(UpdateGpuUi));
+                        }
+                    }
+                    catch { }
+                });
             }
             catch { }
         }
@@ -2681,9 +2894,9 @@ namespace PredatorControlApp
             tracker = btn;
         }
 
-        private static void CheckTrayItem(ToolStripMenuItem active, params ToolStripMenuItem[] group)
+        private static void CheckTrayItem(ToolStripMenuItem active, params ToolStripMenuItem?[] group)
         {
-            foreach (var item in group) item.Checked = false;
+            foreach (var item in group) if (item != null) item.Checked = false;
             active.Checked = true;
         }
 

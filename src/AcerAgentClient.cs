@@ -37,6 +37,10 @@ namespace PredatorControlApp
         public const uint CMD_GET_CONNECTED_DEVICE = 30;
         public const uint CMD_SET_DEVICE_DATA = 100;
 
+        public const int GPU_MODE_OPTIMUS = 0;
+        public const int GPU_MODE_DISCRETE = 1;
+        public const int GPU_MODE_AUTO = 2;
+
         private static readonly SemaphoreSlim _sendLock = new(1, 1);
 
         /// <summary>
@@ -143,6 +147,7 @@ namespace PredatorControlApp
 
         /// <summary>
         /// Sets device data via SET_DEVICE_DATA (Packet 100).
+        /// Validates return code "result": "0" from OEM service.
         /// </summary>
         public static async Task<bool> SetDeviceDataAsync(string function, object parameter)
         {
@@ -153,7 +158,49 @@ namespace PredatorControlApp
             };
             string json = JsonSerializer.Serialize(payloadObj);
             string? resp = await SendCommandAsync(CMD_SET_DEVICE_DATA, json);
-            return resp != null;
+            if (string.IsNullOrEmpty(resp)) return false;
+
+            try
+            {
+                using var doc = JsonDocument.Parse(resp);
+                if (doc.RootElement.TryGetProperty("result", out var resProp))
+                {
+                    if (resProp.ValueKind == JsonValueKind.String && resProp.GetString() == "0")
+                        return true;
+                    if (resProp.ValueKind == JsonValueKind.Number && resProp.GetInt32() == 0)
+                        return true;
+                }
+            }
+            catch { }
+
+            return resp.Contains("\"result\" : \"0\"") || resp.Contains("\"result\":\"0\"");
+        }
+
+        /// <summary>
+        /// Queries supported GPU MUX capabilities bitmask from AcerAgentService:
+        /// Bit 0 (1): Optimus
+        /// Bit 1 (2): Discrete GPU
+        /// Bit 2 (4): Auto / Advanced Optimus
+        /// Returns e.g. 7 (all 3 supported) or 3 (Optimus + Discrete).
+        /// </summary>
+        public static async Task<int> GetGpuModeCapabilityAsync()
+        {
+            try
+            {
+                string? resp = await SendCommandAsync(CMD_INITIALIZATION, "{}");
+                if (!string.IsNullOrEmpty(resp))
+                {
+                    using var doc = JsonDocument.Parse(resp);
+                    if (doc.RootElement.TryGetProperty("SUPPORT_GPU_MODE_CAPABILITY", out var capProp) &&
+                        capProp.ValueKind == JsonValueKind.Array &&
+                        capProp.GetArrayLength() > 0)
+                    {
+                        return capProp[0].GetInt32();
+                    }
+                }
+            }
+            catch { }
+            return 7; // Default to 7 (Optimus, Discrete, Auto) for Predator Neo
         }
 
         /// <summary>

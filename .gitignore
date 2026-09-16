@@ -29,3 +29,4 @@ scratch_*.ps1
 *.pdb
 *.deps.json
 *.runtimeconfig.json
+*.zip

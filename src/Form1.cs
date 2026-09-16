@@ -322,6 +322,7 @@ namespace PredatorControlApp
                 Updater.ShowPendingNotes(this);
                 if (Environment.CommandLine.Contains("-hidden")) HideApp();
                 CheckPredatorSenseConflict();
+                OptimizeAcerServices();
 
                 // Delayed settling guard: Acer services (AcerLightingService / AcerAgentService)
                 // complete their boot/logon initialization 1-4 seconds after user login.
@@ -374,6 +375,71 @@ namespace PredatorControlApp
                 }
             }
             catch { }
+        }
+
+        private static void OptimizeAcerServices()
+        {
+            Task.Run(() =>
+            {
+                try
+                {
+                    // Bloatware & telemetry services safe to disable
+                    string[] bloatServices =
+                    {
+                        "AcerCCAgentSvis",             // Acer Care Center
+                        "AcerQAAgentSvis",             // Acer Quick Access
+                        "AcerDIAgentSvis",             // Acer Device Info Telemetry
+                        "ASMSvc",                      // Acer System Monitor Service
+                        "AcerServiceSvc",              // Acer Service Component Wrapper
+                        "AcerDeviceEnablingServiceV2"  // Acer Device Enabling Service V2
+                    };
+
+                    foreach (var svcName in bloatServices)
+                    {
+                        try
+                        {
+                            using var reg = Registry.LocalMachine.OpenSubKey($@"SYSTEM\CurrentControlSet\Services\{svcName}", true);
+                            if (reg != null)
+                            {
+                                int currentStart = (int)(reg.GetValue("Start", 2) ?? 2);
+                                if (currentStart != 4) // 4 = Disabled
+                                {
+                                    reg.SetValue("Start", 4, RegistryValueKind.DWord);
+                                    try
+                                    {
+                                        var psi = new ProcessStartInfo("net.exe", $"stop {svcName}")
+                                        {
+                                            CreateNoWindow = true,
+                                            UseShellExecute = false
+                                        };
+                                        Process.Start(psi)?.WaitForExit(3000);
+                                    }
+                                    catch { }
+                                }
+                            }
+                        }
+                        catch { }
+                    }
+
+                    // Keep essential services on Automatic (2)
+                    string[] essential = { "AASSvc", "AcerLightingService" };
+                    foreach (var svc in essential)
+                    {
+                        try
+                        {
+                            using var reg = Registry.LocalMachine.OpenSubKey($@"SYSTEM\CurrentControlSet\Services\{svc}", true);
+                            if (reg != null)
+                            {
+                                int currentStart = (int)(reg.GetValue("Start", 2) ?? 2);
+                                if (currentStart != 2) // 2 = Automatic
+                                    reg.SetValue("Start", 2, RegistryValueKind.DWord);
+                            }
+                        }
+                        catch { }
+                    }
+                }
+                catch { }
+            });
         }
 
         private void EnableDarkTitleBar()

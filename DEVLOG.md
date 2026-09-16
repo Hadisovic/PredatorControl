@@ -334,8 +334,8 @@ daeb3a7 2026-09-16 Add automatic Acer OEM services optimization to silence bloat
 1b3d7d6 2026-09-16 feat: enforce High CPU Priority class, logon task priority, and IFEO registration
 4b8850c 2026-09-16 fix: Predator key true toggle -- hides app regardless of focus state
 5d793a9 2026-09-16 fix: Predator key -- add confirmed hardware codes VK=0xFF SC=0x75 captured via sniffer
-0a7bbce 2026-09-17 feat: implement in-game Gaming Overlay HUD (G-Helper style) with ETW FPS counter
-(next)  2026-09-17 fix: resolve overlay BackColor transparency crash and package standalone and win-x64 binaries
+1e94952 2026-09-17 fix: resolve overlay BackColor transparency crash and package standalone and win-x64 binaries
+(next)  2026-09-17 docs: update README with Gaming Overlay HUD, new screenshots, 4 essential Acer services, and 40MB footprint
 ```
 
 ---

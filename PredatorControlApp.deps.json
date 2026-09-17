@@ -1,13 +1,12 @@
 {
   "runtimeTarget": {
-    "name": ".NETCoreApp,Version=v10.0/win-x64",
+    "name": ".NETCoreApp,Version=v10.0",
     "signature": ""
   },
   "compilationOptions": {},
   "targets": {
-    ".NETCoreApp,Version=v10.0": {},
-    ".NETCoreApp,Version=v10.0/win-x64": {
-      "PredatorControlApp/1.1.6": {
+    ".NETCoreApp,Version=v10.0": {
+      "PredatorControlApp/1.1.7": {
         "dependencies": {
           "System.Management": "10.0.0"
         },
@@ -17,7 +16,15 @@
       },
       "System.Management/10.0.0": {
         "runtime": {
+          "lib/net10.0/System.Management.dll": {
+            "assemblyVersion": "10.0.0.0",
+            "fileVersion": "10.0.25.52411"
+          }
+        },
+        "runtimeTargets": {
           "runtimes/win/lib/net10.0/System.Management.dll": {
+            "rid": "win",
+            "assetType": "runtime",
             "assemblyVersion": "10.0.0.0",
             "fileVersion": "10.0.25.52411"
           }
@@ -26,7 +33,7 @@
     }
   },
   "libraries": {
-    "PredatorControlApp/1.1.6": {
+    "PredatorControlApp/1.1.7": {
       "type": "project",
       "serviceable": false,
       "sha512": ""

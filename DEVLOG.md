@@ -298,6 +298,38 @@ Following user request and reference design (matching G-Helper's in-game telemet
 
 ---
 
+## 9. Phase 9: G-Helper 3-Mode Gaming Overlay HUD & Native NVML/RAPL Telemetry (v1.1.7)
+
+### Motivation & Visual Alignment
+The user requested a faithful, pixel-precise recreation of the 3-mode gaming overlay HUD inspired by **G-Helper**:
+- **Light Mode:** Ultra-compact HUD displaying `FPS | GPU: [temp]° [gpu_power]W | CPU: [temp]° [cpu_power]W`.
+- **Default Mode:** Balanced telemetry showing `FPS | GPU: [temp]° [rpm]RPM | CPU: [temp]° [rpm]RPM | 60s Sparkline Graph | [gpu_power]W / [cpu_power]W`.
+- **Full Mode:** Complete hardware monitor showing `FPS | GPU: [temp]° [rpm]RPM | CPU: [temp]° [rpm]RPM | Graph | [gpu_power]W / [cpu_power]W | [gpu_load]% [bar] / [cpu_load]% [bar] | [vram]GB [bar] / [ram]GB [bar]`.
+
+### Zero-Overhead Hardware Telemetry: Fixing "Stuck on dGPU"
+1. **The Issue:** Acer WMI hardware method `0x0D` on Helios laptops often returns `0` or null for discrete GPU wattage when the GPU is in dynamic power states or idle.
+2. **Native NVIDIA NVML P/Invoke (`src/NvmlGpuMonitor.cs`):**
+   - Dynamic binding to `C:\Windows\System32\nvml.dll`.
+   - Direct querying of `nvmlDeviceGetPowerUsage` (returns live milliwatts `mw / 1000.0f`).
+   - Direct querying of `nvmlDeviceGetUtilizationRates` (live dGPU load %).
+   - Direct querying of `nvmlDeviceGetMemoryInfo` (live VRAM used and total in GB).
+   - Direct querying of `nvmlDeviceGetTemperature` (dGPU core temp).
+3. **Intel RAPL CPU Package Power:**
+   - Queried via Windows Performance Counter `\Energy Meter(rapl_package0_pkg)\Power` / 1000.0f.
+   - Provides live CPU power consumption in Watts without requiring third-party kernel drivers.
+4. **Physical RAM Utilization:**
+   - Win32 `GlobalMemoryStatusEx` provides live RAM usage and total capacity in GB.
+
+### Hotkeys & Interactive Gestures
+- **`Ctrl + Shift + Alt + O`** (and `Ctrl + Shift + O`): Toggle overlay on/off.
+- **`Ctrl + Shift + Alt + Click`**: Cycle display mode (`Light` ➔ `Default` ➔ `Full` ➔ `Light`).
+- **`Ctrl + Shift + Alt + Drag`**: Move the overlay anywhere on the screen with coordinates persisted to Registry.
+- **`Ctrl + Shift + Alt + Mouse Wheel`**: Dynamically scale HUD from 50% to 300% in 10% steps.
+- **`Ctrl + Shift + Alt + Middle Click`**: Instantly reset HUD scale to 100%.
+- **Hover & Key Guard:** Mouse input is only intercepted when the cursor is positioned directly over the overlay window, ensuring zero interference with active games.
+
+---
+
 ## 10. Complete Git Commit Chronology
 
 ```text

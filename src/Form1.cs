@@ -60,6 +60,7 @@ namespace PredatorControlApp
         private const int ASFW_ANY = -1;
 
         private const uint MOD_NOREPEAT = 0x4000;
+        private const uint MOD_ALT = 0x0001;
         private const uint MOD_CONTROL = 0x0002;
         private const uint MOD_SHIFT = 0x0004;
         private const int SW_RESTORE = 9;
@@ -82,6 +83,7 @@ namespace PredatorControlApp
         private const int HOTKEY_ID_PREDATOR_F24 = 9103;
         private const int HOTKEY_ID_PREDATOR_F23 = 9104;
         private const int HOTKEY_ID_OVERLAY = 9105;
+        private const int HOTKEY_ID_OVERLAY_ALT = 9106;
 
         #endregion
 
@@ -115,6 +117,7 @@ namespace PredatorControlApp
         private static readonly Font FontSectionHeader = new("Segoe UI", 8.5f, FontStyle.Bold);
         private static readonly Font FontBody = new("Segoe UI", 9.5f, FontStyle.Regular);
         private static readonly Font FontBodyBold = new("Segoe UI", 9.5f, FontStyle.Bold);
+        private static readonly Font FontSmall = new("Segoe UI", 7.5f, FontStyle.Regular);
 
         private readonly List<Panel> _separators = new();
         private Label _lblTitle = null!, _lblCpuTemp = null!, _lblGpuTemp = null!;
@@ -225,6 +228,11 @@ namespace PredatorControlApp
         private ToolStripMenuItem? _trayOverlay;
         private PredatorToggle? _switchOverlay;
         private Label? _lblOverlay;
+        private PredatorButton _btnOverlayLight = null!;
+        private PredatorButton _btnOverlayDefault = null!;
+        private PredatorButton _btnOverlayFull = null!;
+        private Label _lblOverlayScaleHdr = null!;
+        private PredatorSlider _sliderOverlayScale = null!;
 
         private static readonly string[] RgbModeNames = { "Static", "Breathing", "Neon", "Wave", "Shifting", "Zoom", "Meteor", "Twinkling", "Off" };
 
@@ -260,6 +268,12 @@ namespace PredatorControlApp
             // Query Win32 CCD API for the internal laptop screen
             _internalDisplayGdiName = DisplayCcdController.GetInternalDisplayGdiName();
             _maxHz = DisplayCcdController.GetMaxRefreshRate(_internalDisplayGdiName);
+
+            _overlayForm = new GameOverlayForm();
+            _overlayForm.OverlayStateChanged += (m, s) =>
+            {
+                try { if (IsHandleCreated) BeginInvoke(new Action(UpdateOverlayUI)); } catch { }
+            };
 
             BuildUI();
             BuildTrayMenu();
@@ -319,6 +333,8 @@ namespace PredatorControlApp
             {
                 SystemEvents.PowerModeChanged -= OnPowerModeChanged;
                 ThemeManager.ThemeChanged -= OnThemeChanged;
+                try { _overlayForm?.Dispose(); } catch { }
+                try { NvmlGpuMonitor.Shutdown(); } catch { }
             };
 
             ThemeManager.ThemeChanged += OnThemeChanged;
@@ -512,7 +528,13 @@ namespace PredatorControlApp
         {
             if (InvokeRequired) { BeginInvoke(new Action(() => SetOverlayVisible(visible))); return; }
             if (_overlayForm == null || _overlayForm.IsDisposed)
+            {
                 _overlayForm = new GameOverlayForm();
+                _overlayForm.OverlayStateChanged += (m, s) =>
+                {
+                    try { if (IsHandleCreated) BeginInvoke(new Action(UpdateOverlayUI)); } catch { }
+                };
+            }
 
             if (visible)
             {
@@ -532,9 +554,29 @@ namespace PredatorControlApp
         public void ToggleGameOverlay()
         {
             if (_overlayForm == null || _overlayForm.IsDisposed)
+            {
                 _overlayForm = new GameOverlayForm();
+                _overlayForm.OverlayStateChanged += (m, s) =>
+                {
+                    try { if (IsHandleCreated) BeginInvoke(new Action(UpdateOverlayUI)); } catch { }
+                };
+            }
 
             SetOverlayVisible(!_overlayForm.Visible);
+        }
+
+        private void UpdateOverlayUI()
+        {
+            if (_overlayForm == null) return;
+            var mode = _overlayForm.Mode;
+            int scale = _overlayForm.ScalePercent;
+
+            if (_btnOverlayLight != null) _btnOverlayLight.IsActive = mode == OverlayMode.Light;
+            if (_btnOverlayDefault != null) _btnOverlayDefault.IsActive = mode == OverlayMode.Default;
+            if (_btnOverlayFull != null) _btnOverlayFull.IsActive = mode == OverlayMode.Full;
+
+            if (_sliderOverlayScale != null && _sliderOverlayScale.Value != scale) _sliderOverlayScale.Value = scale;
+            if (_lblOverlayScaleHdr != null) _lblOverlayScaleHdr.Text = $"OVERLAY SCALE: {scale}%";
         }
 
         protected override void OnHandleCreated(EventArgs e)
@@ -547,6 +589,7 @@ namespace PredatorControlApp
                 RegisterHotKey(Handle, HOTKEY_ID_PREDATOR_F24, MOD_NOREPEAT, PredatorKeyHook.VK_F24);
                 RegisterHotKey(Handle, HOTKEY_ID_PREDATOR_F23, MOD_NOREPEAT, PredatorKeyHook.VK_F23);
                 RegisterHotKey(Handle, HOTKEY_ID_OVERLAY, MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, (uint)Keys.O);
+                RegisterHotKey(Handle, HOTKEY_ID_OVERLAY_ALT, MOD_CONTROL | MOD_SHIFT | MOD_ALT | MOD_NOREPEAT, (uint)Keys.O);
             }
             catch { }
         }
@@ -560,6 +603,7 @@ namespace PredatorControlApp
                 UnregisterHotKey(Handle, HOTKEY_ID_PREDATOR_F24);
                 UnregisterHotKey(Handle, HOTKEY_ID_PREDATOR_F23);
                 UnregisterHotKey(Handle, HOTKEY_ID_OVERLAY);
+                UnregisterHotKey(Handle, HOTKEY_ID_OVERLAY_ALT);
             }
             catch { }
             base.OnHandleDestroyed(e);
@@ -605,7 +649,7 @@ namespace PredatorControlApp
                     _predatorKeyHook?.TriggerModeKey();
                     return;
                 }
-                else if (id == HOTKEY_ID_OVERLAY)
+                else if (id == HOTKEY_ID_OVERLAY || id == HOTKEY_ID_OVERLAY_ALT)
                 {
                     ToggleGameOverlay();
                     return;
@@ -1546,7 +1590,7 @@ namespace PredatorControlApp
 
             // In-Game Gaming Overlay HUD
             y += S(24);
-            _lblOverlay = MakeLabel("Gaming Overlay HUD (Ctrl+Shift+O)", pad, y, FontBody, Color.FromArgb(120, 120, 135));
+            _lblOverlay = MakeLabel("Gaming Overlay HUD (Ctrl+Shift+Alt+O)", pad, y, FontBody, Color.FromArgb(120, 120, 135));
             CenterV(_lblOverlay, y, switchH);
 
             _switchOverlay = new PredatorToggle
@@ -1556,6 +1600,44 @@ namespace PredatorControlApp
             };
             _contentPanel.Controls.Add(_switchOverlay);
             _switchOverlay.CheckedChanged += (s, e) => SetOverlayVisible(_switchOverlay.Checked);
+
+            // Overlay Display Mode (Light, Default, Full)
+            y += switchH + S(12);
+            MakeLabel("DISPLAY MODE:", pad, y, FontSectionHeader, Color.FromArgb(120, 120, 135));
+
+            y += S(20);
+            int modeBtnW = (contentW - gap * 2) / 3;
+            _btnOverlayLight = MakeButton("Light", pad, y, modeBtnW, btnH);
+            _btnOverlayDefault = MakeButton("Default", pad + modeBtnW + gap, y, modeBtnW, btnH);
+            _btnOverlayFull = MakeButton("Full", pad + (modeBtnW + gap) * 2, y, modeBtnW, btnH);
+
+            _btnOverlayLight.Click += (s, e) => { _overlayForm?.SetMode(OverlayMode.Light); UpdateOverlayUI(); };
+            _btnOverlayDefault.Click += (s, e) => { _overlayForm?.SetMode(OverlayMode.Default); UpdateOverlayUI(); };
+            _btnOverlayFull.Click += (s, e) => { _overlayForm?.SetMode(OverlayMode.Full); UpdateOverlayUI(); };
+
+            // Overlay Scale Slider (50% to 300%)
+            y += btnH + S(14);
+            int initScale = _overlayForm?.ScalePercent ?? 100;
+            _lblOverlayScaleHdr = MakeLabel($"OVERLAY SCALE: {initScale}%", pad, y, FontSectionHeader, Color.FromArgb(120, 120, 135));
+
+            y += S(20);
+            _sliderOverlayScale = new PredatorSlider
+            {
+                Location = new Point(pad, y),
+                Size = new Size(contentW, S(28)),
+                Minimum = 50,
+                Maximum = 300,
+                Value = initScale
+            };
+            _contentPanel.Controls.Add(_sliderOverlayScale);
+            _sliderOverlayScale.ValueChanged += (s, e) =>
+            {
+                _lblOverlayScaleHdr.Text = $"OVERLAY SCALE: {_sliderOverlayScale.Value}%";
+                _overlayForm?.SetScale(_sliderOverlayScale.Value);
+            };
+
+            y += S(34);
+            UpdateOverlayUI();
 
             // Windows & Menu Key Lock
             y += switchH + S(12);
@@ -1760,22 +1842,26 @@ namespace PredatorControlApp
             MakeLabel(label, x, y, FontSectionHeader, Color.FromArgb(120, 120, 135));
         }
 
-        private Label MakeLabel(string text, int x, int y, Font font, Color color)
+        private Label MakeLabelIn(Control parent, string text, int x, int y, Font font, Color color)
         {
             var lbl = new Label
             {
                 Text = text, Location = new Point(x, y), AutoSize = true, Font = font, ForeColor = color, BackColor = Color.Transparent
             };
-            _contentPanel.Controls.Add(lbl);
+            parent.Controls.Add(lbl);
             return lbl;
         }
 
-        private PredatorButton MakeButton(string text, int x, int y, int width, int height)
+        private Label MakeLabel(string text, int x, int y, Font font, Color color) => MakeLabelIn(_contentPanel, text, x, y, font, color);
+
+        private PredatorButton MakeButtonIn(Control parent, string text, int x, int y, int width, int height)
         {
             var btn = new PredatorButton { Text = text, Location = new Point(x, y), Size = new Size(width, height) };
-            _contentPanel.Controls.Add(btn);
+            parent.Controls.Add(btn);
             return btn;
         }
+
+        private PredatorButton MakeButton(string text, int x, int y, int width, int height) => MakeButtonIn(_contentPanel, text, x, y, width, height);
 
         private void AddSeparator(int y)
         {
@@ -1877,6 +1963,13 @@ namespace PredatorControlApp
                 // System & Hardware Controls
                 if (_switchWinKeyLock != null) _switchWinKeyLock.Left = ClientSize.Width - pad - S(48);
 
+                // Gaming Overlay controls
+                if (_switchOverlay != null) _switchOverlay.Left = ClientSize.Width - pad - S(48);
+                int overlayModeBtnW = (contentW - 2 * gap) / 3;
+                if (_btnOverlayLight != null) { _btnOverlayLight.Left = pad; _btnOverlayLight.Width = overlayModeBtnW; }
+                if (_btnOverlayDefault != null) { _btnOverlayDefault.Left = pad + overlayModeBtnW + gap; _btnOverlayDefault.Width = overlayModeBtnW; }
+                if (_btnOverlayFull != null) { _btnOverlayFull.Left = pad + (overlayModeBtnW + gap) * 2; _btnOverlayFull.Width = overlayModeBtnW; }
+                if (_sliderOverlayScale != null) _sliderOverlayScale.Width = contentW;
 
                 // Keyboard RGB controls
                 if (_rgbDropDown != null) _rgbDropDown.Width = contentW;

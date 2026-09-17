@@ -7,6 +7,13 @@ using Microsoft.Win32;
 
 namespace PredatorControlApp
 {
+    public enum OverlayMode
+    {
+        Light = 0,    // Light: FPS + GPU (temp, power) + CPU (temp, power)
+        Default = 1,  // Default: Light + Fan RPMs + 60s Sparkline Graph + GPU/CPU Power Column
+        Full = 2      // Full: Default + GPU/CPU Load % with bars + VRAM/RAM with bars
+    }
+
     [SupportedOSPlatform("windows")]
     public sealed class GameOverlayForm : Form
     {
@@ -21,6 +28,7 @@ namespace PredatorControlApp
 
         private const int VK_CONTROL = 0x11;
         private const int VK_SHIFT = 0x10;
+        private const int VK_MENU = 0x12; // Alt key
 
         private const int WM_NCLBUTTONDOWN = 0xA1;
         private const int HT_CAPTION = 0x2;
@@ -67,6 +75,11 @@ namespace PredatorControlApp
         private float _dpiScale = 1.0f;
         private float _fontDpiScale = 0f;
 
+        // Current display mode and scale
+        public OverlayMode Mode { get; private set; } = OverlayMode.Default;
+        public int ScalePercent { get; private set; } = 100;
+        public event Action<OverlayMode, int>? OverlayStateChanged;
+
         // Telemetry State
         private int? _fps;
         private int? _cpuTemp;
@@ -76,8 +89,14 @@ namespace PredatorControlApp
         private int? _cpuUsage;
         private int? _gpuUsage;
         private float? _gpuPowerW;
+        private float? _cpuPowerW;
+        private float? _vramUsedGb;
+        private float? _vramTotalGb;
+        private float? _ramUsedGb;
+        private float? _ramTotalGb;
         private float? _batteryPercent;
         private bool _isCharging;
+        private bool _isPluggedIn;
 
         // 60-second rolling history for sparkline chart
         private const int HistoryLength = 60;
@@ -86,18 +105,31 @@ namespace PredatorControlApp
         private int _historyHead = 0;
         private int _historyCount = 0;
 
-        // Visual Colors (matching G-Helper reference screenshot)
-        private static readonly Color GpuGreen = Color.FromArgb(255, 0, 255, 128); // Vibrant Neon Green
-        private static readonly Color CpuTeal = Color.FromArgb(255, 0, 229, 255);  // Neon Cyan / Teal
-        private static readonly Color DimText = Color.FromArgb(200, 160, 175, 195);
-        private static readonly Color BorderColor = Color.FromArgb(70, 0, 229, 255);
-        private static readonly Color ChartBg = Color.FromArgb(220, 8, 12, 18);
-        private static readonly Color OverlayBg = Color.FromArgb(12, 16, 24); // Opaque Form.BackColor (Opacity handles DWM translucency)
+        // Visual Colors (matching G-Helper reference screenshots)
+        private static readonly Color GpuGreen = Color.FromArgb(255, 0, 229, 117);  // Neon Mint/Green (#00E575)
+        private static readonly Color CpuTeal = Color.FromArgb(255, 0, 180, 216);   // Sky Cyan/Blue (#00B4D8 / #38B6FF)
+        private static readonly Color DimGpu = Color.FromArgb(170, 0, 190, 95);
+        private static readonly Color DimCpu = Color.FromArgb(170, 0, 150, 185);
+        private static readonly Color DimText = Color.FromArgb(160, 160, 175, 190);
+        private static readonly Color BorderColor = Color.FromArgb(50, 255, 255, 255);
+        private static readonly Color ActiveBorderColor = Color.FromArgb(255, 255, 184, 0); // Amber feedback while interactive
+        private static readonly Color ChartBg = Color.FromArgb(220, 6, 8, 12);
+        private static readonly Color OverlayBg = Color.FromArgb(10, 12, 16);
 
         private Font? _fontFps;
         private Font? _fontMain;
         private Font? _fontSmall;
         private Font? _fontLabel;
+        private Font? _fontSuperscript;
+        private Font? _fontToast;
+
+        // Gesture state
+        private Point _mouseDownPos;
+        private DateTime _mouseDownTime;
+
+        // Transient Toast
+        private string? _toastText;
+        private DateTime _toastExpiry;
 
         // Desktop shell executables where FPS monitoring is paused
         private static readonly HashSet<string> ExcludedProcesses = new(StringComparer.OrdinalIgnoreCase)
@@ -115,7 +147,7 @@ namespace PredatorControlApp
             StartPosition = FormStartPosition.Manual;
             DoubleBuffered = true;
             BackColor = OverlayBg;
-            Opacity = 0.94; // Translucent dark glass look via native Windows DWM alpha
+            Opacity = 0.88; // Translucent dark glass look matching G-Helper
 
             SetStyle(ControlStyles.AllPaintingInWmPaint |
                      ControlStyles.UserPaint |
@@ -124,7 +156,6 @@ namespace PredatorControlApp
 
             _fpsMonitor = new EtwFpsMonitor();
 
-            // Start ETW session in background thread
             Task.Run(() =>
             {
                 try
@@ -137,14 +168,13 @@ namespace PredatorControlApp
                 }
             });
 
-            // Fast 250ms render tick for silky-smooth FPS and metric updates
             _renderTimer.Interval = 250;
             _renderTimer.Tick += (s, e) => OnRenderTick();
 
-            // Key state timer (checks Ctrl + Shift every 100ms to toggle click-through)
-            _keyStateTimer.Interval = 100;
+            _keyStateTimer.Interval = 80;
             _keyStateTimer.Tick += (s, e) => CheckDragModifierKeys();
 
+            LoadPersistedSettings();
             LoadPersistedPosition();
         }
 
@@ -166,6 +196,7 @@ namespace PredatorControlApp
         {
             base.OnHandleCreated(e);
             SetClickThrough(true);
+            UpdateDpiAndLayout();
         }
 
         public void ToggleOverlay()
@@ -177,13 +208,9 @@ namespace PredatorControlApp
             }
 
             if (Visible)
-            {
                 HideOverlay();
-            }
             else
-            {
                 ShowOverlay();
-            }
         }
 
         public void ShowOverlay()
@@ -219,6 +246,39 @@ namespace PredatorControlApp
             Hide();
         }
 
+        public void CycleMode()
+        {
+            var nextMode = (OverlayMode)(((int)Mode + 1) % 3);
+            SetMode(nextMode);
+        }
+
+        public void SetMode(OverlayMode mode)
+        {
+            Mode = mode;
+            SaveSettings();
+            UpdateDpiAndLayout();
+            ShowToast(mode.ToString().ToUpperInvariant());
+            OverlayStateChanged?.Invoke(Mode, ScalePercent);
+            Invalidate();
+        }
+
+        public void SetScale(int scalePercent)
+        {
+            ScalePercent = Math.Clamp(scalePercent, 50, 300);
+            SaveSettings();
+            UpdateDpiAndLayout();
+            ShowToast($"{ScalePercent}%");
+            OverlayStateChanged?.Invoke(Mode, ScalePercent);
+            Invalidate();
+        }
+
+        public void ShowToast(string text)
+        {
+            _toastText = text;
+            _toastExpiry = DateTime.UtcNow.AddMilliseconds(1200);
+            Invalidate();
+        }
+
         public void UpdateSnapshot(TelemetrySnapshot snapshot)
         {
             if (!Visible) return;
@@ -230,8 +290,14 @@ namespace PredatorControlApp
             _cpuUsage = snapshot.CpuUsage;
             _gpuUsage = snapshot.GpuUsage;
             _gpuPowerW = snapshot.GpuPowerW;
+            _cpuPowerW = snapshot.CpuPowerW;
+            _vramUsedGb = snapshot.VramUsedGb;
+            _vramTotalGb = snapshot.VramTotalGb;
+            _ramUsedGb = snapshot.RamUsedGb;
+            _ramTotalGb = snapshot.RamTotalGb;
             _batteryPercent = snapshot.BatteryPercent;
             _isCharging = snapshot.IsCharging;
+            _isPluggedIn = snapshot.PowerLine == PowerLineStatus.Online;
 
             // Push to 60-second rolling history
             if (_cpuTemp.HasValue && _cpuTemp.Value > 0)
@@ -252,7 +318,6 @@ namespace PredatorControlApp
 
         private void OnRenderTick()
         {
-            // 1. Update foreground window tracking
             try
             {
                 IntPtr fgWnd = GetForegroundWindow();
@@ -265,13 +330,9 @@ namespace PredatorControlApp
                         {
                             using var proc = Process.GetProcessById((int)procId);
                             if (!ExcludedProcesses.Contains(proc.ProcessName))
-                            {
                                 _fpsMonitor.TargetPid = (int)procId;
-                            }
                             else
-                            {
                                 _fpsMonitor.TargetPid = 0;
-                            }
                         }
                         catch
                         {
@@ -282,26 +343,27 @@ namespace PredatorControlApp
             }
             catch { }
 
-            // 2. Sample FPS from ETW provider
             double sampled = _fpsMonitor.SampleFps();
             if (sampled > 0.5)
-            {
                 _fps = (int)Math.Round(sampled);
-            }
             else
-            {
                 _fps = null;
-            }
 
             Invalidate();
         }
 
         private void CheckDragModifierKeys()
         {
-            // If user holds Ctrl + Shift, make the overlay interactive so they can click and drag it
-            bool ctrlPressed = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
-            bool shiftPressed = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
-            bool shouldAllowClick = ctrlPressed && shiftPressed;
+            // Support Ctrl + Shift + Alt (from screenshot 4) and Ctrl + Shift
+            bool ctrl = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+            bool shift = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+            bool alt = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
+
+            bool isModPressed = (ctrl && shift && alt) || (ctrl && shift);
+            Point mousePos = Cursor.Position;
+            bool isHover = Bounds.Contains(mousePos);
+
+            bool shouldAllowClick = isModPressed && isHover;
 
             if (shouldAllowClick && _isClickThrough)
             {
@@ -323,41 +385,95 @@ namespace PredatorControlApp
             _isClickThrough = clickThrough;
             int style = GetWindowLong(Handle, GWL_EXSTYLE);
             if (clickThrough)
-            {
                 SetWindowLong(Handle, GWL_EXSTYLE, style | WS_EX_TRANSPARENT);
-            }
             else
-            {
                 SetWindowLong(Handle, GWL_EXSTYLE, style & ~WS_EX_TRANSPARENT);
-            }
         }
 
         protected override void OnMouseDown(MouseEventArgs e)
         {
             base.OnMouseDown(e);
-            if (e.Button == MouseButtons.Left && !_isClickThrough)
+
+            if (!_isClickThrough)
             {
-                ReleaseCapture();
-                SendMessage(Handle, WM_NCLBUTTONDOWN, HT_CAPTION, 0);
-                SavePosition();
-                CheckDragModifierKeys();
+                if (e.Button == MouseButtons.Middle)
+                {
+                    // Middle click: reset scale to 100%
+                    SetScale(100);
+                    return;
+                }
+
+                if (e.Button == MouseButtons.Left)
+                {
+                    _mouseDownPos = Cursor.Position;
+                    _mouseDownTime = DateTime.UtcNow;
+
+                    ReleaseCapture();
+                    SendMessage(Handle, WM_NCLBUTTONDOWN, HT_CAPTION, 0);
+
+                    // Discriminate click vs drag
+                    Point curPos = Cursor.Position;
+                    double dist = Math.Sqrt(Math.Pow(curPos.X - _mouseDownPos.X, 2) + Math.Pow(curPos.Y - _mouseDownPos.Y, 2));
+                    double duration = (DateTime.UtcNow - _mouseDownTime).TotalMilliseconds;
+
+                    if (dist < 6 && duration < 450)
+                    {
+                        // Click: cycle display mode (Light, Default, Full)
+                        CycleMode();
+                    }
+                    else
+                    {
+                        // Drag: save coordinates
+                        SavePosition();
+                    }
+
+                    CheckDragModifierKeys();
+                }
             }
+        }
+
+        protected override void OnMouseWheel(MouseEventArgs e)
+        {
+            base.OnMouseWheel(e);
+            if (!_isClickThrough)
+            {
+                // Scroll: scale from 50% to 300% in 10% steps
+                int step = e.Delta > 0 ? 10 : -10;
+                SetScale(ScalePercent + step);
+            }
+        }
+
+        private float GetTotalScale()
+        {
+            return _dpiScale * (ScalePercent / 100.0f);
         }
 
         private void UpdateDpiAndLayout()
         {
+            if (!IsHandleCreated) return;
+
             using (var g = CreateGraphics())
             {
                 _dpiScale = g.DpiX / 96.0f;
                 if (_dpiScale < 1.0f) _dpiScale = 1.0f;
             }
 
-            // Dimensions calibrated to G-Helper layout
-            int w = (int)(430 * _dpiScale);
-            int h = (int)(52 * _dpiScale);
+            float scale = GetTotalScale();
+
+            // Calibrated widths per mode matching G-Helper
+            int baseW = Mode switch
+            {
+                OverlayMode.Light => 155,
+                OverlayMode.Default => 315,
+                OverlayMode.Full => 435,
+                _ => 315
+            };
+
+            int w = (int)(baseW * scale);
+            int h = (int)(44 * scale);
             Size = new Size(w, h);
 
-            int radius = (int)(8 * _dpiScale);
+            int radius = (int)(7 * scale);
             IntPtr rgn = CreateRoundRectRgn(0, 0, w + 1, h + 1, radius, radius);
             SetWindowRgn(Handle, rgn, true);
 
@@ -366,19 +482,53 @@ namespace PredatorControlApp
 
         private void EnsureFonts()
         {
-            if (_fontDpiScale != _dpiScale || _fontFps == null || _fontMain == null || _fontSmall == null || _fontLabel == null)
+            float scale = GetTotalScale();
+            if (Math.Abs(_fontDpiScale - scale) > 0.01f || _fontFps == null || _fontMain == null || _fontSmall == null || _fontLabel == null || _fontSuperscript == null || _fontToast == null)
             {
                 _fontFps?.Dispose();
                 _fontMain?.Dispose();
                 _fontSmall?.Dispose();
                 _fontLabel?.Dispose();
+                _fontSuperscript?.Dispose();
+                _fontToast?.Dispose();
 
-                _fontFps = new Font("Segoe UI", 20f * _dpiScale, FontStyle.Bold);
-                _fontMain = new Font("Segoe UI", 8.5f * _dpiScale, FontStyle.Bold);
-                _fontSmall = new Font("Segoe UI", 7.0f * _dpiScale, FontStyle.Regular);
-                _fontLabel = new Font("Segoe UI", 7.0f * _dpiScale, FontStyle.Bold);
-                _fontDpiScale = _dpiScale;
+                _fontFps = new Font("Segoe UI", 17f * scale, FontStyle.Bold);
+                _fontMain = new Font("Segoe UI", 8.25f * scale, FontStyle.Bold);
+                _fontSmall = new Font("Segoe UI", 7.0f * scale, FontStyle.Regular);
+                _fontLabel = new Font("Segoe UI", 7.5f * scale, FontStyle.Bold);
+                _fontSuperscript = new Font("Segoe UI", 5.5f * scale, FontStyle.Bold);
+                _fontToast = new Font("Segoe UI", 7.5f * scale, FontStyle.Bold);
+
+                _fontDpiScale = scale;
             }
+        }
+
+        private void LoadPersistedSettings()
+        {
+            try
+            {
+                using var key = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\PredatorControl");
+                if (key != null)
+                {
+                    int modeVal = (int)(key.GetValue("OverlayMode", 1) ?? 1);
+                    Mode = (OverlayMode)Math.Clamp(modeVal, 0, 2);
+
+                    int scaleVal = (int)(key.GetValue("OverlayScale", 100) ?? 100);
+                    ScalePercent = Math.Clamp(scaleVal, 50, 300);
+                }
+            }
+            catch { }
+        }
+
+        private void SaveSettings()
+        {
+            try
+            {
+                using var key = Registry.CurrentUser.CreateSubKey(@"SOFTWARE\PredatorControl");
+                key?.SetValue("OverlayMode", (int)Mode, RegistryValueKind.DWord);
+                key?.SetValue("OverlayScale", ScalePercent, RegistryValueKind.DWord);
+            }
+            catch { }
         }
 
         private void LoadPersistedPosition()
@@ -403,9 +553,8 @@ namespace PredatorControlApp
             }
             catch { }
 
-            // Default: top-left corner of primary screen with padding
             var primary = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1920, 1080);
-            Location = new Point(primary.Left + 28, primary.Top + 28);
+            Location = new Point(primary.Left + 24, primary.Top + 24);
         }
 
         private void SavePosition()
@@ -428,154 +577,232 @@ namespace PredatorControlApp
 
             EnsureFonts();
 
+            float scale = GetTotalScale();
             int w = Width;
             int h = Height;
 
-            // 1. Dark glass background
+            // 1. Dark translucent glass background
             using (var bgBrush = new SolidBrush(OverlayBg))
             {
                 g.FillRectangle(bgBrush, 0, 0, w, h);
             }
 
-            // 2. Rounded border (highlight in orange while user drags)
-            Color border = !_isClickThrough ? Color.FromArgb(255, 200, 50) : BorderColor;
-            using (var borderPen = new Pen(border, 1.2f * _dpiScale))
+            // 2. Subtle border (glowing amber while interactive/hovered)
+            Color border = !_isClickThrough ? ActiveBorderColor : BorderColor;
+            using (var borderPen = new Pen(border, 1.2f * scale))
             {
-                int r = (int)(8 * _dpiScale);
+                int r = (int)(7 * scale);
                 using var path = GetRoundedPath(new Rectangle(0, 0, w - 1, h - 1), r);
                 g.DrawPath(borderPen, path);
             }
 
-            float padX = 10 * _dpiScale;
-            float curX = padX;
+            float curX = 8 * scale;
+            float row1Y = 5f * scale;
+            float row2Y = 22.5f * scale;
 
-            // ── COLUMN 1: BIG BOLD FPS COUNTER ──────────────────────────────────────────
+            // ── COLUMN 1: BIG BOLD FPS COUNTER (Green #00E575) ──────────────────────────
             string fpsText = _fps.HasValue ? _fps.Value.ToString() : "--";
             using (var fpsBrush = new SolidBrush(GpuGreen))
             {
                 var fpsSize = g.MeasureString(fpsText, _fontFps!);
                 float fpsY = (h - fpsSize.Height) / 2f;
                 g.DrawString(fpsText, _fontFps!, fpsBrush, curX, fpsY);
-                curX += Math.Max(52 * _dpiScale, fpsSize.Width + 8 * _dpiScale);
+                curX += Math.Max(42 * scale, fpsSize.Width + 6 * scale);
             }
 
-            // ── COLUMN 2: GPU & CPU TEMP + FAN RPM ───────────────────────────────────────
-            float row1Y = 7 * _dpiScale;
-            float row2Y = 27 * _dpiScale;
-
-            // GPU Row
+            // ── COLUMN 2: HARDWARE STATS (GPU & CPU) ────────────────────────────────────
             using (var gpuBrush = new SolidBrush(GpuGreen))
-            using (var dimBrush = new SolidBrush(DimText))
+            using (var cpuBrush = new SolidBrush(CpuTeal))
+            using (var dimGpuBrush = new SolidBrush(DimGpu))
+            using (var dimCpuBrush = new SolidBrush(DimCpu))
             {
-                string gpuHeader = "GPU: ";
                 string gpuTemp = _gpuTemp.HasValue && _gpuTemp.Value > 0 ? $"{_gpuTemp.Value}°" : "--°";
-                string gpuRpm = _gpuFanRpm.HasValue && _gpuFanRpm.Value > 0 ? $" {_gpuFanRpm.Value}" : " --";
-
-                g.DrawString(gpuHeader, _fontLabel!, gpuBrush, curX, row1Y + 1 * _dpiScale);
-                float headerW = g.MeasureString(gpuHeader, _fontLabel!).Width;
-
-                g.DrawString(gpuTemp, _fontMain!, gpuBrush, curX + headerW, row1Y);
-                float tempW = g.MeasureString(gpuTemp, _fontMain!).Width;
-
-                g.DrawString(gpuRpm, _fontMain!, gpuBrush, curX + headerW + tempW, row1Y);
-                float rpmW = g.MeasureString(gpuRpm, _fontMain!).Width;
-
-                g.DrawString("RPM", _fontSmall!, dimBrush, curX + headerW + tempW + rpmW, row1Y + 2 * _dpiScale);
-            }
-
-            // CPU Row
-            using (var cpuBrush = new SolidBrush(CpuTeal))
-            using (var dimBrush = new SolidBrush(DimText))
-            {
-                string cpuHeader = "CPU: ";
                 string cpuTemp = _cpuTemp.HasValue && _cpuTemp.Value > 0 ? $"{_cpuTemp.Value}°" : "--°";
-                string cpuRpm = _cpuFanRpm.HasValue && _cpuFanRpm.Value > 0 ? $" {_cpuFanRpm.Value}" : " --";
 
-                g.DrawString(cpuHeader, _fontLabel!, cpuBrush, curX, row2Y + 1 * _dpiScale);
-                float headerW = g.MeasureString(cpuHeader, _fontLabel!).Width;
-
-                g.DrawString(cpuTemp, _fontMain!, cpuBrush, curX + headerW, row2Y);
-                float tempW = g.MeasureString(cpuTemp, _fontMain!).Width;
-
-                g.DrawString(cpuRpm, _fontMain!, cpuBrush, curX + headerW + tempW, row2Y);
-                float rpmW = g.MeasureString(cpuRpm, _fontMain!).Width;
-
-                g.DrawString("RPM", _fontSmall!, dimBrush, curX + headerW + tempW + rpmW, row2Y + 2 * _dpiScale);
-            }
-
-            curX += 118 * _dpiScale;
-
-            // ── COLUMN 3: ROLLING 60-SECOND SPARKLINE GRAPH ──────────────────────────────
-            float chartW = 90 * _dpiScale;
-            float chartH = 34 * _dpiScale;
-            float chartX = curX;
-            float chartY = (h - chartH) / 2f;
-
-            using (var chartBgBrush = new SolidBrush(ChartBg))
-            using (var chartBorderPen = new Pen(Color.FromArgb(40, 255, 255, 255), 1f))
-            {
-                g.FillRectangle(chartBgBrush, chartX, chartY, chartW, chartH);
-                g.DrawRectangle(chartBorderPen, chartX, chartY, chartW, chartH);
-            }
-
-            DrawSparklines(g, chartX, chartY, chartW, chartH);
-            curX += chartW + 10 * _dpiScale;
-
-            // ── COLUMN 4: POWER DRAW (W) / BATTERY ──────────────────────────────────────
-            using (var gpuBrush = new SolidBrush(GpuGreen))
-            using (var cpuBrush = new SolidBrush(CpuTeal))
-            {
-                string gpuPower = _gpuPowerW.HasValue && _gpuPowerW.Value > 0 ? $"{_gpuPowerW.Value:F1}W" : "dGPU";
-                g.DrawString(gpuPower, _fontMain!, gpuBrush, curX, row1Y);
-
-                string secondLine;
-                if (_batteryPercent.HasValue && _batteryPercent.Value < 100)
+                if (Mode == OverlayMode.Light)
                 {
-                    secondLine = _isCharging ? $"{_batteryPercent.Value:F0}%⚡" : $"{_batteryPercent.Value:F0}%";
+                    // Light Mode (Screenshot 2):
+                    // GPU: 51°  7.9W
+                    // CPU: 55°  10.8W
+                    string gpuPower = _gpuPowerW.HasValue ? $"{_gpuPowerW.Value:F1}W" : (_isPluggedIn ? "--W" : "BAT");
+                    string cpuPower = _cpuPowerW.HasValue && _cpuPowerW.Value > 0 ? $"{_cpuPowerW.Value:F1}W" : (_batteryPercent.HasValue ? $"{_batteryPercent.Value:F0}%" : "--W");
+
+                    g.DrawString("GPU: ", _fontLabel!, gpuBrush, curX, row1Y + 1 * scale);
+                    float lblW = g.MeasureString("GPU: ", _fontLabel!).Width;
+
+                    g.DrawString(gpuTemp, _fontMain!, gpuBrush, curX + lblW, row1Y);
+                    float tempW = g.MeasureString(gpuTemp, _fontMain!).Width;
+
+                    g.DrawString($"  {gpuPower}", _fontMain!, gpuBrush, curX + lblW + tempW, row1Y);
+
+                    // CPU Row
+                    g.DrawString("CPU: ", _fontLabel!, cpuBrush, curX, row2Y + 1 * scale);
+                    g.DrawString(cpuTemp, _fontMain!, cpuBrush, curX + lblW, row2Y);
+                    g.DrawString($"  {cpuPower}", _fontMain!, cpuBrush, curX + lblW + tempW, row2Y);
+
+                    curX += lblW + tempW + 55 * scale;
                 }
                 else
                 {
-                    secondLine = "AC";
+                    // Default and Full Modes (Screenshots 1 & 3):
+                    // GPU: 50° 2900 RPM
+                    // CPU: 56° 3500 RPM
+                    string gpuRpm = _gpuFanRpm.HasValue && _gpuFanRpm.Value > 0 ? $" {_gpuFanRpm.Value}" : " --";
+                    string cpuRpm = _cpuFanRpm.HasValue && _cpuFanRpm.Value > 0 ? $" {_cpuFanRpm.Value}" : " --";
+
+                    // GPU Row
+                    g.DrawString("GPU: ", _fontLabel!, gpuBrush, curX, row1Y + 1 * scale);
+                    float lblW = g.MeasureString("GPU: ", _fontLabel!).Width;
+
+                    g.DrawString(gpuTemp, _fontMain!, gpuBrush, curX + lblW, row1Y);
+                    float tempW = g.MeasureString(gpuTemp, _fontMain!).Width;
+
+                    g.DrawString(gpuRpm, _fontMain!, gpuBrush, curX + lblW + tempW, row1Y);
+                    float rpmW = g.MeasureString(gpuRpm, _fontMain!).Width;
+
+                    g.DrawString("RPM", _fontSuperscript!, dimGpuBrush, curX + lblW + tempW + rpmW, row1Y + 1.2f * scale);
+
+                    // CPU Row
+                    g.DrawString("CPU: ", _fontLabel!, cpuBrush, curX, row2Y + 1 * scale);
+                    g.DrawString(cpuTemp, _fontMain!, cpuBrush, curX + lblW, row2Y);
+                    g.DrawString(cpuRpm, _fontMain!, cpuBrush, curX + lblW + tempW, row2Y);
+                    g.DrawString("RPM", _fontSuperscript!, dimCpuBrush, curX + lblW + tempW + rpmW, row2Y + 1.2f * scale);
+
+                    curX += lblW + tempW + rpmW + 28 * scale;
                 }
-                g.DrawString(secondLine, _fontMain!, cpuBrush, curX, row2Y);
             }
 
-            curX += 50 * _dpiScale;
+            float chartX = 0f;
+            float chartW = 0f;
+            bool hasChart = false;
 
-            // ── COLUMN 5: UTILIZATION % & MINI BARS ─────────────────────────────────────
-            float barW = 4 * _dpiScale;
-            float barH = 14 * _dpiScale;
-
-            // GPU Usage Bar
-            int gpuVal = Math.Clamp(_gpuUsage ?? 0, 0, 100);
-            using (var gpuBrush = new SolidBrush(GpuGreen))
-            using (var barBgBrush = new SolidBrush(Color.FromArgb(40, 0, 255, 128)))
+            // ── COLUMN 3: ROLLING 60-SECOND SPARKLINE GRAPH (Default & Full only) ───────
+            if (Mode != OverlayMode.Light)
             {
-                float barX = curX;
-                g.FillRectangle(barBgBrush, barX, row1Y, barW, barH);
-                float filledH = barH * (gpuVal / 100f);
-                g.FillRectangle(gpuBrush, barX, row1Y + (barH - filledH), barW, filledH);
+                hasChart = true;
+                chartW = 84 * scale;
+                float chartH = 30 * scale;
+                chartX = curX;
+                float chartY = (h - chartH) / 2f;
 
+                using (var chartBgBrush = new SolidBrush(ChartBg))
+                using (var chartBorderPen = new Pen(Color.FromArgb(30, 255, 255, 255), 1f))
+                {
+                    g.FillRectangle(chartBgBrush, chartX, chartY, chartW, chartH);
+                    g.DrawRectangle(chartBorderPen, chartX, chartY, chartW, chartH);
+                }
+
+                DrawSparklines(g, chartX, chartY, chartW, chartH, scale);
+                curX += chartW + 10 * scale;
+
+                // ── COLUMN 4: POWER DRAW (W) / BATTERY ──────────────────────────────────
+                using (var gpuBrush = new SolidBrush(GpuGreen))
+                using (var cpuBrush = new SolidBrush(CpuTeal))
+                {
+                    string gpuPower = _gpuPowerW.HasValue ? $"{_gpuPowerW.Value:F1}W" : (_isPluggedIn ? "--W" : "BAT");
+                    string cpuPower = _cpuPowerW.HasValue && _cpuPowerW.Value > 0 ? $"{_cpuPowerW.Value:F1}W" : (_batteryPercent.HasValue ? $"{_batteryPercent.Value:F0}%" : "--W");
+
+                    g.DrawString(gpuPower, _fontMain!, gpuBrush, curX, row1Y);
+                    g.DrawString(cpuPower, _fontMain!, cpuBrush, curX, row2Y);
+
+                    float powerW = Math.Max(g.MeasureString(gpuPower, _fontMain!).Width, g.MeasureString(cpuPower, _fontMain!).Width);
+                    curX += powerW + 10 * scale;
+                }
+            }
+
+            // ── COLUMNS 5 & 6: LOAD % & VRAM/RAM WITH MINI BARS (Full Mode only) ─────────
+            if (Mode == OverlayMode.Full)
+            {
+                float barW = 3.5f * scale;
+                float barH = 12f * scale;
+
+                // Column 5: GPU & CPU Load % + vertical segmented bar
+                int gpuVal = Math.Clamp(_gpuUsage ?? 0, 0, 100);
+                int cpuVal = Math.Clamp(_cpuUsage ?? 0, 0, 100);
                 string gpuPct = $"{gpuVal}%";
-                g.DrawString(gpuPct, _fontSmall!, gpuBrush, barX + barW + 3 * _dpiScale, row1Y);
+                string cpuPct = $"{cpuVal}%";
+
+                using (var gpuBrush = new SolidBrush(GpuGreen))
+                using (var cpuBrush = new SolidBrush(CpuTeal))
+                {
+                    g.DrawString(gpuPct, _fontMain!, gpuBrush, curX, row1Y);
+                    g.DrawString(cpuPct, _fontMain!, cpuBrush, curX, row2Y);
+
+                    float pctW = Math.Max(g.MeasureString(gpuPct, _fontMain!).Width, g.MeasureString(cpuPct, _fontMain!).Width);
+                    float barX = curX + pctW + 3 * scale;
+
+                    DrawMiniBar(g, barX, row1Y + 1 * scale, barW, barH, gpuVal, GpuGreen, DimGpu, scale);
+                    DrawMiniBar(g, barX, row2Y + 1 * scale, barW, barH, cpuVal, CpuTeal, DimCpu, scale);
+
+                    curX = barX + barW + 10 * scale;
+                }
+
+                // Column 6: VRAM (GPU) & RAM (CPU) GB + vertical segmented bar
+                float vramGb = _vramUsedGb ?? 0f;
+                float vramMax = _vramTotalGb ?? 8.0f;
+                int vramPct = (int)Math.Clamp((vramGb / Math.Max(1f, vramMax)) * 100f, 0, 100);
+
+                float ramGb = _ramUsedGb ?? 0f;
+                float ramMax = _ramTotalGb ?? 16.0f;
+                int ramPct = (int)Math.Clamp((ramGb / Math.Max(1f, ramMax)) * 100f, 0, 100);
+
+                string vramText = $"{vramGb:F1}GB";
+                string ramText = $"{ramGb:F1}GB";
+
+                using (var gpuBrush = new SolidBrush(GpuGreen))
+                using (var cpuBrush = new SolidBrush(CpuTeal))
+                {
+                    g.DrawString(vramText, _fontMain!, gpuBrush, curX, row1Y);
+                    g.DrawString(ramText, _fontMain!, cpuBrush, curX, row2Y);
+
+                    float memW = Math.Max(g.MeasureString(vramText, _fontMain!).Width, g.MeasureString(ramText, _fontMain!).Width);
+                    float barX = curX + memW + 3 * scale;
+
+                    DrawMiniBar(g, barX, row1Y + 1 * scale, barW, barH, vramPct, GpuGreen, DimGpu, scale);
+                    DrawMiniBar(g, barX, row2Y + 1 * scale, barW, barH, ramPct, CpuTeal, DimCpu, scale);
+                }
             }
 
-            // CPU Usage Bar
-            int cpuVal = Math.Clamp(_cpuUsage ?? 0, 0, 100);
-            using (var cpuBrush = new SolidBrush(CpuTeal))
-            using (var barBgBrush = new SolidBrush(Color.FromArgb(40, 0, 229, 255)))
+            // ── TRANSIENT TOAST BADGE (Floating feedback on mode cycle or scale) ─────────
+            if (!string.IsNullOrEmpty(_toastText) && DateTime.UtcNow < _toastExpiry)
             {
-                float barX = curX;
-                g.FillRectangle(barBgBrush, barX, row2Y, barW, barH);
-                float filledH = barH * (cpuVal / 100f);
-                g.FillRectangle(cpuBrush, barX, row2Y + (barH - filledH), barW, filledH);
+                var toastSize = g.MeasureString(_toastText, _fontToast!);
+                float tw = toastSize.Width + 10 * scale;
+                float th = toastSize.Height + 3 * scale;
+                float tx = (hasChart && chartW >= tw) ? (chartX + (chartW - tw) / 2f) : ((w - tw) / 2f);
+                float ty = (h - th) / 2f;
 
-                string cpuPct = $"{cpuVal}%";
-                g.DrawString(cpuPct, _fontSmall!, cpuBrush, barX + barW + 3 * _dpiScale, row2Y);
+                using var tBg = new SolidBrush(Color.FromArgb(240, 12, 16, 22));
+                using var tBorder = new Pen(ActiveBorderColor, 1.0f * scale);
+                using var tTextBrush = new SolidBrush(Color.White);
+                using var tPath = GetRoundedPath(new Rectangle((int)tx, (int)ty, (int)tw, (int)th), (int)(3 * scale));
+
+                g.FillPath(tBg, tPath);
+                g.DrawPath(tBorder, tPath);
+                g.DrawString(_toastText, _fontToast!, tTextBrush, tx + 5 * scale, ty + 1.5f * scale);
             }
         }
 
-        private void DrawSparklines(Graphics g, float x, float y, float w, float h)
+        private static void DrawMiniBar(Graphics g, float x, float y, float w, float h, int percent, Color activeColor, Color inactiveBg, float scale)
+        {
+            const int segmentCount = 4;
+            float gap = 1.0f * scale;
+            float totalGap = (segmentCount - 1) * gap;
+            float segH = Math.Max(1.0f, (h - totalGap) / segmentCount);
+            int litCount = (int)Math.Round((percent / 100f) * segmentCount);
+
+            using var activeBrush = new SolidBrush(activeColor);
+            using var dimBrush = new SolidBrush(Color.FromArgb(50, inactiveBg.R, inactiveBg.G, inactiveBg.B));
+
+            for (int i = 0; i < segmentCount; i++)
+            {
+                float segY = y + h - (i + 1) * segH - (i * gap);
+                bool isLit = i < litCount;
+                g.FillRectangle(isLit ? activeBrush : dimBrush, x, segY, w, segH);
+            }
+        }
+
+        private void DrawSparklines(Graphics g, float x, float y, float w, float h, float scale)
         {
             if (_historyCount < 2) return;
 
@@ -602,8 +829,34 @@ namespace PredatorControlApp
                 cpuPts.Add(new PointF(px, cy));
             }
 
-            using (var gpuPen = new Pen(GpuGreen, 1.4f * _dpiScale))
-            using (var cpuPen = new Pen(CpuTeal, 1.4f * _dpiScale))
+            // Subtle gradient area fill under lines
+            if (gpuPts.Count >= 2)
+            {
+                using var gpuAreaPath = new GraphicsPath();
+                gpuAreaPath.AddLine(x, y + h, gpuPts[0].X, gpuPts[0].Y);
+                for (int i = 1; i < gpuPts.Count; i++) gpuAreaPath.AddLine(gpuPts[i - 1], gpuPts[i]);
+                gpuAreaPath.AddLine(gpuPts[^1], new PointF(gpuPts[^1].X, y + h));
+                gpuAreaPath.CloseFigure();
+
+                using var gpuGrad = new LinearGradientBrush(new RectangleF(x, y, w, h), Color.FromArgb(40, 0, 229, 117), Color.FromArgb(0, 0, 229, 117), LinearGradientMode.Vertical);
+                g.FillPath(gpuGrad, gpuAreaPath);
+            }
+
+            if (cpuPts.Count >= 2)
+            {
+                using var cpuAreaPath = new GraphicsPath();
+                cpuAreaPath.AddLine(x, y + h, cpuPts[0].X, cpuPts[0].Y);
+                for (int i = 1; i < cpuPts.Count; i++) cpuAreaPath.AddLine(cpuPts[i - 1], cpuPts[i]);
+                cpuAreaPath.AddLine(cpuPts[^1], new PointF(cpuPts[^1].X, y + h));
+                cpuAreaPath.CloseFigure();
+
+                using var cpuGrad = new LinearGradientBrush(new RectangleF(x, y, w, h), Color.FromArgb(30, 0, 180, 216), Color.FromArgb(0, 0, 180, 216), LinearGradientMode.Vertical);
+                g.FillPath(cpuGrad, cpuAreaPath);
+            }
+
+            // Crisp line strokes
+            using (var gpuPen = new Pen(GpuGreen, 1.3f * scale))
+            using (var cpuPen = new Pen(CpuTeal, 1.3f * scale))
             {
                 if (gpuPts.Count >= 2) g.DrawLines(gpuPen, gpuPts.ToArray());
                 if (cpuPts.Count >= 2) g.DrawLines(cpuPen, cpuPts.ToArray());
@@ -633,6 +886,8 @@ namespace PredatorControlApp
                 _fontMain?.Dispose();
                 _fontSmall?.Dispose();
                 _fontLabel?.Dispose();
+                _fontSuperscript?.Dispose();
+                _fontToast?.Dispose();
             }
             base.Dispose(disposing);
         }

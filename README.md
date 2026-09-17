@@ -4,7 +4,7 @@
 
 # 🪼 Predator Control
 
-[![Version](https://img.shields.io/badge/version-1.1.6-00E5FF?style=for-the-badge&logo=github&logoColor=white)](https://github.com/YS47/PredatorControl/releases)
+[![Version](https://img.shields.io/badge/version-1.1.7-00E5FF?style=for-the-badge&logo=github&logoColor=white)](https://github.com/YS47/PredatorControl/releases)
 [![Jelli UI](https://img.shields.io/badge/Jelli%20UI-Coming%20Soon%20%E2%9C%A8-FF69B4?style=for-the-badge&logo=sparkles&logoColor=white)](#-jelli-ui--coming-soon)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-00B4CC?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/Hadisovic/PredatorControl)
 [![Framework](https://img.shields.io/badge/.NET-10.0%20Windows-512BD4?style=for-the-badge&logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/)
@@ -152,6 +152,28 @@ You can run `disable_acer_bloatware.bat` anytime to apply this optimization with
 - 🎮 **Game Sync Profiles**: Automatically binds performance, fans, and RGB to game `.exe` launches.
 
 ---
+
+## 🎮 Gaming Overlay HUD & Interactive Gestures (G-Helper Style)
+
+Predator Control includes an ultra-lightweight, 3-mode in-game telemetry HUD inspired by **G-Helper**, rendering live performance stats directly on your screen without any performance impact or anti-cheat triggers.
+
+### 🕹️ Display Modes
+- **Light Mode (`Light`):** Compact minimal HUD (`FPS | GPU Temp & Watts | CPU Temp & Watts`).
+- **Default Mode (`Default`):** Balanced monitor (`FPS | GPU & CPU Temp + Fan RPM | 60s Sparkline Graph | Power Draw`).
+- **Full Mode (`Full`):** Complete hardware dashboard (`Default + GPU/CPU Load % Bars + VRAM & System RAM Bars`).
+
+### ⌨️ Shortcuts & Gestures
+
+| Gesture / Shortcut | Action | Description |
+| :--- | :--- | :--- |
+| **`Ctrl + Shift + Alt + O`** (or `Ctrl + Shift + O`) | **Toggle Overlay** | Shows or hides the overlay anywhere in Windows or games. |
+| **`Ctrl + Shift + Alt + Click`** | **Cycle Display Mode** | Cycles: `Light` ➔ `Default` ➔ `Full` ➔ `Light`. |
+| **`Ctrl + Shift + Alt + Drag`** | **Move Overlay** | Repositions HUD on screen; coordinates persist across reboots. |
+| **`Ctrl + Shift + Alt + Mouse Wheel`** | **Scale HUD (50%–300%)** | Dynamically increases/decreases size in 10% steps. |
+| **`Ctrl + Shift + Alt + Middle Click`** | **Reset Scale (100%)** | Instantly resets HUD scaling back to standard 100%. |
+
+> [!TIP]
+> **Anti-Cheat Safe:** The overlay utilizes Windows ETW kernel tracing (`Microsoft-Windows-DxgKrnl` Event ID 184 / `DXGI` Event ID 42). It requires zero DLL injection and zero API hooks, making it completely safe in games with anti-cheats (Vanguard, EAC, BattlEye, Ricochet).
 
 ## 🏗️ Repository Structure
 

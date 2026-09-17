@@ -446,37 +446,21 @@ namespace PredatorControlApp
             if (zoneIndex >= 0 && zoneIndex < 4)
             {
                 _zoneColors[zoneIndex] = color;
-                _lastR = color.R;
-                _lastG = color.G;
-                _lastB = color.B;
                 _lastMode = mode;
+                _lastR = _zoneColors[0].R;
+                _lastG = _zoneColors[0].G;
+                _lastB = _zoneColors[0].B;
                 QueueLightingTask(() =>
                 {
                     if (mode == 0) // Static: update specific physical zone
                     {
                         ApplyZoneLightingCore(zoneIndex, color);
-
-                        byte[] payload = new byte[16];
-                        payload[0] = 0;
-                        payload[1] = _speed;
-                        payload[2] = _brightness;
-                        payload[3] = 0;
-                        payload[4] = (byte)(_direction + 1);
-                        payload[5] = color.R;
-                        payload[6] = color.G;
-                        payload[7] = color.B;
-                        payload[8] = 0x03;
-                        payload[9] = 1;
-                        SendLedCommand(payload);
                         SyncLightingProfileIni();
-                        _ = Task.Run(async () =>
-                        {
-                            try { await AcerAgentClient.Set4ZoneLightingAsync(_zoneColors, _brightness); } catch { }
-                        });
                     }
                     else // Animated: color applies to entire keyboard
                     {
                         for (int i = 0; i < 4; i++) _zoneColors[i] = color;
+                        _lastR = color.R; _lastG = color.G; _lastB = color.B;
                         ApplyLightingModeCore(mode);
                     }
                 });
@@ -504,7 +488,7 @@ namespace PredatorControlApp
                 QueueLightingTask(() =>
                 {
                     ApplyZoneLightingCore(1, color);
-                    Thread.Sleep(15);
+                    Thread.Sleep(30);
                     ApplyZoneLightingCore(2, color);
                     ApplyLightingModeCore(mode);
                 });
@@ -553,14 +537,34 @@ namespace PredatorControlApp
         public void SetBrightness(byte brightness)
         {
             _brightness = brightness;
-            QueueLightingTask(() => ApplyLightingModeCore(_lastMode));
+            QueueLightingTask(() =>
+            {
+                if (_lastMode == 0)
+                {
+                    Apply4ZoneLightingCore(0);
+                }
+                else
+                {
+                    ApplyLightingModeCore(_lastMode);
+                }
+            });
             Task.Run(() => { try { SetBacklight30s(_backlight30s); } catch { } });
         }
 
         public void SetSpeed(byte speed)
         {
             _speed = Math.Clamp(speed, (byte)1, (byte)9);
-            QueueLightingTask(() => ApplyLightingModeCore(_lastMode));
+            QueueLightingTask(() =>
+            {
+                if (_lastMode == 0)
+                {
+                    Apply4ZoneLightingCore(0);
+                }
+                else
+                {
+                    ApplyLightingModeCore(_lastMode);
+                }
+            });
         }
 
         public void SetDirection(byte direction)
@@ -577,15 +581,6 @@ namespace PredatorControlApp
 
             QueueLightingTask(() =>
             {
-                if (mode == 0)
-                {
-                    for (int z = 0; z < 4; z++)
-                    {
-                        ApplyZoneLightingCore(z, c);
-                        Thread.Sleep(15);
-                    }
-                }
-
                 byte[] payload = new byte[16];
                 payload[0] = (byte)(mode == 8 ? 0 : mode);
                 payload[1] = _speed;
@@ -598,12 +593,18 @@ namespace PredatorControlApp
                 payload[8] = 0x03;
                 payload[9] = (byte)(mode == 8 ? 0 : 1);
                 SendLedCommand(payload);
-                SyncLightingProfileIni();
 
-                _ = Task.Run(async () =>
+                if (mode == 0)
                 {
-                    try { await AcerAgentClient.Set4ZoneLightingAsync(_zoneColors, _brightness); } catch { }
-                });
+                    Thread.Sleep(30);
+                    for (int z = 0; z < 4; z++)
+                    {
+                        ApplyZoneLightingCore(z, c);
+                        Thread.Sleep(30);
+                    }
+                }
+
+                SyncLightingProfileIni();
             });
         }
 
@@ -648,16 +649,13 @@ namespace PredatorControlApp
             payload[9] = (byte)(mode == 8 ? 0 : 1);
             SendLedCommand(payload);
 
+            SyncLightingProfileIni();
+
             _ = Task.Run(async () =>
             {
-                SyncLightingProfileIni();
                 try
                 {
-                    if (mode == 0)
-                    {
-                        await AcerAgentClient.Set4ZoneLightingAsync(_zoneColors, _brightness);
-                    }
-                    else
+                    if (mode != 0 && mode != 8)
                     {
                         await AcerAgentClient.SetRgbEffectAsync(mode, Color.FromArgb(_lastR, _lastG, _lastB), _brightness, _speed, _direction);
                     }
@@ -668,12 +666,7 @@ namespace PredatorControlApp
 
         private void Apply4ZoneLightingCore(int mode)
         {
-            for (int z = 0; z < 4; z++)
-            {
-                ApplyZoneLightingCore(z, _zoneColors[z]);
-                Thread.Sleep(15);
-            }
-
+            // 1. Send backlight mode & brightness configuration to controller first
             byte[] payload = new byte[16];
             payload[0] = (byte)(mode == 8 ? 0 : mode);
             payload[1] = _speed;
@@ -687,11 +680,19 @@ namespace PredatorControlApp
             payload[9] = (byte)(mode == 8 ? 0 : 1);
             SendLedCommand(payload);
 
-            _ = Task.Run(async () =>
+            if (mode == 0)
             {
-                SyncLightingProfileIni();
-                try { await AcerAgentClient.Set4ZoneLightingAsync(_zoneColors, _brightness); } catch { }
-            });
+                // 2. In static 4-zone mode, apply individual physical zone colors AFTER SendLedCommand
+                // with OEM driver 30ms inter-zone sleep so the EC controller does NOT overwrite per-zone colors
+                Thread.Sleep(30);
+                for (int z = 0; z < 4; z++)
+                {
+                    ApplyZoneLightingCore(z, _zoneColors[z]);
+                    Thread.Sleep(30);
+                }
+            }
+
+            SyncLightingProfileIni();
         }
 
         public void SyncLightingProfileIni()
@@ -716,10 +717,16 @@ namespace PredatorControlApp
 
                 // AcerLightingService 1-based indexing: Mode1 is Direct, Mode2 is STATIC, Mode3 is BREATHING, etc.
                 // Mode 8 is Off -> ActiveMode 0.
-                int activeModeVal = _lastMode == 8 ? 0 : (_lastMode + 2);
+                // Mode 0 (Static) -> ActiveMode 2 (Mode2=STATIC).
+                // Mode 1..7 (Animated) -> ActiveMode _lastMode + 2 (3 to 9).
+                int activeModeVal = _lastMode switch
+                {
+                    8 => 0,
+                    _ => _lastMode + 2
+                };
                 WritePrivateProfileString("AcerECKeyboard Device", "ActiveMode", activeModeVal.ToString(), iniPath);
 
-                string colorHex = $"0X{_lastR:x2}{_lastG:x2}{_lastB:x2}";
+                string colorHex = $"0X{_zoneColors[0].R:x2}{_zoneColors[0].G:x2}{_zoneColors[0].B:x2}";
 
                 // Always ensure STATIC section has valid user color and brightness (never 000000 or uninitialized)
                 WritePrivateProfileString("AcerECKeyboard Device_STATIC", "color", colorHex, iniPath);
@@ -728,9 +735,10 @@ namespace PredatorControlApp
 
                 if (_lastMode != 0 && _lastMode != 8)
                 {
+                    string animHex = $"0X{_lastR:x2}{_lastG:x2}{_lastB:x2}";
                     WritePrivateProfileString(modeSection, "brightness", _brightness.ToString(), iniPath);
                     WritePrivateProfileString(modeSection, "speed", _speed.ToString(), iniPath);
-                    WritePrivateProfileString(modeSection, "color", colorHex, iniPath);
+                    WritePrivateProfileString(modeSection, "color", animHex, iniPath);
                 }
 
                 // Neutralize legacy Acer Amber presets in factory default sections so fallback never turns amber

@@ -1456,22 +1456,7 @@ namespace PredatorControlApp
             _btnAllZones = MakeButton("All Zones", pad, y, zoneBtnW, S(30));
             _btnAllZones.IsActive = true;
             _btnAllZones.ColorIndicator = _currentZoneColors[0];
-            _btnAllZones.Click += (s, e) =>
-            {
-                SelectZone(-1);
-                if (_rgbDropDown.SelectedIndex == 0)
-                {
-                    Color c = _btnAllZones.ColorIndicator ?? _currentZoneColors[0];
-                    for (int i = 0; i < 4; i++)
-                    {
-                        _currentZoneColors[i] = c;
-                        if (_btnZones[i] != null)
-                            _btnZones[i].ColorIndicator = c;
-                        SaveState($"ZoneColor_{i}", c.ToArgb());
-                    }
-                    _wmi.SetKeyboardColor(c, 0);
-                }
-            };
+            _btnAllZones.Click += (s, e) => SelectZone(-1);
 
             string[] zoneLabels = { "Zone 1", "Zone 2", "Zone 3", "Zone 4" };
             for (int z = 0; z < 4; z++)
@@ -1732,13 +1717,8 @@ namespace PredatorControlApp
             _colorPicker.Color = c;
 
             // Only switch to Static if currently in a mode that doesn't support custom colors (Neon, Wave, Off)
-            if (_rgbDropDown.SelectedIndex == 2 || _rgbDropDown.SelectedIndex == 3 || _rgbDropDown.SelectedIndex == 8)
-            {
-                _rgbDropDown.SelectedIndex = 0; // Triggers ApplyRgbModeFromDropdown(0) with updated zone colors
-                return;
-            }
-
-            int mode = _rgbDropDown.SelectedIndex;
+            bool wasUnsupported = (_rgbDropDown.SelectedIndex == 2 || _rgbDropDown.SelectedIndex == 3 || _rgbDropDown.SelectedIndex == 8);
+            int mode = wasUnsupported ? 0 : _rgbDropDown.SelectedIndex;
 
             if (mode == 0) // Static: individual physical zones supported
             {
@@ -1770,20 +1750,16 @@ namespace PredatorControlApp
             }
             else // Animated modes (Breathing, Shifting, Zoom, Meteor, Twinkling)
             {
-                // In animation modes, the hardware animates the entire keyboard in the selected color
-                for (int i = 0; i < 4; i++)
-                {
-                    _currentZoneColors[i] = c;
-                    if (_btnZones[i] != null)
-                        _btnZones[i].ColorIndicator = c;
-                    SaveState($"ZoneColor_{i}", c.ToArgb());
-                }
-                if (_btnAllZones != null)
-                    _btnAllZones.ColorIndicator = c;
-
+                // In animation modes, the hardware animates the entire keyboard in the selected color.
+                // Preserves user's saved individual ZoneColor_0..3 without overwriting them.
                 byte bright = (byte)_brightnessSlider.Value;
                 byte speed = GetMappedSpeed();
                 _wmi.SetRgbMode(mode, c.R, c.G, c.B, bright, speed, (byte)_wmi.Direction);
+            }
+
+            if (wasUnsupported && _rgbDropDown.SelectedIndex != 0)
+            {
+                _rgbDropDown.SelectedIndex = 0;
             }
 
             if (_btnCustomColor != null)
@@ -2339,8 +2315,7 @@ namespace PredatorControlApp
             else // Breathing (1), Shifting (4), Zoom (5), Meteor (6), Twinkling (7) - custom colors supported
             {
                 _speedSlider.Enabled = true;
-                Color c = _currentZoneColors[0];
-                for (int i = 0; i < 4; i++) _currentZoneColors[i] = c;
+                Color c = _colorPicker.Color;
                 _wmi.SetRgbMode(mode, c.R, c.G, c.B, bright, speed, 0);
             }
 

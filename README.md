@@ -4,8 +4,8 @@
 
 # 🪼 Predator Control
 
-[![Version](https://img.shields.io/badge/version-1.1.7-00E5FF?style=for-the-badge&logo=github&logoColor=white)](https://github.com/YS47/PredatorControl/releases)
-[![Jelli UI](https://img.shields.io/badge/Jelli%20UI-Coming%20Soon%20%E2%9C%A8-FF69B4?style=for-the-badge&logo=sparkles&logoColor=white)](#-jelli-ui--coming-soon)
+[![Version](https://img.shields.io/badge/version-1.2.1-00E5FF?style=for-the-badge&logo=github&logoColor=white)](https://github.com/YS47/PredatorControl/releases)
+[![Jelli UI](https://img.shields.io/badge/Jelli%20UI-Live%20%F0%9F%AA%BC-FF69B4?style=for-the-badge&logo=sparkles&logoColor=white)](#-jelli-ui)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-00B4CC?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/Hadisovic/PredatorControl)
 [![Framework](https://img.shields.io/badge/.NET-10.0%20Windows-512BD4?style=for-the-badge&logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/)
 [![License](https://img.shields.io/badge/license-MIT-2ED573?style=for-the-badge)](LICENSE)
@@ -42,24 +42,23 @@ Direct ACPI WMI hardware control, **~40 MB RAM** (vs 1.5 GB+), and only **4 esse
 ---
 
 > [!NOTE]
-> ### 🪼 Jelli Cute UI Interface — Coming Soon!
-> The backend ACPI WMI hardware control engine and Gaming Overlay HUD are fully operational and rock-solid (~40 MB RAM, zero bloat). 
-> The brand-new **Jelli cute jellyfish-themed user interface** is currently in active development and will be released in an upcoming major update! Stay tuned!
+> ### 🪼 Jelli UI is Live in v1.2.0+!
+> The beautiful jellyfish-themed **Jelli UI** is now the default interface. You can switch back to the classic control panel at any time from the Jelli Settings panel.
 
 ---
 
-## 🪼 Jelli UI — Coming Soon!
+## 🪼 Jelli UI
 
-> 🚧 **Status:** In Active Development & Design Phase ✨
+> ✅ **Status:** Live & Stable as of v1.2.0
 
-Predator Control is designed to be both featherlight and delightful. While the current release features a clean, high-performance dark dashboard, the upcoming **Jelli UI** overhaul is bringing:
+Predator Control now ships with the full **Jelli UI** — a bioluminescent jellyfish-themed interface that replaces the classic dark dashboard:
 
-- 🌸 **Cute Bioluminescent Jellyfish Mascot**: An interactive Jelli companion that reacts to your laptop's thermals, fan speeds, and active power profiles.
+- 🌸 **Interactive Jelli Mascot**: A cute jellyfish companion that reacts to your laptop's thermals, fan speeds, and active power profiles.
 - 🌊 **Modern Glassmorphism Design**: Deep ocean dark backdrop with glowing `#00E5FF` neon teal and soft coral accents.
-- 🪶 **Zero-Bloat Philosophy**: Handcrafted for near-zero CPU wakeups and minimal memory footprint (~40 MB RAM).
-- 🎛️ **Quick Floating Widget & Tray Flyout**: Instant performance cycling and thermal checks without opening full windows.
-
-*The core ACPI WMI engine and Gaming Overlay are completely functional today — the full Jelli visual interface will roll out in the upcoming release.*
+- 🪶 **Zero-Bloat Architecture**: WebView2-hosted React frontend with true zero-footprint when disabled — Chromium processes are fully terminated on toggle-off.
+- 🎛️ **Jelli or Classic — Your Choice**: Toggle between the Jelli UI and the original classic control panel from Settings at any time. When Jelli is off, it consumes **zero CPU and zero RAM** (all WebView2 child processes are killed).
+- 📊 **Floating Metrics HUD**: Optional on-screen performance overlay with Off / Light / Default / Full modes.
+- 🔗 **Expand or Attach Flyout**: Choose between Jelli as a standalone expanded window or as a tray-attached flyout.
 
 ---
 
@@ -210,9 +209,33 @@ PredatorControl/
 
 ---
 
+## 📋 Changelog
+
+### v1.2.1 — Jelli Toggle Fix & RGB Polish
+- 🔧 **Jelli Toggle — True Off**: Toggling Jelli off now kills all WebView2 child Chromium processes, guaranteeing **zero CPU and zero RAM** footprint when disabled.
+- 🔧 **Jelli Toggle — No Stuck Switching**: Fixed a hang in the Settings panel where the toggle would get stuck on "Switching..." if settings validation failed; now uses a direct IPC legacy path.
+- 🔧 **Jelli Settings — Always Accessible**: "Expand Jelli" and "Attached flyout" mode buttons are now always enabled regardless of Jelli's on/off state.
+- 🎨 **RGB Static — 4-Zone Colors Preserved**: Selecting "All Zones" no longer overwrites individual saved zone colors; each zone retains its color when switching back to static mode.
+- 🎨 **RGB Animated Mode — Color Correct**: Animated modes (Breathing, Shifting, Zoom, Meteor, Twinkling) now correctly use the active color picker color instead of zone 0's saved color.
+- 🎨 **RGB Brightness/Speed — Zone Aware**: Changing brightness or speed in static 4-zone mode now correctly re-applies all individual zone colors instead of a single color.
+- 🎨 **RGB INI Sync — Correct Color Written**: `SyncLightingProfileIni` now writes zone 0's actual color (not the last animated color) to the `STATIC` section, preventing amber fallback on reboot.
+- ⏱️ **RGB Zone Sequencing**: Increased inter-zone sleep from 15ms → 30ms for improved hardware EC reliability on static zone apply.
+
+### v1.2.0 — Jelli UI Launch
+- 🪼 **Jelli UI**: Full WebView2-hosted React/TypeScript jellyfish-themed interface.
+- 🎛️ **Settings Panel**: Toggle Jelli on/off, choose Expanded or Attached flyout mode, configure floating metrics HUD (Off / Light / Default / Full).
+- 📊 **Floating Metrics HUD**: Real-time CPU/GPU stats with multiple display modes.
+
+### v1.1.7 — G-Helper Style Overlay HUD
+- ⚡ **3-Mode Gaming Overlay HUD** (Light / Default / Full) with ETW kernel FPS counter.
+- 🖥️ **Native NVML GPU Telemetry** for accurate wattage and load readings.
+- 🎯 Tightened layout, README keyboard shortcut reference.
+
+---
+
 ## 🗺️ Roadmap
 
-- [ ] 🪼 **Jelli UI Interface**: Complete cute jellyfish visual overhaul & interactive mascot (**In Development 🚧**)
+- [x] 🪼 **Jelli UI Interface**: ✅ Live in v1.2.0
 - [ ] 🎮 **Raw Input HID Hook**: Native hardware Predator Key sniffing (`UsagePage 0xFFA0`)
 - [ ] ⚡ **ACPI Event Sniffing**: Deep `AcerEvent` / `APGeEvent` mapping
 - [ ] 🌊 **RGB Wave Direction**: Direction toggle (Left-to-Right / Right-to-Left)

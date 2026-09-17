@@ -4,7 +4,7 @@
 
 # 🪼 Predator Control
 
-[![Version](https://img.shields.io/badge/version-1.2.1-00E5FF?style=for-the-badge&logo=github&logoColor=white)](https://github.com/YS47/PredatorControl/releases)
+[![Version](https://img.shields.io/badge/version-1.2.1-00E5FF?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Hadisovic/PredatorControl/releases)
 [![Jelli UI](https://img.shields.io/badge/Jelli%20UI-Live%20%F0%9F%AA%BC-FF69B4?style=for-the-badge&logo=sparkles&logoColor=white)](#-jelli-ui)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-00B4CC?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/Hadisovic/PredatorControl)
 [![Framework](https://img.shields.io/badge/.NET-10.0%20Windows-512BD4?style=for-the-badge&logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/)
@@ -267,9 +267,29 @@ dotnet publish -c Release -r win-x64 --no-self-contained -p:PublishSingleFile=fa
 
 ---
 
+## ⚠️ Important Safety Checks Before Using It
+
+Because utilities that manipulate laptop hardware write directly to the Embedded Controller (EC) or BIOS-level WMI methods, keep these precautions in mind:
+
+### 1. Verify Specific Model Compatibility
+- Acer changes its EC register maps and WMI GUIDs frequently across chassis generations (e.g., older Helios 300 series vs. Helios 16/18 vs. Helios Neo series).
+- Check the project's code/README or commit history to see which model or BIOS version the developer tested it against. Writing unexpected values to unsupported EC offsets can cause fan tachometers to report zero or cause the EC to freeze.
+
+### 2. Review the Source Code Before Running Binaries
+- Since this is an indie repo with a small user base, avoid downloading precompiled `.exe` releases blind.
+- Review the repository's source files (C# .NET) to verify what drivers or external libraries (such as WinRing0 or LibreHardwareMonitor) it loads. Predator Control communicates directly via standard Windows WMI (`root\wmi`) and Acer's official Agent Named Pipe, loading **zero third-party kernel drivers**.
+
+### 3. Windows Defender / SmartScreen Flags
+- Any custom utility that communicates with low-level hardware or WMI without an expensive signed EV certificate will trigger a Windows Defender or SmartScreen prompt. This is expected for custom hardware tools, but all the more reason to inspect the source code first.
+
+### 4. Fallback Recovery (EC Reset)
+- If any custom fan control tool ever causes the fans to stick at 100% or stop responding to thermal loads, shutting the laptop down, unplugging AC power, and performing a pinhole battery/EC reset (holding the power button for 15–30 seconds) immediately restores factory EC defaults.
+
+---
+
 ## 🚀 Quick Setup & Usage
 
-1. Download the latest release from [Releases](https://github.com/YS47/PredatorControl/releases).
+1. Download the latest release from [Releases](https://github.com/Hadisovic/PredatorControl/releases).
 2. Run **`PredatorControl-standalone.exe`** as Administrator.
 3. *(Optional)* Toggle **"Start with Windows"** in the app settings to run silently in the system tray at login without any startup delay.
 

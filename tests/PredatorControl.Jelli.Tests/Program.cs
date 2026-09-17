@@ -29,6 +29,7 @@ internal static class Program
                 await Until(() => host.Ready, 15000);
                 await Task.Delay(1000);
                 await NativeInput.Run(host, Check, () => backend.LastAction == "power.quiet");
+                await CaptureGallery(host);
                 await host.Browser.ExecuteScriptAsync("window.surfaceLog=[];const originalPost=window.chrome.webview.postMessage.bind(window.chrome.webview);window.chrome.webview.postMessage=m=>{if(m.action==='surface')window.surfaceLog.push(m.data);originalPost(m)};window.clickCreature=()=>{document.querySelector('canvas').dispatchEvent(new MouseEvent('mousedown',{button:0,bubbles:true}));document.dispatchEvent(new MouseEvent('mouseup',{button:0,bubbles:true}))};");
                 await host.Browser.ExecuteScriptAsync("window.clickCreature()");
                 await Task.Delay(100);
@@ -165,6 +166,39 @@ internal static class Program
             bitmap.Save(Path.Combine(dir, "native-compact.png"));
         }
     }
+    private static async Task CaptureGallery(JelliHostForm host)
+    {
+        host.SetSurface("summary");
+        await Task.Delay(500);
+        await Capture(host, "summary");
+        host.OpenDashboard();
+        foreach (string tab in new[] { "System", "Lighting", "Games", "Settings" }) {
+            await host.Browser.ExecuteScriptAsync($"[...document.querySelectorAll('nav button')].find(b=>b.textContent==='{tab}').click()");
+            await Task.Delay(550);
+            await Capture(host, tab.ToLowerInvariant());
+            if (tab == "System" || tab == "Settings") {
+                string[] headings = tab == "System" ? ["Cooling", "GPU · restart required"] : ["Your desktop companion"];
+                foreach (string heading in headings) {
+                    await host.Browser.ExecuteScriptAsync($"[...document.querySelectorAll('h2')].find(e=>e.textContent==='{heading}').scrollIntoView()");
+                    await Task.Delay(150);
+                    await Capture(host, heading == "Cooling" ? "cooling" : tab == "System" ? "gpu" : "companion");
+                }
+            }
+            if (tab != "Games") {
+                await host.Browser.ExecuteScriptAsync("document.querySelector('.dashboard-content').scrollTop=document.querySelector('.dashboard-content').scrollHeight");
+                await Task.Delay(150);
+                await Capture(host, tab.ToLowerInvariant() + "-lower");
+            }
+            if (tab == "Settings") {
+                await host.Browser.ExecuteScriptAsync("[...document.querySelectorAll('h2')].find(e=>e.textContent==='Gaming HUD').scrollIntoView()");
+                await Task.Delay(150);
+                await Capture(host, "hud-settings");
+            }
+        }
+        await host.Browser.ExecuteScriptAsync("[...document.querySelectorAll('nav button')].find(b=>b.textContent==='System').click()");
+        host.Collapse();
+        await Task.Delay(200);
+    }
 }
 
 internal sealed class FixtureBackend : IJelliBackend
@@ -176,8 +210,8 @@ internal sealed class FixtureBackend : IJelliBackend
     public int Restores;
     public object State(JelliSettings settings) => new {
         telemetry = (TelemetrySnapshot?)null, powerMode = "Unavailable", fanMode = "Unavailable", gpuMode = "Unavailable", gpuNotice = "Requires system restart", fps = (int?)null, overlay = false,
-        settings, version = "test", doubleClickMs = 500, gameSyncStatus = "Unavailable",
-        sections = new JelliSection[] { new("power", "Performance", [new("power.quiet", "Quiet", "button", false), new("power.balanced", "Balanced", "button", false)]), new("fans", "Cooling", [new("fans.auto", "Auto", "button", false)]), new("battery", "Battery care", [new("battery.limit", "Stop charging at 80%", "toggle", false)]) },
+        settings, version = typeof(Form1).Assembly.GetName().Version!.ToString(3), doubleClickMs = 500, gameSyncStatus = "Unavailable",
+        sections = FixtureCatalog.Sections,
         menu = new JelliMenu[] { new("menu.power", "Power Mode", true, false, [new("power.quiet", "Quiet", true, false, [])]), new("menu.exit", "Exit", true, false, []) },
         monitors = new[] {new {id = "", label = "Primary display"}}
     };

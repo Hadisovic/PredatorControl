@@ -4,7 +4,7 @@
 
 # 🪼 Predator Control
 
-[![Version](https://img.shields.io/badge/version-1.1.6-00E5FF?style=for-the-badge&logo=github&logoColor=white)](https://github.com/YS47/PredatorControl/releases)
+[![Version](https://img.shields.io/badge/version-1.2.0-00E5FF?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Hadisovic/PredatorControl/releases/tag/v1.2.0)
 [![Jelli UI](https://img.shields.io/badge/Jelli%20UI-integration%20branch-81e4dc?style=for-the-badge)](docs/jelli-architecture.md)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-00B4CC?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/Hadisovic/PredatorControl)
 [![Framework](https://img.shields.io/badge/.NET-10.0%20Windows-512BD4?style=for-the-badge&logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/)
@@ -35,7 +35,28 @@ The `jelli` branch adds the real Jelli desktop creature and React control surfac
   </table>
 </div>
 
-Screenshots above are captured from the real packaged WebView renderer in the hardware-free validation host. Dashes and “Unavailable” are intentional: this fixture does not read sensors or issue hardware commands. The production app fills the same controls from the laptop's backend. PNG backgrounds are transparent; available controls vary by hardware.
+Screenshots above are captured from the real packaged WebView renderer in the hardware-free validation host. Dashes and “Unavailable” are intentional: this fixture uses representative control preferences and does not read sensors or issue hardware commands. The production app fills the same controls from the laptop's backend. PNG backgrounds are transparent; available controls vary by hardware.
+
+### Explore the tabs
+
+<table>
+  <tr><td><b>System · profiles and cooling</b></td><td><b>System · displays and battery</b></td></tr>
+  <tr><td><img src="assets/jelli-system.png" width="344" alt="System tab with performance profiles and cooling controls"/></td><td><img src="assets/jelli-system-lower.png" width="344" alt="Lower System tab with refresh rate, battery limit and key lock"/></td></tr>
+  <tr><td><b>Lighting · effects and zones</b></td><td><b>Lighting · color, brightness and speed</b></td></tr>
+  <tr><td><img src="assets/jelli-lighting.png" width="344" alt="Lighting tab with four-zone keyboard preview and effect selector"/></td><td><img src="assets/jelli-lighting-lower.png" width="344" alt="Lighting color picker, brightness and effect-speed sliders, and backlight timeout"/></td></tr>
+  <tr><td><b>Games · Game Sync and gaming mode</b></td><td><b>Settings · application and presentation</b></td></tr>
+  <tr><td><img src="assets/jelli-games.png" width="344" alt="Games tab with profile configuration and gaming mode controls"/></td><td><img src="assets/jelli-settings.png" width="344" alt="Settings tab with startup, updates, native themes and presentation mode"/></td></tr>
+  <tr><td><b>Gaming HUD preferences</b></td><td><b>About · version and native fallback</b></td></tr>
+  <tr><td><img src="assets/jelli-hud-settings.png" width="344" alt="HUD corner, monitor, graph, power and utilization preferences"/></td><td><img src="assets/jelli-settings-lower.png" width="344" alt="About Predator Control version 1.2.0 and native fallback entry point"/></td></tr>
+  <tr><td><b>Cooling · custom fan controls</b></td><td><b>GPU · graphics modes and displays</b></td></tr>
+  <tr><td><img src="assets/jelli-cooling.png" width="344" alt="Cooling modes, native fan curve entry point and fan speed sliders"/></td><td><img src="assets/jelli-gpu.png" width="344" alt="GPU modes and display controls"/></td></tr>
+  <tr><td><b>Desktop companion · readouts and RGB sync</b></td><td><b>Attached flyout</b></td></tr>
+  <tr><td><img src="assets/jelli-companion.png" width="344" alt="Desktop presentation, floating readout selection and keyboard color sync"/></td><td><img src="assets/jelli-flyout.png" width="488" alt="Jelli beside the attached control panel"/></td></tr>
+  <tr><td><b>Single click · quick summary</b></td><td><b>Right click · quick controls</b></td></tr>
+  <tr><td><img src="assets/jelli-summary.png" width="264" alt="Quick summary with telemetry and system status"/></td><td><img src="assets/jelli-menu.png" width="344" alt="Quick controls menu with representative fixture actions"/></td></tr>
+</table>
+
+The gallery shows scroll positions within the same windows. Controls and available choices depend on the laptop; the fixture illustrates the UI rather than certifying a hardware configuration. Fan-curve and Game Sync editors still open as native dialogs.
 
 <details>
 <summary>Native fallback and gaming HUD</summary>
@@ -216,6 +237,10 @@ dotnet run --project tests/PredatorControl.Jelli.Tests -c Release
 ```
 
 The test executable opens the actual native WebView host with isolated test descriptors, unavailable telemetry and no hardware controller. It tests rendering, interactions, protocol/lifecycle behavior and reports memory across its owned process tree. Screenshots go to ignored `artifacts/screenshots`. It is not a physical hardware parity test.
+
+## Download 1.2.0
+
+Download **[PredatorControl-standalone.exe](https://github.com/Hadisovic/PredatorControl/releases/download/v1.2.0/PredatorControl-standalone.exe)** from the [1.2.0 release](https://github.com/Hadisovic/PredatorControl/releases/tag/v1.2.0). This is the self-contained Windows x64 build from the `jelli` branch. Exit the existing app through its tray before launching the new executable as Administrator. Microsoft Edge WebView2 Evergreen Runtime is required; Node.js and a separate .NET installation are not needed for this download. SHA256SUMS.txt is included with the release.
 
 ## Launch and test the Jelli build
 

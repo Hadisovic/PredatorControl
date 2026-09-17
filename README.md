@@ -21,23 +21,33 @@ The `jelli` branch adds the real Jelli desktop creature and React control surfac
 
 ---
 
-### 🖼️ Native fallback & gaming overlay previews
+### 🪼 The Jelli desktop
 
 <div align="center">
-  <h4>🎮 In-Game Gaming Overlay HUD (G-Helper Style & Zero-Injection ETW FPS Counter)</h4>
-  <p><img src="assets/preview_overlay.png" width="620" alt="In-Game Gaming Overlay HUD"/></p>
-  <br/>
+  <img src="assets/jelli-compact.png" width="180" alt="Jelli with two unboxed, independently floating metric readouts"/>
+  <p>Small company. Everything within reach.</p>
   <table>
+    <tr><td align="center"><b>Control center</b></td><td align="center"><b>Attached flyout & preferences</b></td></tr>
     <tr>
-      <td align="center"><b>Dashboard, Thermals & GPU MUX Switch</b></td>
-      <td align="center"><b>RGB Lighting & System Controls</b></td>
-    </tr>
-    <tr>
-      <td><img src="assets/preview_dashboard.png" width="340" alt="Dashboard Preview"/></td>
-      <td><img src="assets/preview_controls.png" width="340" alt="Controls Preview"/></td>
+      <td><img src="assets/jelli-dashboard.png" width="344" alt="Current Jelli System dashboard with performance and cooling controls"/></td>
+      <td><img src="assets/jelli-flyout.png" width="488" alt="Current attached Jelli flyout showing presentation and telemetry preferences"/></td>
     </tr>
   </table>
 </div>
+
+Screenshots above are captured from the real packaged WebView renderer in the hardware-free validation host. Dashes and “Unavailable” are intentional: this fixture does not read sensors or issue hardware commands. The production app fills the same controls from the laptop's backend. PNG backgrounds are transparent; available controls vary by hardware.
+
+<details>
+<summary>Native fallback and gaming HUD</summary>
+
+These are the retained native interfaces, not the default Jelli dashboard.
+
+![Native gaming HUD](assets/preview_overlay.png)
+
+<img src="assets/preview_dashboard.png" width="340" alt="Retained native fallback dashboard"/>
+<img src="assets/preview_controls.png" width="340" alt="Retained native fallback lighting controls"/>
+
+</details>
 
 ---
 
@@ -45,9 +55,9 @@ The `jelli` branch adds the real Jelli desktop creature and React control surfac
 
 Jelli is the desktop launcher, telemetry glance surface and anchor for Predator Control. Its independent personality is preserved: temperatures, fan states and performance modes do **not** change its moods. No AI/chat/model/provider functionality is included.
 
-- Drag Jelli to position it. The desktop shows two configurable telemetry slots.
+- Drag Jelli to position it. Two configurable readouts float beneath it without cards or boxes, each moving on its own gentle rhythm. Text shadows keep them legible over the desktop.
 - Click for a quick summary; double click for the full dashboard; right click for quick controls. Escape collapses the panel.
-- Choose **Expand Jelli** (default) or **Attached flyout** in Settings.
+- Choose **Expand Jelli** (default) or **Attached flyout** in Settings. Panels ease into view, tabs reveal their contents in a short stagger, and the close button softly collapses the panel. Controls have hover, press, selection and keyboard-focus feedback. Windows reduced-motion preferences disable these decorative transitions and metric drift.
 - System contains power profiles, fans, GPU, displays, battery and hardware controls. Lighting contains effects, zones, colors and brightness. Games contains Game Sync and the native gaming HUD.
 - Optional **Sync keyboard RGB with Jelli** is off by default, rate-limited, and preserves the manual lighting preferences.
 - **Ctrl + Shift + O** replaces Jelli with the native, always click-through ETW gaming HUD. Toggle again to restore Jelli. Choose the HUD monitor/corner and optional metric groups in Settings.

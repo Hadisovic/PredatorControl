@@ -12,6 +12,8 @@ The updated Debug smoke run passed 35 checks, including existing SelfCheck asser
 
 ## Automated checks
 
+The desktop motion refresh passed 39 Release smoke checks, ESLint, strict TypeScript compilation, all 3 click-arbitration tests and the self-contained x64 publish. Added assertions for unboxed readouts, independent drift periods, reduced-motion behavior and delayed close completion. Inspected current compact, dashboard and flyout captures and published the isolated-renderer PNGs in `assets/jelli-*.png` for the README. These contain unavailable fixture readings, not invented telemetry. Latest UI-only private working set was 125.2 MiB; this still excludes the hardware backend.
+
 - `.NET` Debug and Release builds: passed; no new compiler/analyzer warnings remain.
 - Existing `SelfCheck.Run()` assertions executed through the Debug smoke-test entry point without creating hardware controllers.
 - TypeScript strict check and production Vite build: passed.

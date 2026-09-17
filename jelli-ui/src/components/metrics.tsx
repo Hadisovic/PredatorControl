@@ -16,5 +16,5 @@ export function valueFor(s: State | null, key: string) {
 export function Metric({state, name}: {state: State | null; name: string}) {
   const meta = metrics[name] ?? metrics.cpuTemp
   const value = valueFor(state, name)
-  return <div className="metric"><span>{meta.label}</span><strong>{value ?? '—'}<small>{value === null ? '' : meta.unit}</small></strong></div>
+  return <div className={`metric${typeof value === 'string' ? ' metric-text' : ''}`}><span>{meta.label}</span><strong>{value ?? '—'}<small>{value === null ? '' : meta.unit}</small></strong></div>
 }

@@ -44,6 +44,11 @@ internal static class Program
                 host.Collapse();
                 await Task.Delay(100);
                 Check(await EvalBool(host, "document.querySelectorAll('.floating-metrics .metric').length === 2"), "exactly two floating metric slots");
+                Check(await EvalBool(host, "[...document.querySelectorAll('.floating-metrics .metric')].every(e=>getComputedStyle(e).backgroundColor==='rgba(0, 0, 0, 0)' && getComputedStyle(e).borderTopWidth==='0px')"), "floating metrics have no card or border");
+                Check(await EvalBool(host, "new Set([...document.querySelectorAll('.floating-metrics .metric')].map(e=>getComputedStyle(e).animationDuration)).size===2"), "floating metrics drift at independent rhythms");
+                await host.Browser.CallDevToolsProtocolMethodAsync("Emulation.setEmulatedMedia", "{\"features\":[{\"name\":\"prefers-reduced-motion\",\"value\":\"reduce\"}]}");
+                Check(await EvalBool(host, "[...document.querySelectorAll('.floating-metrics .metric')].every(e=>getComputedStyle(e).animationName==='none')"), "reduced motion disables metric drift");
+                await host.Browser.CallDevToolsProtocolMethodAsync("Emulation.setEmulatedMedia", "{\"features\":[]}");
                 Check(await EvalBool(host, "document.querySelector('canvas').width === 140"), "real canvas mounted");
                 await Capture(host, "compact");
                 host.OpenDashboard();
@@ -51,6 +56,11 @@ internal static class Program
                 Check(await EvalBool(host, "document.querySelectorAll('nav button').length === 4"), "full dashboard navigation");
                 Check(await EvalBool(host, "document.body.textContent.includes('Quiet')"), "backend control descriptors rendered");
                 await Capture(host, "dashboard");
+                await host.Browser.ExecuteScriptAsync("document.querySelector('[aria-label=\"Collapse to Jelli\"]').click()");
+                await Task.Delay(350);
+                Check(!host.DashboardOpen, "animated close returns to compact host");
+                host.OpenDashboard();
+                await Task.Delay(450);
                 await host.Browser.ExecuteScriptAsync("[...document.querySelectorAll('button')].find(b=>b.textContent==='Quiet').click()");
                 await Task.Delay(200);
                 Check(backend.LastAction == "power.quiet", "semantic action reaches backend");

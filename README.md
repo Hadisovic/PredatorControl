@@ -5,23 +5,23 @@
 # 🪼 Predator Control
 
 [![Version](https://img.shields.io/badge/version-1.1.6-00E5FF?style=for-the-badge&logo=github&logoColor=white)](https://github.com/YS47/PredatorControl/releases)
-[![Jelli UI](https://img.shields.io/badge/Jelli%20UI-Coming%20Soon%20%E2%9C%A8-FF69B4?style=for-the-badge&logo=sparkles&logoColor=white)](#-jelli-ui--coming-soon)
+[![Jelli UI](https://img.shields.io/badge/Jelli%20UI-integration%20branch-81e4dc?style=for-the-badge)](docs/jelli-architecture.md)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-00B4CC?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/Hadisovic/PredatorControl)
 [![Framework](https://img.shields.io/badge/.NET-10.0%20Windows-512BD4?style=for-the-badge&logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/)
 [![License](https://img.shields.io/badge/license-MIT-2ED573?style=for-the-badge)](LICENSE)
-[![RAM](https://img.shields.io/badge/RAM%20Usage-%7E40%20MB-FF6B35?style=for-the-badge&logo=memory&logoColor=white)](https://github.com/Hadisovic/PredatorControl)
 [![Services](https://img.shields.io/badge/Acer%20Services-4%20Essential%20Only-2ED573?style=for-the-badge&logo=windows&logoColor=white)](#-the-4-essential-acer-services)
 
 <br/>
 
-**Predator Control** is a lightweight, bloat-free alternative to Acer PredatorSense for **Acer Predator & Nitro** laptops.  
-Direct ACPI WMI hardware control, **~40 MB RAM** (vs 1.5 GB+), and only **4 essential Acer services** running!
+**Predator Control** is a lightweight PredatorSense alternative intended for compatible Acer laptops using the PredatorSense hardware/service stack. Compatibility depends on the model; hardware features vary, and only tested configurations should be considered verified.
+
+The `jelli` branch adds the real Jelli desktop creature and React control surface around the existing C# hardware backend. See the [engineering notes and outstanding release gates](docs/jelli-architecture.md).
 
 </div>
 
 ---
 
-### 🖼️ UI & Gaming Overlay Previews
+### 🖼️ Native fallback & gaming overlay previews
 
 <div align="center">
   <h4>🎮 In-Game Gaming Overlay HUD (G-Helper Style & Zero-Injection ETW FPS Counter)</h4>
@@ -41,50 +41,31 @@ Direct ACPI WMI hardware control, **~40 MB RAM** (vs 1.5 GB+), and only **4 esse
 
 ---
 
-> [!NOTE]
-> ### 🪼 Jelli Cute UI Interface — Coming Soon!
-> The backend ACPI WMI hardware control engine and Gaming Overlay HUD are fully operational and rock-solid (~40 MB RAM, zero bloat). 
-> The brand-new **Jelli cute jellyfish-themed user interface** is currently in active development and will be released in an upcoming major update! Stay tuned!
+## Jelli UI
 
----
+Jelli is the desktop launcher, telemetry glance surface and anchor for Predator Control. Its independent personality is preserved: temperatures, fan states and performance modes do **not** change its moods. No AI/chat/model/provider functionality is included.
 
-## 🪼 Jelli UI — Coming Soon!
+- Drag Jelli to position it. The desktop shows two configurable telemetry slots.
+- Click for a quick summary; double click for the full dashboard; right click for quick controls. Escape collapses the panel.
+- Choose **Expand Jelli** (default) or **Attached flyout** in Settings.
+- System contains power profiles, fans, GPU, displays, battery and hardware controls. Lighting contains effects, zones, colors and brightness. Games contains Game Sync and the native gaming HUD.
+- Optional **Sync keyboard RGB with Jelli** is off by default, rate-limited, and preserves the manual lighting preferences.
+- **Ctrl + Shift + O** replaces Jelli with the native, always click-through ETW gaming HUD. Toggle again to restore Jelli. Choose the HUD monitor/corner and optional metric groups in Settings.
+- Precise fan curves, Game Sync profile editing and update/reboot dialogs retain their native implementations during migration. **Settings → Open native fallback controls** provides the full previous interface.
 
-> 🚧 **Status:** In Active Development & Design Phase ✨
+The existing hardware/service logic and telemetry calculations are preserved. This branch is not a claim of universal Acer compatibility or completed physical-hardware validation.
 
-Predator Control is designed to be both featherlight and delightful. While the current release features a clean, high-performance dark dashboard, the upcoming **Jelli UI** overhaul is bringing:
+### Resource budget
 
-- 🌸 **Cute Bioluminescent Jellyfish Mascot**: An interactive Jelli companion that reacts to your laptop's thermals, fan speeds, and active power profiles.
-- 🌊 **Modern Glassmorphism Design**: Deep ocean dark backdrop with glowing `#00E5FF` neon teal and soft coral accents.
-- 🪶 **Zero-Bloat Philosophy**: Handcrafted for near-zero CPU wakeups and minimal memory footprint (~40 MB RAM).
-- 🎛️ **Quick Floating Widget & Tray Flyout**: Instant performance cycling and thermal checks without opening full windows.
+The new UI uses WebView2, so the previous native-only 40 MB claim does not describe this branch. Drawing is capped at 60 Hz, telemetry snapshots at 1 Hz, cursor snapshots at about 31 Hz, and keyboard sync at at most 1.33 Hz. Gaming suspends the WebView. The production frontend is about 225 KB of JavaScript before compression and uses React/React DOM only.
 
-*The core ACPI WMI engine and Gaming Overlay are completely functional today — the full Jelli visual interface will roll out in the upcoming release.*
-
----
-
-## ✨ Why Predator Control?
-
-Acer PredatorSense and Acer Care Center bundle **10+ background services and telemetry agents**, an Electron frontend, and consume **500 MB – 1.5 GB of RAM**.  
-Predator Control replaces all of that with direct ACPI WMI calls, using only **~40 MB RAM**, and keeps only the **4 essential hardware services** required for your laptop's fans, lighting, and GPU MUX switch!
-
-### 🔬 Resource Comparison
-
-| Metric | 🐌 Acer PredatorSense + Care Center | 🪼 Predator Control | Improvement |
-| :--- | :---: | :---: | :--- |
-| **Idle RAM** | 500 MB – 1.5 GB | **~40 MB** | 🟢 **~95% less RAM** |
-| **Background Services** | 10+ bloatware & telemetry daemons | **4 Essential Only** | 🟢 **All telemetry silenced** |
-| **Idle CPU** | 0.8 – 3.5% | **< 0.1% / 0.0%** | 🟢 Zero micro-stutter |
-| **Window Toggle Latency** | 2.5 – 5.0 s | **< 50 ms** | 🟢 Instant launch |
-| **Mode Switch Latency** | 500 – 1200 ms | **< 30 ms** | 🟢 Direct EC write |
-| **Game Focus Stealing** | ❌ Focus steals during games | **✅ Never** (`WS_EX_NOACTIVATE`) | 🟢 100% game-safe |
-| **In-Game FPS Counter** | ❌ None | **✅ Zero-Injection Kernel ETW** | 🟢 Anti-Cheat Safe |
+**The full application's below-200 MB idle requirement remains a release gate.** The isolated UI smoke test measured approximately 112 MiB private working set and 159 MiB private bytes in one run; those numbers exclude the real hardware backend. [Measurement details, limitations and test checklist](docs/jelli-architecture.md#performance-status-and-release-gates).
 
 ---
 
 ## 🛡️ The 4 Essential Acer Services
 
-Predator Control replaces the heavy PredatorSense Electron frontend while smartly coexisting with Acer's hardware layer. To maintain full hardware control with **only ~40 MB RAM**, it keeps **4 essential Acer services** running:
+Predator Control replaces the heavy PredatorSense Electron frontend while smartly coexisting with Acer's hardware layer. The existing hardware/service integration keeps **4 essential Acer services** running:
 
 | Service | Display Name | Why It Is Essential |
 | :--- | :--- | :--- |
@@ -144,7 +125,7 @@ You can run `disable_acer_bloatware.bat` anytime to apply this optimization with
 - 🖥️ **Refresh Rate Switcher**: Switch internal display (60Hz ↔ 165Hz/240Hz) and external monitors via Win32 CCD API.
 
 ### 🎮 OSD & In-Game Gaming Overlay
-- ⚡ **In-Game Gaming Overlay HUD (G-Helper Style)**: Real-time neon green FPS counter (powered by zero-injection Windows ETW kernel Present monitoring), CPU/GPU temperatures, fan RPMs, active GPU wattage (`0x0D`), 60-second rolling sparkline performance graph, and battery gauge. Toggle with `Ctrl + Shift + O`, drag anywhere with `Ctrl + Shift + Drag`.
+- ⚡ **In-Game Gaming Overlay HUD (G-Helper Style)**: Real-time neon green FPS counter (powered by zero-injection Windows ETW kernel Present monitoring), CPU/GPU temperatures, fan RPMs, active GPU wattage (`0x0D`), 60-second rolling sparkline performance graph, and battery gauge. Toggle with `Ctrl + Shift + O`. Position and optional metric groups are selected in Jelli Settings; the HUD remains non-interactive during gameplay.
 - 🛡️ **100% Anti-Cheat Safe**: Uses Windows ETW kernel tracing (`Microsoft-Windows-DxgKrnl` Event ID 184 / `DXGI` Event ID 42). Zero DLL injection, zero API hooking (safe with Vanguard, EAC, BattlEye, Ricochet).
 - 🔑 **Dedicated Predator Key Intercept**: Low-level hardware hook (`WH_KEYBOARD_LL`) intercepting Acer scan code `0x75` (`VK_0xFF`) to toggle the app window instantly without stealing in-game focus.
 - 🏎️ **High CPU Priority Enforcement**: Automatically configures Windows Registry IFEO (`CpuPriorityClass=3`), Task Scheduler `<Priority>2</Priority>`, and runtime `ProcessPriorityClass.High` (`BasePriority=13`) for zero latency and micro-stutter immunity during AAA gaming.
@@ -190,7 +171,7 @@ PredatorControl/
 
 ## 🗺️ Roadmap
 
-- [ ] 🪼 **Jelli UI Interface**: Complete cute jellyfish visual overhaul & interactive mascot (**In Development 🚧**)
+- [ ] 🪼 **Jelli UI release validation**: Physical hardware parity, mixed-DPI/docking, real-game overlay behavior and full-process memory budget; see the integration notes.
 - [ ] 🎮 **Raw Input HID Hook**: Native hardware Predator Key sniffing (`UsagePage 0xFFA0`)
 - [ ] ⚡ **ACPI Event Sniffing**: Deep `AcerEvent` / `APGeEvent` mapping
 - [ ] 🌊 **RGB Wave Direction**: Direction toggle (Left-to-Right / Right-to-Left)
@@ -202,31 +183,37 @@ PredatorControl/
 ## ⚙️ Building from Source
 
 ### Prerequisites
-- [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
-- Windows 10/11 x64
+
+- Windows 10/11 x64 and [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0).
+- Node.js 24 LTS with npm, used only while building.
+- [Microsoft Edge WebView2 Evergreen Runtime](https://developer.microsoft.com/microsoft-edge/webview2/), used by the application.
 
 ```powershell
-# Clone the repository
 git clone https://github.com/Hadisovic/PredatorControl.git
-cd PredatorControl/src
-
-# Build Release
-dotnet build -c Release
-
-# Publish Standalone Executable (~52 MB)
-dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -o "..\publish\standalone"
-
-# Publish Unpacked Folder
-dotnet publish -c Release -r win-x64 --no-self-contained -p:PublishSingleFile=false -o "..\publish\unpacked"
+cd PredatorControl
+git switch jelli
+.\tools\build-jelli.ps1
 ```
 
----
+The publish script builds and embeds the UI, then produces `artifacts/jelli/PredatorControlApp.exe`. This is a self-contained .NET executable; WebView2 Evergreen remains a prerequisite. Run `tools/build-jelli.ps1 -FrameworkDependent` if the target already has the .NET 10 Desktop Runtime. MSBuild also builds/embeds the frontend during a normal `dotnet build src/PredatorControlApp.csproj`.
 
-## 🚀 Quick Setup & Usage
+### Validation without hardware writes
 
-1. Download the latest release from [Releases](https://github.com/YS47/PredatorControl/releases).
-2. Run **`PredatorControl-standalone.exe`** as Administrator.
-3. *(Optional)* Toggle **"Start with Windows"** in the app settings to run silently in the system tray at login without any startup delay.
+```powershell
+npm --prefix jelli-ui test
+npm --prefix jelli-ui run lint
+dotnet run --project tests/PredatorControl.Jelli.Tests -c Release
+```
+
+The test executable opens the actual native WebView host with isolated test descriptors, unavailable telemetry and no hardware controller. It tests rendering, interactions, protocol/lifecycle behavior and reports memory across its owned process tree. Screenshots go to ignored `artifacts/screenshots`. It is not a physical hardware parity test.
+
+## Launch and test the Jelli build
+
+1. Exit any currently running PredatorControl instance through its tray. Single-instance compatibility intentionally prevents two control processes.
+2. Run `artifacts/jelli/PredatorControlApp.exe` as Administrator. There is no separate frontend to start and no terminal window.
+3. Test Jelli's single/double/right click and both panel modes. Configure its metrics and gaming HUD in Settings.
+4. Use the [manual acceptance checklist](docs/jelli-architecture.md#manual-acceptance-checklist) before distributing or merging this branch.
+5. For troubleshooting, launch with `--legacy-ui`. `--jelli-devtools` enables WebView developer tools explicitly. Native startup/tray/update behavior remains in the same application.
 
 ---
 
@@ -261,6 +248,8 @@ To silence Acer telemetry and bloatware without breaking hardware controls:
 ---
 
 ## 💡 Credits & Attribution
+
+Jelli creature renderer: [Hadisovic/Jelli](https://github.com/Hadisovic/Jelli), revision recorded in [UPSTREAM.md](jelli-ui/UPSTREAM.md).
 
 Special thanks and recognition to **[@supesonly](https://github.com/supesonly)** for the foundational inspiration and project base:
 * [supesonly/Acer-P-Helper](https://github.com/supesonly/Acer-P-Helper)

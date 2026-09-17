@@ -33,3 +33,9 @@ scratch_*.ps1
 publish_standalone/
 publish_unpacked/
 *.log
+
+# Jelli frontend / release package
+node_modules/
+jelli-ui/dist/
+artifacts/
+*.tsbuildinfo

@@ -36,6 +36,8 @@ namespace PredatorControlApp
             set { _colorIndicator = value; Invalidate(); }
         }
 
+        internal void InvokeAction() { if (Enabled) OnClick(EventArgs.Empty); }
+
         public PredatorButton()
         {
             SetStyle(

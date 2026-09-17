@@ -3,7 +3,6 @@ using System.Drawing.Drawing2D;
 using System.Drawing.Text;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
-using Microsoft.Win32;
 
 namespace PredatorControlApp
 {
@@ -18,12 +17,6 @@ namespace PredatorControlApp
         private const int WS_EX_LAYERED = 0x00080000;
         private const int WS_EX_TRANSPARENT = 0x00000020;
         private const int GWL_EXSTYLE = -20;
-
-        private const int VK_CONTROL = 0x11;
-        private const int VK_SHIFT = 0x10;
-
-        private const int WM_NCLBUTTONDOWN = 0xA1;
-        private const int HT_CAPTION = 0x2;
 
         private const int SW_SHOWNOACTIVATE = 4;
 
@@ -42,15 +35,6 @@ namespace PredatorControlApp
         [DllImport("user32.dll")]
         private static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
 
-        [DllImport("user32.dll")]
-        private static extern short GetAsyncKeyState(int vKey);
-
-        [DllImport("user32.dll")]
-        public static extern int SendMessage(IntPtr hWnd, int Msg, int wParam, int lParam);
-
-        [DllImport("user32.dll")]
-        public static extern bool ReleaseCapture();
-
         [DllImport("gdi32.dll")]
         private static extern IntPtr CreateRoundRectRgn(int x1, int y1, int x2, int y2, int cx, int cy);
 
@@ -61,9 +45,9 @@ namespace PredatorControlApp
 
         private readonly EtwFpsMonitor _fpsMonitor;
         private readonly System.Windows.Forms.Timer _renderTimer = new();
-        private readonly System.Windows.Forms.Timer _keyStateTimer = new();
+        private JelliSettings _jelliSettings = JelliSettings.Load();
+        internal int? CurrentFps => _fps;
 
-        private bool _isClickThrough = true;
         private float _dpiScale = 1.0f;
         private float _fontDpiScale = 0f;
 
@@ -141,10 +125,6 @@ namespace PredatorControlApp
             _renderTimer.Interval = 250;
             _renderTimer.Tick += (s, e) => OnRenderTick();
 
-            // Key state timer (checks Ctrl + Shift every 100ms to toggle click-through)
-            _keyStateTimer.Interval = 100;
-            _keyStateTimer.Tick += (s, e) => CheckDragModifierKeys();
-
             LoadPersistedPosition();
         }
 
@@ -153,7 +133,7 @@ namespace PredatorControlApp
             get
             {
                 var cp = base.CreateParams;
-                cp.ExStyle |= WS_EX_NOACTIVATE;
+                cp.ExStyle |= WS_EX_NOACTIVATE | WS_EX_TRANSPARENT;
                 cp.ExStyle |= WS_EX_TOOLWINDOW;
                 cp.ExStyle |= WS_EX_TOPMOST;
                 return cp;
@@ -165,7 +145,7 @@ namespace PredatorControlApp
         protected override void OnHandleCreated(EventArgs e)
         {
             base.OnHandleCreated(e);
-            SetClickThrough(true);
+            SetClickThrough();
         }
 
         public void ToggleOverlay()
@@ -200,9 +180,9 @@ namespace PredatorControlApp
                 ShowWindow(Handle, SW_SHOWNOACTIVATE);
                 Visible = true;
             }
-            SetClickThrough(true);
+            SetClickThrough();
             _renderTimer.Start();
-            _keyStateTimer.Start();
+            ApplyCorner();
             Invalidate();
         }
 
@@ -215,7 +195,7 @@ namespace PredatorControlApp
             }
 
             _renderTimer.Stop();
-            _keyStateTimer.Stop();
+
             Hide();
         }
 
@@ -296,52 +276,11 @@ namespace PredatorControlApp
             Invalidate();
         }
 
-        private void CheckDragModifierKeys()
-        {
-            // If user holds Ctrl + Shift, make the overlay interactive so they can click and drag it
-            bool ctrlPressed = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
-            bool shiftPressed = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
-            bool shouldAllowClick = ctrlPressed && shiftPressed;
-
-            if (shouldAllowClick && _isClickThrough)
-            {
-                SetClickThrough(false);
-                Cursor = Cursors.SizeAll;
-                Invalidate();
-            }
-            else if (!shouldAllowClick && !_isClickThrough)
-            {
-                SetClickThrough(true);
-                Cursor = Cursors.Default;
-                Invalidate();
-            }
-        }
-
-        private void SetClickThrough(bool clickThrough)
+        private void SetClickThrough()
         {
             if (!IsHandleCreated) return;
-            _isClickThrough = clickThrough;
             int style = GetWindowLong(Handle, GWL_EXSTYLE);
-            if (clickThrough)
-            {
-                SetWindowLong(Handle, GWL_EXSTYLE, style | WS_EX_TRANSPARENT);
-            }
-            else
-            {
-                SetWindowLong(Handle, GWL_EXSTYLE, style & ~WS_EX_TRANSPARENT);
-            }
-        }
-
-        protected override void OnMouseDown(MouseEventArgs e)
-        {
-            base.OnMouseDown(e);
-            if (e.Button == MouseButtons.Left && !_isClickThrough)
-            {
-                ReleaseCapture();
-                SendMessage(Handle, WM_NCLBUTTONDOWN, HT_CAPTION, 0);
-                SavePosition();
-                CheckDragModifierKeys();
-            }
+            SetWindowLong(Handle, GWL_EXSTYLE, style | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE);
         }
 
         private void UpdateDpiAndLayout()
@@ -353,7 +292,8 @@ namespace PredatorControlApp
             }
 
             // Dimensions calibrated to G-Helper layout
-            int w = (int)(430 * _dpiScale);
+            int logicalWidth = 430 - (_jelliSettings.OverlayGraphs ? 0 : 100) - (_jelliSettings.OverlayPower ? 0 : 50) - (_jelliSettings.OverlayUsage ? 0 : 62);
+            int w = (int)(logicalWidth * _dpiScale);
             int h = (int)(52 * _dpiScale);
             Size = new Size(w, h);
 
@@ -381,42 +321,33 @@ namespace PredatorControlApp
             }
         }
 
-        private void LoadPersistedPosition()
-        {
-            try
-            {
-                using var key = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\PredatorControl");
-                if (key != null)
-                {
-                    int x = (int)(key.GetValue("OverlayX", -1) ?? -1);
-                    int y = (int)(key.GetValue("OverlayY", -1) ?? -1);
-                    if (x >= 0 && y >= 0)
-                    {
-                        var screen = Screen.FromPoint(new Point(x, y)).WorkingArea;
-                        if (screen.Contains(x, y))
-                        {
-                            Location = new Point(x, y);
-                            return;
-                        }
-                    }
-                }
-            }
-            catch { }
+        private void LoadPersistedPosition() => ApplyCorner();
 
-            // Default: top-left corner of primary screen with padding
-            var primary = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1920, 1080);
-            Location = new Point(primary.Left + 28, primary.Top + 28);
+        internal void Configure(JelliSettings settings)
+        {
+            _jelliSettings = settings;
+            if (IsHandleCreated) UpdateDpiAndLayout();
+            ApplyCorner();
+            Invalidate();
         }
 
-        private void SavePosition()
+        private void ApplyCorner()
         {
-            try
-            {
-                using var key = Registry.CurrentUser.CreateSubKey(@"SOFTWARE\PredatorControl");
-                key?.SetValue("OverlayX", Location.X, RegistryValueKind.DWord);
-                key?.SetValue("OverlayY", Location.Y, RegistryValueKind.DWord);
-            }
-            catch { }
+            var screen = Screen.AllScreens.FirstOrDefault(s => s.DeviceName == _jelliSettings.OverlayMonitor) ?? Screen.PrimaryScreen ?? Screen.AllScreens[0];
+            var area = screen.WorkingArea;
+            int pad = (int)(16 * _dpiScale);
+            bool right = _jelliSettings.OverlayCorner.EndsWith("Right", StringComparison.Ordinal);
+            bool bottom = _jelliSettings.OverlayCorner.StartsWith("bottom", StringComparison.Ordinal);
+            Location = JelliHostForm.Clamp(new Point(right ? area.Right - Width - pad : area.Left + pad,
+                bottom ? area.Bottom - Height - pad : area.Top + pad), Size, area);
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            if (m.Msg == 0x84) { m.Result = new IntPtr(-1); return; } // HTTRANSPARENT, always.
+            if (m.Msg == 0x21) { m.Result = new IntPtr(3); return; } // MA_NOACTIVATE.
+            base.WndProc(ref m);
+            if (m.Msg == 0x007E || m.Msg == 0x02E0) { UpdateDpiAndLayout(); ApplyCorner(); }
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -437,9 +368,8 @@ namespace PredatorControlApp
                 g.FillRectangle(bgBrush, 0, 0, w, h);
             }
 
-            // 2. Rounded border (highlight in orange while user drags)
-            Color border = !_isClickThrough ? Color.FromArgb(255, 200, 50) : BorderColor;
-            using (var borderPen = new Pen(border, 1.2f * _dpiScale))
+            // 2. Restrained glass border; the HUD is always non-interactive.
+            using (var borderPen = new Pen(BorderColor, 1.2f * _dpiScale))
             {
                 int r = (int)(8 * _dpiScale);
                 using var path = GetRoundedPath(new Rectangle(0, 0, w - 1, h - 1), r);
@@ -505,73 +435,82 @@ namespace PredatorControlApp
 
             curX += 118 * _dpiScale;
 
-            // ── COLUMN 3: ROLLING 60-SECOND SPARKLINE GRAPH ──────────────────────────────
-            float chartW = 90 * _dpiScale;
-            float chartH = 34 * _dpiScale;
-            float chartX = curX;
-            float chartY = (h - chartH) / 2f;
-
-            using (var chartBgBrush = new SolidBrush(ChartBg))
-            using (var chartBorderPen = new Pen(Color.FromArgb(40, 255, 255, 255), 1f))
+            if (_jelliSettings.OverlayGraphs)
             {
-                g.FillRectangle(chartBgBrush, chartX, chartY, chartW, chartH);
-                g.DrawRectangle(chartBorderPen, chartX, chartY, chartW, chartH);
-            }
+                // ── COLUMN 3: ROLLING 60-SECOND SPARKLINE GRAPH ──────────────────────────────
+                float chartW = 90 * _dpiScale;
+                float chartH = 34 * _dpiScale;
+                float chartX = curX;
+                float chartY = (h - chartH) / 2f;
 
-            DrawSparklines(g, chartX, chartY, chartW, chartH);
-            curX += chartW + 10 * _dpiScale;
-
-            // ── COLUMN 4: POWER DRAW (W) / BATTERY ──────────────────────────────────────
-            using (var gpuBrush = new SolidBrush(GpuGreen))
-            using (var cpuBrush = new SolidBrush(CpuTeal))
-            {
-                string gpuPower = _gpuPowerW.HasValue && _gpuPowerW.Value > 0 ? $"{_gpuPowerW.Value:F1}W" : "dGPU";
-                g.DrawString(gpuPower, _fontMain!, gpuBrush, curX, row1Y);
-
-                string secondLine;
-                if (_batteryPercent.HasValue && _batteryPercent.Value < 100)
+                using (var chartBgBrush = new SolidBrush(ChartBg))
+                using (var chartBorderPen = new Pen(Color.FromArgb(40, 255, 255, 255), 1f))
                 {
-                    secondLine = _isCharging ? $"{_batteryPercent.Value:F0}%⚡" : $"{_batteryPercent.Value:F0}%";
+                    g.FillRectangle(chartBgBrush, chartX, chartY, chartW, chartH);
+                    g.DrawRectangle(chartBorderPen, chartX, chartY, chartW, chartH);
                 }
-                else
+
+                DrawSparklines(g, chartX, chartY, chartW, chartH);
+                curX += chartW + 10 * _dpiScale;
+
+            }
+            if (_jelliSettings.OverlayPower)
+            {
+                // ── COLUMN 4: POWER DRAW (W) / BATTERY ──────────────────────────────────────
+                using (var gpuBrush = new SolidBrush(GpuGreen))
+                using (var cpuBrush = new SolidBrush(CpuTeal))
                 {
-                    secondLine = "AC";
+                    string gpuPower = _gpuPowerW.HasValue && _gpuPowerW.Value > 0 ? $"{_gpuPowerW.Value:F1}W" : "dGPU";
+                    g.DrawString(gpuPower, _fontMain!, gpuBrush, curX, row1Y);
+
+                    string secondLine;
+                    if (_batteryPercent.HasValue && _batteryPercent.Value < 100)
+                    {
+                        secondLine = _isCharging ? $"{_batteryPercent.Value:F0}%⚡" : $"{_batteryPercent.Value:F0}%";
+                    }
+                    else
+                    {
+                        secondLine = "AC";
+                    }
+                    g.DrawString(secondLine, _fontMain!, cpuBrush, curX, row2Y);
                 }
-                g.DrawString(secondLine, _fontMain!, cpuBrush, curX, row2Y);
+
+                curX += 50 * _dpiScale;
+
             }
-
-            curX += 50 * _dpiScale;
-
-            // ── COLUMN 5: UTILIZATION % & MINI BARS ─────────────────────────────────────
-            float barW = 4 * _dpiScale;
-            float barH = 14 * _dpiScale;
-
-            // GPU Usage Bar
-            int gpuVal = Math.Clamp(_gpuUsage ?? 0, 0, 100);
-            using (var gpuBrush = new SolidBrush(GpuGreen))
-            using (var barBgBrush = new SolidBrush(Color.FromArgb(40, 0, 255, 128)))
+            if (_jelliSettings.OverlayUsage)
             {
-                float barX = curX;
-                g.FillRectangle(barBgBrush, barX, row1Y, barW, barH);
-                float filledH = barH * (gpuVal / 100f);
-                g.FillRectangle(gpuBrush, barX, row1Y + (barH - filledH), barW, filledH);
+                // ── COLUMN 5: UTILIZATION % & MINI BARS ─────────────────────────────────────
+                float barW = 4 * _dpiScale;
+                float barH = 14 * _dpiScale;
 
-                string gpuPct = $"{gpuVal}%";
-                g.DrawString(gpuPct, _fontSmall!, gpuBrush, barX + barW + 3 * _dpiScale, row1Y);
-            }
+                // GPU Usage Bar
+                int gpuVal = Math.Clamp(_gpuUsage ?? 0, 0, 100);
+                using (var gpuBrush = new SolidBrush(GpuGreen))
+                using (var barBgBrush = new SolidBrush(Color.FromArgb(40, 0, 255, 128)))
+                {
+                    float barX = curX;
+                    g.FillRectangle(barBgBrush, barX, row1Y, barW, barH);
+                    float filledH = barH * (gpuVal / 100f);
+                    g.FillRectangle(gpuBrush, barX, row1Y + (barH - filledH), barW, filledH);
 
-            // CPU Usage Bar
-            int cpuVal = Math.Clamp(_cpuUsage ?? 0, 0, 100);
-            using (var cpuBrush = new SolidBrush(CpuTeal))
-            using (var barBgBrush = new SolidBrush(Color.FromArgb(40, 0, 229, 255)))
-            {
-                float barX = curX;
-                g.FillRectangle(barBgBrush, barX, row2Y, barW, barH);
-                float filledH = barH * (cpuVal / 100f);
-                g.FillRectangle(cpuBrush, barX, row2Y + (barH - filledH), barW, filledH);
+                    string gpuPct = $"{gpuVal}%";
+                    g.DrawString(gpuPct, _fontSmall!, gpuBrush, barX + barW + 3 * _dpiScale, row1Y);
+                }
 
-                string cpuPct = $"{cpuVal}%";
-                g.DrawString(cpuPct, _fontSmall!, cpuBrush, barX + barW + 3 * _dpiScale, row2Y);
+                // CPU Usage Bar
+                int cpuVal = Math.Clamp(_cpuUsage ?? 0, 0, 100);
+                using (var cpuBrush = new SolidBrush(CpuTeal))
+                using (var barBgBrush = new SolidBrush(Color.FromArgb(40, 0, 229, 255)))
+                {
+                    float barX = curX;
+                    g.FillRectangle(barBgBrush, barX, row2Y, barW, barH);
+                    float filledH = barH * (cpuVal / 100f);
+                    g.FillRectangle(cpuBrush, barX, row2Y + (barH - filledH), barW, filledH);
+
+                    string cpuPct = $"{cpuVal}%";
+                    g.DrawString(cpuPct, _fontSmall!, cpuBrush, barX + barW + 3 * _dpiScale, row2Y);
+                }
             }
         }
 
@@ -627,7 +566,7 @@ namespace PredatorControlApp
             if (disposing)
             {
                 _renderTimer.Dispose();
-                _keyStateTimer.Dispose();
+
                 _fpsMonitor.Dispose();
                 _fontFps?.Dispose();
                 _fontMain?.Dispose();

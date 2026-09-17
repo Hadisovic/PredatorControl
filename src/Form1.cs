@@ -324,7 +324,9 @@ namespace PredatorControlApp
             ThemeManager.ThemeChanged += OnThemeChanged;
             ApplyCurrentTheme();
 
-            Shown += (s, e) =>
+            if (!Environment.GetCommandLineArgs().Contains("--legacy-ui")) Opacity = 0;
+
+            Shown += async (s, e) =>
             {
                 EnableDarkTitleBar();
                 Updater.ShowPendingNotes(this);
@@ -335,7 +337,7 @@ namespace PredatorControlApp
                 // Delayed settling guard: Acer services (AcerLightingService / AcerAgentService)
                 // complete their boot/logon initialization 1-4 seconds after user login.
                 // Re-assert user's saved RGB profile to prevent late-boot stomping back to Amber.
-                Task.Run(async () =>
+                _ = Task.Run(async () =>
                 {
                     await Task.Delay(2500);
                     if (!IsDisposed)
@@ -355,6 +357,8 @@ namespace PredatorControlApp
                         });
                     }
                 });
+
+                await StartJelliAsync();
             };
         }
 
@@ -496,6 +500,13 @@ namespace PredatorControlApp
         {
             if (InvokeRequired) { BeginInvoke(new Action(ToggleApp)); return; }
 
+            if (_jelli != null && !_jelliFallback)
+            {
+                if (_overlayForm?.Visible == true || !_jelli.DashboardOpen) _jelli.OpenDashboard();
+                else _jelli.Collapse();
+                return;
+            }
+
             // True toggle: hide whenever the window is visible (even if not focused, e.g. pressed during gaming),
             // show and bring to front when hidden or minimized.
             if (Visible && WindowState != FormWindowState.Minimized)
@@ -527,6 +538,7 @@ namespace PredatorControlApp
             if (_trayOverlay != null) _trayOverlay.Checked = visible;
             if (_switchOverlay != null && _switchOverlay.Checked != visible) _switchOverlay.Checked = visible;
             SaveState("OverlayEnabled", visible ? 1 : 0);
+            _jelli?.SetGaming(visible);
         }
 
         public void ToggleGameOverlay()
@@ -635,6 +647,8 @@ namespace PredatorControlApp
         {
             if (InvokeRequired) { BeginInvoke(new Action(ShowApp)); return; }
 
+            if (_jelli != null && !_jelliFallback) { _jelli.OpenDashboard(); return; }
+
             AllowSetForegroundWindow(ASFW_ANY);
             Show();
             if (WindowState == FormWindowState.Minimized)
@@ -655,6 +669,12 @@ namespace PredatorControlApp
             if (InvokeRequired) { BeginInvoke(new Action(HideApp)); return; }
 
             Hide();
+            if (_jelli != null)
+            {
+                _jelliFallback = !_jelli.Ready;
+                if (_jelli.Ready) _jelli.Collapse(); else _jelli.Hide();
+                return;
+            }
             _telemetryService?.SetPollingState(false);
             _telemetryService?.SetSensorMask(false);
         }
@@ -2338,6 +2358,7 @@ namespace PredatorControlApp
         {
             if (InvokeRequired) { Invoke(() => OnGameDetected(profile)); return; }
 
+            _jelli?.PauseColorSync();
             _isGameSyncOverriding = true;
             try { await ApplyGameProfile(profile); }
             finally { _isGameSyncOverriding = false; }
@@ -2904,6 +2925,7 @@ namespace PredatorControlApp
 
         private void OnTelemetryReceived(TelemetrySnapshot snap)
         {
+            _jelliTelemetry = snap;
             bool? confirmed = DebouncePowerLine(snap.PowerLine, _isPluggedIn, ref _pendingPluggedIn, ref _powerLineStableTicks);
 
             if (confirmed != _isPluggedIn && !_isResyncing)
@@ -3075,6 +3097,8 @@ namespace PredatorControlApp
                 _telemetryService?.Dispose();
                 _predatorKeyHook?.Dispose();
                 _gameSync.Dispose();
+                _jelli?.Dispose();
+                _overlayForm?.Dispose();
                 _wmi.Dispose();
                 _ipc?.Dispose();
                 base.OnFormClosing(e);

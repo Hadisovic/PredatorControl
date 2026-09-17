@@ -17,14 +17,14 @@ namespace PredatorControlApp
     {
         #region Theme Colors & Fonts
 
-        private static readonly Color FormBg = Color.FromArgb(22, 22, 26);
-        private static readonly Color TitleBarBg = Color.FromArgb(18, 18, 21);
-        private static readonly Color SeparatorColor = Color.FromArgb(40, 40, 44);
+        private static readonly Color FormBg = Color.FromArgb(11, 16, 24);
+        private static readonly Color TitleBarBg = Color.FromArgb(18, 31, 38);
+        private static readonly Color SeparatorColor = Color.FromArgb(35, 51, 59);
         private static readonly Color TitleTextColor = Color.FromArgb(200, 200, 205);
         private static readonly Color CloseHoverColor = Color.FromArgb(220, 50, 50);
 
-        private static readonly Color CpuCurveColor = Color.FromArgb(0, 180, 255);
-        private static readonly Color GpuCurveColor = Color.FromArgb(255, 77, 109);
+        private static readonly Color CpuCurveColor = Color.FromArgb(129, 228, 220);
+        private static readonly Color GpuCurveColor = Color.FromArgb(166, 166, 238);
 
         private static readonly Color FlashGreen = Color.FromArgb(0, 180, 80);
         private static readonly Color FlashRed = Color.FromArgb(220, 50, 50);

@@ -28,6 +28,7 @@ internal static class Program
             try {
                 await Until(() => host.Ready, 15000);
                 await Task.Delay(1000);
+                await NativeInput.Run(host, Check, () => backend.LastAction == "power.quiet");
                 await host.Browser.ExecuteScriptAsync("window.surfaceLog=[];const originalPost=window.chrome.webview.postMessage.bind(window.chrome.webview);window.chrome.webview.postMessage=m=>{if(m.action==='surface')window.surfaceLog.push(m.data);originalPost(m)};window.clickCreature=()=>{document.querySelector('canvas').dispatchEvent(new MouseEvent('mousedown',{button:0,bubbles:true}));document.dispatchEvent(new MouseEvent('mouseup',{button:0,bubbles:true}))};");
                 await host.Browser.ExecuteScriptAsync("window.clickCreature()");
                 await Task.Delay(100);

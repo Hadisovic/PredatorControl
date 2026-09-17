@@ -2,6 +2,14 @@
 
 Branch: `jelli`. Baselines and architecture: [jelli-architecture.md](jelli-architecture.md).
 
+## Native mouse regression fix
+
+The original color-keyed WinForms parent passed Windows hit testing through to the window beneath it, despite WebView content being visible. JavaScript-dispatched clicks in the earlier tests bypassed that failure. Replaced `TransparencyKey` with DWM full-client glass on a black background, preserving desktop transparency without layered-window color-key hit testing.
+
+Added native mouse tests using Windows input and `WindowFromPoint`, with the cursor restored afterward. The original host fails the creature hit-test assertion; the corrected host accepts creature clicks and dragging, dashboard actions, and trusted wheel input with actual scrolling. Tests also check input targeting after collapse and dashboard restoration from gaming. These tests use the hardware-free fixture and briefly move the pointer; run them on an interactive desktop without concurrent mouse use. The native compact screenshot was inspected to confirm desktop transparency remains intact.
+
+The updated Debug smoke run passed 35 checks, including existing SelfCheck assertions; the Release run passed 33 checks before the final two hit-test assertions were added. UI-only private working set measured 117–132 MiB in these runs. The rebuilt executable is under `artifacts/jelli-input-fix` because the running original executable in `artifacts/jelli` is locked.
+
 ## Automated checks
 
 - `.NET` Debug and Release builds: passed; no new compiler/analyzer warnings remain.

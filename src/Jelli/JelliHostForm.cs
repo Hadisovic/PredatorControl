@@ -2,6 +2,7 @@ using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 using Microsoft.Win32;
 using System.Text.Json;
+using System.Runtime.InteropServices;
 
 namespace PredatorControlApp;
 
@@ -41,8 +42,10 @@ internal sealed class JelliHostForm : Form
         ShowInTaskbar = false;
         TopMost = true;
         StartPosition = FormStartPosition.Manual;
-        BackColor = Color.Magenta;
-        TransparencyKey = Color.Magenta;
+        // A color-keyed layered parent makes the HWND WebView click-through:
+        // Windows hit-tests the parent's keyed pixels, not Chromium's visuals.
+        // DWM glass preserves transparent rendering without layered hit testing.
+        BackColor = Color.Black;
         Controls.Add(_web);
         _anchor = new(_settings.X, _settings.Y);
         SetSurface("compact");
@@ -52,6 +55,18 @@ internal sealed class JelliHostForm : Form
         Deactivate += (_, _) => { if (_surface is "menu" or "summary") SetSurface("compact"); };
         DpiChanged += (_, _) => SetSurface(_surface);
         SystemEvents.DisplaySettingsChanged += OnDisplayChanged;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Margins { public int Left, Right, Top, Bottom; }
+    [DllImport("dwmapi.dll", PreserveSig = true)]
+    private static extern int DwmExtendFrameIntoClientArea(nint window, ref Margins margins);
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        var margins = new Margins { Left = -1, Right = -1, Top = -1, Bottom = -1 };
+        Marshal.ThrowExceptionForHR(DwmExtendFrameIntoClientArea(Handle, ref margins));
     }
 
     internal async Task InitializeAsync(bool startSuspended = false)

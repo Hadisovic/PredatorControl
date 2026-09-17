@@ -54,6 +54,8 @@ The canvas publishes its dominant HSL color at most five times per second, with 
 
 ## Desktop and gaming
 
+The WebView HWND sits on a black WinForms host with DWM glass extended across the client area. Do not use `TransparencyKey` here: Windows color-key hit testing ignores the separately composed WebView visuals and passes mouse input through the host. Native input regression tests exercise the Windows hit-test path, clicks, dragging and wheel scrolling in addition to renderer-level event tests.
+
 Single click waits for Windows' double-click interval before showing the quick summary. A second click cancels it and opens the dashboard. Drag cancels pending click arbitration. Right click opens a themed keyboard-navigable menu. Escape, outside click, and focus loss close transient surfaces. Expand is the default; the attached flyout opens left when right-hand space is insufficient.
 
 Physical desktop anchor coordinates persist in the existing HKCU `SOFTWARE\PredatorControl` registry under `JelliUI`. Layout clamps against per-monitor work areas, supports negative coordinates, and reflows on display/DPI changes. Creature size and panel size use the current monitor's DPI. Per-monitor transitions and docking still require a physical multi-monitor acceptance pass.

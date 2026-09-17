@@ -64,6 +64,17 @@ namespace PredatorControlApp
         public byte CustomGpuFanSpeed => _customGpuFanSpeed;
         public bool Backlight30s => _backlight30s;
 
+        private static readonly string[] KnownWmiClasses =
+        {
+            "AcerGamingFunction",
+            "Acer_GamingFunction",
+            "AcerGamingFunctionV2",
+            "Acer_GamingFunction_V2"
+        };
+        private string? _discoveredClassName;
+
+        public string DiscoveredWmiClass => _discoveredClassName ?? "AcerGamingFunction";
+
         private ManagementObject? GetWmiObject()
         {
             lock (_lock)
@@ -74,13 +85,27 @@ namespace PredatorControlApp
 
                 try
                 {
-                    using var searcher = new ManagementObjectSearcher(@"root\WMI", "SELECT * FROM AcerGamingFunction");
-                    using var results = searcher.Get();
-                    using var enumerator = results.GetEnumerator();
-                    if (enumerator.MoveNext() && enumerator.Current is ManagementObject obj)
+                    // Probe known classes in order of generation
+                    var classesToProbe = _discoveredClassName != null
+                        ? new[] { _discoveredClassName }
+                        : KnownWmiClasses;
+
+                    foreach (var className in classesToProbe)
                     {
-                        _cachedObj = obj;
-                        _consecutiveFailures = 0;
+                        try
+                        {
+                            using var searcher = new ManagementObjectSearcher(@"root\WMI", $"SELECT * FROM {className}");
+                            using var results = searcher.Get();
+                            using var enumerator = results.GetEnumerator();
+                            if (enumerator.MoveNext() && enumerator.Current is ManagementObject obj)
+                            {
+                                _cachedObj = obj;
+                                _discoveredClassName = className;
+                                _consecutiveFailures = 0;
+                                break;
+                            }
+                        }
+                        catch { }
                     }
                 }
                 catch
@@ -1062,6 +1087,89 @@ namespace PredatorControlApp
             byte val = (byte)(lockKeys ? 0 : 3);
             byte[] kbPayload = new byte[8] { 0x03, val, 0x00, 0x00, 0x00, 0x00, 0x00, (byte)(0xFC - val) };
             return SendGamingRgbKbCommand(kbPayload);
+        }
+
+        #endregion
+
+        #region Hardware Capability & Diagnostic Probe
+
+        public static (string Manufacturer, string Model, string BiosVersion, bool IsAcerGaming) GetSystemIdentity()
+        {
+            string manufacturer = "Acer", model = "Unknown", bios = "Unknown";
+            bool isGaming = false;
+            try
+            {
+                using var csSearcher = new ManagementObjectSearcher(@"root\CIMV2", "SELECT Manufacturer, Model FROM Win32_ComputerSystem");
+                foreach (ManagementObject mo in csSearcher.Get())
+                {
+                    manufacturer = mo["Manufacturer"]?.ToString()?.Trim() ?? manufacturer;
+                    model = mo["Model"]?.ToString()?.Trim() ?? model;
+                    break;
+                }
+                using var biosSearcher = new ManagementObjectSearcher(@"root\CIMV2", "SELECT SMBIOSBIOSVersion FROM Win32_BIOS");
+                foreach (ManagementObject mo in biosSearcher.Get())
+                {
+                    bios = mo["SMBIOSBIOSVersion"]?.ToString()?.Trim() ?? bios;
+                    break;
+                }
+                isGaming = manufacturer.Contains("Acer", StringComparison.OrdinalIgnoreCase) &&
+                    (model.Contains("Predator", StringComparison.OrdinalIgnoreCase) ||
+                     model.Contains("Helios", StringComparison.OrdinalIgnoreCase) ||
+                     model.Contains("Triton", StringComparison.OrdinalIgnoreCase) ||
+                     model.Contains("Nitro", StringComparison.OrdinalIgnoreCase) ||
+                     model.Contains("PH", StringComparison.OrdinalIgnoreCase) ||
+                     model.Contains("PT", StringComparison.OrdinalIgnoreCase) ||
+                     model.Contains("AN", StringComparison.OrdinalIgnoreCase));
+            }
+            catch { }
+            return (manufacturer, model, bios, isGaming);
+        }
+
+        public string ExportDiagnosticReport()
+        {
+            var (mfg, model, bios, isGaming) = GetSystemIdentity();
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("{");
+            sb.AppendLine($"  \"TimestampUtc\": \"{DateTime.UtcNow:O}\",");
+            sb.AppendLine($"  \"Manufacturer\": \"{mfg}\",");
+            sb.AppendLine($"  \"Model\": \"{model}\",");
+            sb.AppendLine($"  \"BiosVersion\": \"{bios}\",");
+            sb.AppendLine($"  \"IsAcerGamingChassis\": {isGaming.ToString().ToLowerInvariant()},");
+            sb.AppendLine($"  \"DiscoveredWmiClass\": \"{DiscoveredWmiClass}\",");
+
+            // Probe available Acer WMI classes
+            var availableClasses = new List<string>();
+            foreach (var cls in KnownWmiClasses)
+            {
+                try
+                {
+                    using var s = new ManagementObjectSearcher(@"root\WMI", $"SELECT * FROM {cls}");
+                    using var res = s.Get();
+                    if (res.Count > 0) availableClasses.Add(cls);
+                }
+                catch { }
+            }
+            sb.AppendLine($"  \"AvailableGamingWmiClasses\": [ {string.Join(", ", availableClasses.Select(c => $"\"{c}\""))} ],");
+
+            // Check AASSvc Named Pipe
+            bool pipeAvailable = false;
+            try
+            {
+                using var pipe = new NamedPipeClientStream(".", "AcerAgentPipe", PipeDirection.InOut);
+                pipe.Connect(100);
+                pipeAvailable = pipe.IsConnected;
+            }
+            catch { }
+            sb.AppendLine($"  \"AcerAgentPipeAvailable\": {pipeAvailable.ToString().ToLowerInvariant()},");
+
+            // Fan readings check
+            int? cpuRpm = CpuFanRpm;
+            int? gpuRpm = GpuFanRpm;
+            sb.AppendLine($"  \"CpuFanRpm\": {(cpuRpm.HasValue ? cpuRpm.Value.ToString() : "null")},");
+            sb.AppendLine($"  \"GpuFanRpm\": {(gpuRpm.HasValue ? gpuRpm.Value.ToString() : "null")}");
+            sb.AppendLine("}");
+
+            return sb.ToString();
         }
 
         #endregion

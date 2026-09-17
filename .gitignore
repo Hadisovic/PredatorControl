@@ -33,6 +33,7 @@ scratch_*.ps1
 publish_standalone/
 publish_unpacked/
 publish_winx64/
+publish/
 scratch/
 node_modules/
 dist/

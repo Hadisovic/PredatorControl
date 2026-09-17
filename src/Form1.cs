@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Security.Principal;
@@ -338,6 +338,7 @@ namespace PredatorControlApp
                 ThemeManager.ThemeChanged -= OnThemeChanged;
                 try { _overlayForm?.Dispose(); } catch { }
                 try { NvmlGpuMonitor.Shutdown(); } catch { }
+                try { _wmi?.SetFanBehavior(0x01); } catch { }
             };
 
             ThemeManager.ThemeChanged += OnThemeChanged;
@@ -1067,6 +1068,20 @@ namespace PredatorControlApp
             _trayMenu.Items.Add(_trayOverlay);
 
             _trayMenu.Items.Add(new ToolStripSeparator());
+            _trayMenu.Items.Add("Export Hardware Diagnostic Report", null, (s, e) =>
+            {
+                try
+                {
+                    string dump = _wmi.ExportDiagnosticReport();
+                    string path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "PredatorControl_Diagnostic.json");
+                    File.WriteAllText(path, dump);
+                    MessageBox.Show($"Hardware diagnostic report saved to your Desktop:\n{path}\n\nYou can attach this file to a GitHub issue or discussion to help support your laptop model!", "Diagnostic Report Exported", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show($"Could not export report: {ex.Message}", "Export Failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            });
             _trayMenu.Items.Add("Open Dashboard", null, (s, e) => ShowApp());
             _trayMenu.Items.Add("Exit", null, (s, e) => { _isClosing = true; Application.Exit(); });
         }
@@ -2910,6 +2925,23 @@ namespace PredatorControlApp
                             {
                                 _btnGpuAuto.Visible = false;
                                 if (_trayGpuAuto != null) _trayGpuAuto.Visible = false;
+                            }
+
+                            if ((_gpuCapability & 2) == 0)
+                            {
+                                if (_btnGpuDiscrete != null)
+                                {
+                                    _btnGpuDiscrete.Enabled = false;
+                                    _btnGpuDiscrete.Text = "Discrete (N/A)";
+                                }
+                                if (_trayGpuDiscrete != null)
+                                {
+                                    _trayGpuDiscrete.Enabled = false;
+                                }
+                                if (_lblGpuRestartNotice != null)
+                                {
+                                    _lblGpuRestartNotice.Text = "Physical MUX switch not present on this model (Optimus Only)";
+                                }
                             }
 
                             if (liveMode.HasValue)

@@ -5,6 +5,13 @@ using System.Runtime.Versioning;
 
 namespace PredatorControlApp
 {
+    public enum AcerChassisFamily
+    {
+        Predator,
+        Nitro,
+        GenericAcer
+    }
+
     [SupportedOSPlatform("windows")]
     public class WmiController : IDisposable
     {
@@ -237,26 +244,55 @@ namespace PredatorControlApp
                     var obj = GetWmiObject();
                     if (obj == null) return false;
 
-                    using var inParams = obj.GetMethodParameters("SetGamingRgbKb");
-                    if (inParams == null) return false;
-
-                    if (inParams.Properties["gmInput"]?.IsArray == true)
+                    // 1. Primary for modern 4-zone (Helios 16/18, Triton, Nitro 16/17)
+                    try
                     {
-                        inParams["gmInput"] = payload;
+                        using var inParams = obj.GetMethodParameters("SetGamingRgbKb");
+                        if (inParams != null)
+                        {
+                            if (inParams.Properties["gmInput"]?.IsArray == true)
+                            {
+                                inParams["gmInput"] = payload;
+                            }
+                            else
+                            {
+                                ulong val = 0;
+                                for (int i = 0; i < Math.Min(payload.Length, 8); i++)
+                                    val |= ((ulong)payload[i]) << (i * 8);
+                                inParams["gmInput"] = val;
+                            }
+
+                            using var outParams = obj.InvokeMethod("SetGamingRgbKb", inParams, null);
+                            if (outParams?["gmOutput"] != null)
+                            {
+                                ulong result = Convert.ToUInt64(outParams["gmOutput"]);
+                                if ((result & 0xFF) == 0) return true;
+                            }
+                        }
                     }
-                    else
+                    catch { }
+
+                    // 2. Fallback for older generations (Nitro 5 / Helios 300) using SetGamingKBBacklight
+                    try
                     {
-                        ulong val = 0;
-                        for (int i = 0; i < Math.Min(payload.Length, 8); i++)
-                            val |= ((ulong)payload[i]) << (i * 8);
-                        inParams["gmInput"] = val;
+                        using var bkIn = obj.GetMethodParameters("SetGamingKBBacklight");
+                        if (bkIn != null)
+                        {
+                            ulong val = 0;
+                            for (int i = 0; i < Math.Min(payload.Length, 8); i++)
+                                val |= ((ulong)payload[i]) << (i * 8);
+                            bkIn["gmInput"] = val;
+                            using var bkOut = obj.InvokeMethod("SetGamingKBBacklight", bkIn, null);
+                            if (bkOut?["gmOutput"] != null)
+                            {
+                                ulong res = Convert.ToUInt64(bkOut["gmOutput"]);
+                                return (res & 0xFF) == 0;
+                            }
+                        }
                     }
+                    catch { }
 
-                    using var outParams = obj.InvokeMethod("SetGamingRgbKb", inParams, null);
-                    if (outParams?["gmOutput"] == null) return false;
-
-                    ulong result = Convert.ToUInt64(outParams["gmOutput"]);
-                    return (result & 0xFF) == 0;
+                    return false;
                 }
                 catch
                 {
@@ -311,7 +347,37 @@ namespace PredatorControlApp
         public int? GpuTemp => GetSensorReading(0x0A);
         public int? CpuFanRpm => GetSensorReading(0x02);
         public int? GpuFanRpm => GetSensorReading(0x06);
+        public int? AuxFanRpm => GetSensorReading(0x07) ?? GetSensorReading(0x0B);
+        public bool HasAuxFan => AuxFanRpm.HasValue && AuxFanRpm.Value > 0;
         public int? GpuPowerW => GetSensorReading(0x0D);
+
+        private AcerChassisFamily? _chassisFamily;
+        public AcerChassisFamily ChassisFamily
+        {
+            get
+            {
+                if (_chassisFamily.HasValue) return _chassisFamily.Value;
+                var (_, model, _, _) = GetSystemIdentity();
+                if (model.Contains("Nitro", StringComparison.OrdinalIgnoreCase) ||
+                    model.StartsWith("AN", StringComparison.OrdinalIgnoreCase))
+                {
+                    _chassisFamily = AcerChassisFamily.Nitro;
+                }
+                else if (model.Contains("Predator", StringComparison.OrdinalIgnoreCase) ||
+                         model.Contains("Helios", StringComparison.OrdinalIgnoreCase) ||
+                         model.Contains("Triton", StringComparison.OrdinalIgnoreCase) ||
+                         model.StartsWith("PH", StringComparison.OrdinalIgnoreCase) ||
+                         model.StartsWith("PT", StringComparison.OrdinalIgnoreCase))
+                {
+                    _chassisFamily = AcerChassisFamily.Predator;
+                }
+                else
+                {
+                    _chassisFamily = AcerChassisFamily.GenericAcer;
+                }
+                return _chassisFamily.Value;
+            }
+        }
 
         public void SetPowerMode(byte mode)
         {
@@ -1165,8 +1231,12 @@ namespace PredatorControlApp
             // Fan readings check
             int? cpuRpm = CpuFanRpm;
             int? gpuRpm = GpuFanRpm;
+            int? auxRpm = AuxFanRpm;
+            sb.AppendLine($"  \"ChassisFamily\": \"{ChassisFamily}\",");
             sb.AppendLine($"  \"CpuFanRpm\": {(cpuRpm.HasValue ? cpuRpm.Value.ToString() : "null")},");
-            sb.AppendLine($"  \"GpuFanRpm\": {(gpuRpm.HasValue ? gpuRpm.Value.ToString() : "null")}");
+            sb.AppendLine($"  \"GpuFanRpm\": {(gpuRpm.HasValue ? gpuRpm.Value.ToString() : "null")},");
+            sb.AppendLine($"  \"HasAuxFan\": {HasAuxFan.ToString().ToLowerInvariant()},");
+            sb.AppendLine($"  \"AuxFanRpm\": {(auxRpm.HasValue ? auxRpm.Value.ToString() : "null")}");
             sb.AppendLine("}");
 
             return sb.ToString();

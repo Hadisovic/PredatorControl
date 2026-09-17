@@ -1138,7 +1138,7 @@ namespace PredatorControlApp
 
             _lblTitle = new Label
             {
-                Text = "Predator Control",
+                Text = _wmi.ChassisFamily == AcerChassisFamily.Nitro ? "Nitro Control" : "Predator Control",
                 ForeColor = Color.White,
                 Font = FontTitle,
                 AutoSize = true,
@@ -1243,8 +1243,9 @@ namespace PredatorControlApp
 
             y += S(24);
             int btnW = (contentW - 4 * gap) / 5;
+            string balancedText = _wmi.ChassisFamily == AcerChassisFamily.Nitro ? "Default" : "Balanced";
             _btnQuiet = MakeButton("Quiet", pad, y, btnW, btnH);
-            _btnBalanced = MakeButton("Balanced", pad + (btnW + gap), y, btnW, btnH);
+            _btnBalanced = MakeButton(balancedText, pad + (btnW + gap), y, btnW, btnH);
             _btnPerform = MakeButton("Perf", pad + (btnW + gap) * 2, y, btnW, btnH);
             _btnTurbo = MakeButton("Turbo", pad + (btnW + gap) * 3, y, btnW, btnH);
             _btnEco = MakeButton("Eco", pad + (btnW + gap) * 4, y, btnW, btnH);

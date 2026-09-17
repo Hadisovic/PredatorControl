@@ -119,9 +119,29 @@ namespace PredatorControlApp
                         ThemeMode.OledBlack => OledBlack,
                         _ => PredatorTeal
                     };
+                    return;
                 }
             }
             catch { }
+
+            // If no preference saved, adapt default theme based on detected chassis
+            try
+            {
+                var (_, model, _, _) = WmiController.GetSystemIdentity();
+                if (model.Contains("Nitro", StringComparison.OrdinalIgnoreCase) ||
+                    model.StartsWith("AN", StringComparison.OrdinalIgnoreCase))
+                {
+                    _current = NitroCrimson;
+                }
+                else
+                {
+                    _current = PredatorTeal;
+                }
+            }
+            catch
+            {
+                _current = PredatorTeal;
+            }
         }
 
         private static void SaveTheme(ThemeMode mode)

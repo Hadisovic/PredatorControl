@@ -92,12 +92,26 @@ namespace PredatorControlApp
 
                 try
                 {
-                    // Probe known classes in order of generation
-                    var classesToProbe = _discoveredClassName != null
-                        ? new[] { _discoveredClassName }
-                        : KnownWmiClasses;
+                    // Direct fast-path if class was already discovered
+                    if (_discoveredClassName != null)
+                    {
+                        try
+                        {
+                            using var searcher = new ManagementObjectSearcher(@"root\WMI", $"SELECT * FROM {_discoveredClassName}");
+                            using var results = searcher.Get();
+                            using var enumerator = results.GetEnumerator();
+                            if (enumerator.MoveNext() && enumerator.Current is ManagementObject obj)
+                            {
+                                _cachedObj = obj;
+                                _consecutiveFailures = 0;
+                                return _cachedObj;
+                            }
+                        }
+                        catch { }
+                    }
 
-                    foreach (var className in classesToProbe)
+                    // Probe known classes in order of generation
+                    foreach (var className in KnownWmiClasses)
                     {
                         try
                         {
@@ -1159,36 +1173,58 @@ namespace PredatorControlApp
 
         #region Hardware Capability & Diagnostic Probe
 
+        private static (string Manufacturer, string Model, string BiosVersion, bool IsAcerGaming)? _cachedSystemIdentity;
+        private static readonly object _identityLock = new();
+
         public static (string Manufacturer, string Model, string BiosVersion, bool IsAcerGaming) GetSystemIdentity()
         {
-            string manufacturer = "Acer", model = "Unknown", bios = "Unknown";
-            bool isGaming = false;
-            try
+            if (_cachedSystemIdentity.HasValue) return _cachedSystemIdentity.Value;
+
+            lock (_identityLock)
             {
-                using var csSearcher = new ManagementObjectSearcher(@"root\CIMV2", "SELECT Manufacturer, Model FROM Win32_ComputerSystem");
-                foreach (ManagementObject mo in csSearcher.Get())
+                if (_cachedSystemIdentity.HasValue) return _cachedSystemIdentity.Value;
+
+                string manufacturer = "Acer", model = "Unknown", bios = "Unknown";
+                bool isGaming = false;
+                try
                 {
-                    manufacturer = mo["Manufacturer"]?.ToString()?.Trim() ?? manufacturer;
-                    model = mo["Model"]?.ToString()?.Trim() ?? model;
-                    break;
+                    using var csSearcher = new ManagementObjectSearcher(@"root\CIMV2", "SELECT Manufacturer, Model FROM Win32_ComputerSystem");
+                    using var csResults = csSearcher.Get();
+                    foreach (ManagementObject mo in csResults)
+                    {
+                        using (mo)
+                        {
+                            manufacturer = mo["Manufacturer"]?.ToString()?.Trim() ?? manufacturer;
+                            model = mo["Model"]?.ToString()?.Trim() ?? model;
+                            break;
+                        }
+                    }
+
+                    using var biosSearcher = new ManagementObjectSearcher(@"root\CIMV2", "SELECT SMBIOSBIOSVersion FROM Win32_BIOS");
+                    using var biosResults = biosSearcher.Get();
+                    foreach (ManagementObject mo in biosResults)
+                    {
+                        using (mo)
+                        {
+                            bios = mo["SMBIOSBIOSVersion"]?.ToString()?.Trim() ?? bios;
+                            break;
+                        }
+                    }
+
+                    isGaming = manufacturer.Contains("Acer", StringComparison.OrdinalIgnoreCase) &&
+                        (model.Contains("Predator", StringComparison.OrdinalIgnoreCase) ||
+                         model.Contains("Helios", StringComparison.OrdinalIgnoreCase) ||
+                         model.Contains("Triton", StringComparison.OrdinalIgnoreCase) ||
+                         model.Contains("Nitro", StringComparison.OrdinalIgnoreCase) ||
+                         model.Contains("PH", StringComparison.OrdinalIgnoreCase) ||
+                         model.Contains("PT", StringComparison.OrdinalIgnoreCase) ||
+                         model.Contains("AN", StringComparison.OrdinalIgnoreCase));
                 }
-                using var biosSearcher = new ManagementObjectSearcher(@"root\CIMV2", "SELECT SMBIOSBIOSVersion FROM Win32_BIOS");
-                foreach (ManagementObject mo in biosSearcher.Get())
-                {
-                    bios = mo["SMBIOSBIOSVersion"]?.ToString()?.Trim() ?? bios;
-                    break;
-                }
-                isGaming = manufacturer.Contains("Acer", StringComparison.OrdinalIgnoreCase) &&
-                    (model.Contains("Predator", StringComparison.OrdinalIgnoreCase) ||
-                     model.Contains("Helios", StringComparison.OrdinalIgnoreCase) ||
-                     model.Contains("Triton", StringComparison.OrdinalIgnoreCase) ||
-                     model.Contains("Nitro", StringComparison.OrdinalIgnoreCase) ||
-                     model.Contains("PH", StringComparison.OrdinalIgnoreCase) ||
-                     model.Contains("PT", StringComparison.OrdinalIgnoreCase) ||
-                     model.Contains("AN", StringComparison.OrdinalIgnoreCase));
+                catch { }
+
+                _cachedSystemIdentity = (manufacturer, model, bios, isGaming);
+                return _cachedSystemIdentity.Value;
             }
-            catch { }
-            return (manufacturer, model, bios, isGaming);
         }
 
         public string ExportDiagnosticReport()
@@ -1211,7 +1247,8 @@ namespace PredatorControlApp
                 {
                     using var s = new ManagementObjectSearcher(@"root\WMI", $"SELECT * FROM {cls}");
                     using var res = s.Get();
-                    if (res.Count > 0) availableClasses.Add(cls);
+                    using var en = res.GetEnumerator();
+                    if (en.MoveNext()) availableClasses.Add(cls);
                 }
                 catch { }
             }

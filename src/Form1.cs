@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Security.Principal;
@@ -222,6 +222,9 @@ namespace PredatorControlApp
         private Label _lblBacklight30s = null!;
 
         private PredatorToggle _switchWinKeyLock = null!;
+        private Label? _lblJelliEnabled;
+        private PredatorToggle? _switchJelliEnabled;
+        private ToolStripMenuItem? _trayJelliToggle;
         private Label _lblWinKeyLock = null!;
 
         private GameOverlayForm? _overlayForm;
@@ -340,7 +343,25 @@ namespace PredatorControlApp
             ThemeManager.ThemeChanged += OnThemeChanged;
             ApplyCurrentTheme();
 
-            Shown += (s, e) =>
+            int jelliPref = 1;
+            try
+            {
+                using var k = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\PredatorControl");
+                if (k != null) jelliPref = GetInt(k, "JelliEnabled", 1, 0, 1);
+            }
+            catch { }
+
+            if (jelliPref == 0 || Environment.GetCommandLineArgs().Contains("--legacy-ui"))
+            {
+                _jelliFallback = true;
+                Opacity = 1;
+            }
+            else
+            {
+                Opacity = 0;
+            }
+
+            Shown += async (s, e) =>
             {
                 EnableDarkTitleBar();
                 Updater.ShowPendingNotes(this);
@@ -351,7 +372,7 @@ namespace PredatorControlApp
                 // Delayed settling guard: Acer services (AcerLightingService / AcerAgentService)
                 // complete their boot/logon initialization 1-4 seconds after user login.
                 // Re-assert user's saved RGB profile to prevent late-boot stomping back to Amber.
-                Task.Run(async () =>
+                _ = Task.Run(async () =>
                 {
                     await Task.Delay(2500);
                     if (!IsDisposed)
@@ -371,6 +392,11 @@ namespace PredatorControlApp
                         });
                     }
                 });
+
+                if (!_jelliFallback)
+                {
+                    await StartJelliAsync();
+                }
             };
         }
 
@@ -512,14 +538,22 @@ namespace PredatorControlApp
         {
             if (InvokeRequired) { BeginInvoke(new Action(ToggleApp)); return; }
 
+            if (_jelli != null && !_jelliFallback)
+            {
+                if (_overlayForm?.Visible == true || !_jelli.DashboardOpen) _jelli.OpenDashboard();
+                else _jelli.Collapse();
+                return;
+            }
+
             // True toggle: hide whenever the window is visible (even if not focused, e.g. pressed during gaming),
             // show and bring to front when hidden or minimized.
-            if (Visible && WindowState != FormWindowState.Minimized)
+            if (Visible && WindowState != FormWindowState.Minimized && Opacity > 0)
             {
                 HideApp();
             }
             else
             {
+                Opacity = 1;
                 ShowApp();
             }
         }
@@ -549,6 +583,7 @@ namespace PredatorControlApp
             if (_trayOverlay != null) _trayOverlay.Checked = visible;
             if (_switchOverlay != null && _switchOverlay.Checked != visible) _switchOverlay.Checked = visible;
             SaveState("OverlayEnabled", visible ? 1 : 0);
+            _jelli?.SetGaming(visible);
         }
 
         public void ToggleGameOverlay()
@@ -679,6 +714,9 @@ namespace PredatorControlApp
         {
             if (InvokeRequired) { BeginInvoke(new Action(ShowApp)); return; }
 
+            if (_jelli != null && !_jelliFallback) { _jelli.OpenDashboard(); return; }
+
+            Opacity = 1;
             AllowSetForegroundWindow(ASFW_ANY);
             Show();
             if (WindowState == FormWindowState.Minimized)
@@ -699,6 +737,11 @@ namespace PredatorControlApp
             if (InvokeRequired) { BeginInvoke(new Action(HideApp)); return; }
 
             Hide();
+            if (_jelli != null && !_jelliFallback)
+            {
+                if (_jelli.Ready) _jelli.Collapse(); else _jelli.Hide();
+                return;
+            }
             _telemetryService?.SetPollingState(false);
             _telemetryService?.SetSensorMask(false);
         }
@@ -1010,6 +1053,12 @@ namespace PredatorControlApp
             });
             hardwareMenu.DropDownItems.AddRange([trayWinKey, trayLcdOverdrive]);
             _trayMenu.Items.Add(hardwareMenu);
+
+            _trayJelliToggle = new ToolStripMenuItem("  Jelli Desktop Companion", null, (s, e) => SetJelliEnabled(!_jelliFallback))
+            {
+                Checked = !_jelliFallback
+            };
+            _trayMenu.Items.Add(_trayJelliToggle);
 
             _trayOverlay = new ToolStripMenuItem("  Gaming Overlay (Ctrl+Shift+O)", null, (s, e) => ToggleGameOverlay())
             {
@@ -1647,6 +1696,25 @@ namespace PredatorControlApp
                 });
             };
 
+            // Jelli Desktop Companion Toggle
+            y += switchH + S(12);
+            _lblJelliEnabled = MakeLabel("Jelli Companion (Desktop Creature)", pad, y, FontBody, Color.FromArgb(120, 120, 135));
+            CenterV(_lblJelliEnabled, y, switchH);
+
+            _switchJelliEnabled = new PredatorToggle
+            {
+                Location = new Point(ClientSize.Width - pad - S(48), y),
+                Size = new Size(S(48), switchH),
+                Checked = !_jelliFallback
+            };
+            _contentPanel.Controls.Add(_switchJelliEnabled);
+
+            _switchJelliEnabled.CheckedChanged += (s, e) =>
+            {
+                if ((!_jelliFallback) != _switchJelliEnabled.Checked)
+                    SetJelliEnabled(_switchJelliEnabled.Checked);
+            };
+
             // GAME SYNC
             y += switchH + S(22);
             AddSeparator(y);
@@ -1938,6 +2006,7 @@ namespace PredatorControlApp
 
                 // System & Hardware Controls
                 if (_switchWinKeyLock != null) _switchWinKeyLock.Left = ClientSize.Width - pad - S(48);
+                if (_switchJelliEnabled != null) _switchJelliEnabled.Left = ClientSize.Width - pad - S(48);
 
                 // Gaming Overlay controls
                 if (_switchOverlay != null) _switchOverlay.Left = ClientSize.Width - pad - S(48);
@@ -2406,6 +2475,7 @@ namespace PredatorControlApp
         {
             if (InvokeRequired) { Invoke(() => OnGameDetected(profile)); return; }
 
+            _jelli?.PauseColorSync();
             _isGameSyncOverriding = true;
             try { await ApplyGameProfile(profile); }
             finally { _isGameSyncOverriding = false; }
@@ -2787,6 +2857,13 @@ namespace PredatorControlApp
                     BeginInvoke(() => SetOverlayVisible(true));
                 }
 
+                // Jelli Desktop Companion
+                int savedJelli = GetInt(key, "JelliEnabled", 1, 0, 1);
+                bool jelliActive = (savedJelli == 1) && !Environment.GetCommandLineArgs().Contains("--legacy-ui");
+                _jelliFallback = !jelliActive;
+                if (_switchJelliEnabled != null) _switchJelliEnabled.Checked = jelliActive;
+                if (_trayJelliToggle != null) _trayJelliToggle.Checked = jelliActive;
+
                 // Windows Key Lock
                 int savedWinKeyLock = GetInt(key, "LockWinKey", 0, 0, 1);
                 if (_switchWinKeyLock != null) _switchWinKeyLock.Checked = (savedWinKeyLock == 1);
@@ -2972,6 +3049,7 @@ namespace PredatorControlApp
 
         private void OnTelemetryReceived(TelemetrySnapshot snap)
         {
+            _jelliTelemetry = snap;
             bool? confirmed = DebouncePowerLine(snap.PowerLine, _isPluggedIn, ref _pendingPluggedIn, ref _powerLineStableTicks);
 
             if (confirmed != _isPluggedIn && !_isResyncing)
@@ -3143,6 +3221,8 @@ namespace PredatorControlApp
                 _telemetryService?.Dispose();
                 _predatorKeyHook?.Dispose();
                 _gameSync.Dispose();
+                _jelli?.Dispose();
+                _overlayForm?.Dispose();
                 _wmi.Dispose();
                 _ipc?.Dispose();
                 base.OnFormClosing(e);

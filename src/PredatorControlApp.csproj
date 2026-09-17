@@ -15,6 +15,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3650.58" />
     <PackageReference Include="System.Management" Version="10.0.0-preview.*" />
   </ItemGroup>
 
@@ -28,4 +29,17 @@
     </None>
   </ItemGroup>
 
+  <Target Name="RemoveUnusedWebViewWpf" BeforeTargets="ResolveAssemblyReferences">
+    <ItemGroup><Reference Remove="@(Reference)" Condition="'%(Reference.Filename)' == 'Microsoft.Web.WebView2.Wpf'" /></ItemGroup>
+  </Target>
+  <Target Name="BuildJelliFrontend" BeforeTargets="BeforeBuild" Condition="'$(SkipJelliBuild)' != 'true'">
+    <Exec WorkingDirectory="$(MSBuildProjectDirectory)/../jelli-ui" Command="npm ci --no-audit --no-fund" Condition="!Exists('$(MSBuildProjectDirectory)/../jelli-ui/node_modules/.package-lock.json')" />
+    <Exec WorkingDirectory="$(MSBuildProjectDirectory)/../jelli-ui" Command="npm run build" />
+  </Target>
+  <Target Name="IncludeJelliAssets" BeforeTargets="AssignTargetPaths;PrepareResources" DependsOnTargets="BuildJelliFrontend">
+    <ItemGroup>
+      <_JelliAsset Include="../jelli-ui/dist/**/*" />
+      <EmbeddedResource Include="@(_JelliAsset)" LogicalName="JelliUI/%(_JelliAsset.RecursiveDir)%(_JelliAsset.Filename)%(_JelliAsset.Extension)" />
+    </ItemGroup>
+  </Target>
 </Project>

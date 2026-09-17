@@ -17,7 +17,6 @@ namespace PredatorControlApp
     {
         private static readonly string[] ReleasesEndpoints =
         {
-            "https://api.github.com/repos/YS47/PredatorControl/releases",
             "https://api.github.com/repos/Hadisovic/PredatorControl/releases"
         };
         private const string RegPath = @"SOFTWARE\PredatorControl";

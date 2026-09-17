@@ -44,6 +44,13 @@ namespace PredatorControlApp
         public event EventHandler? ValueChanged;
         public event EventHandler? ValueCommitted;
 
+        internal void CommitValue(int value)
+        {
+            Value = value;
+            ValueChanged?.Invoke(this, EventArgs.Empty);
+            ValueCommitted?.Invoke(this, EventArgs.Empty);
+        }
+
         public PredatorSlider()
         {
             SetStyle(

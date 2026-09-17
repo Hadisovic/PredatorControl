@@ -80,6 +80,8 @@ namespace PredatorControlApp
         public int ScalePercent { get; private set; } = 100;
         public event Action<OverlayMode, int>? OverlayStateChanged;
 
+        internal int? CurrentFps => _fps;
+
         // Telemetry State
         private int? _fps;
         private int? _cpuTemp;
@@ -105,7 +107,7 @@ namespace PredatorControlApp
         private int _historyHead = 0;
         private int _historyCount = 0;
 
-        // Visual Colors (matching G-Helper reference screenshots)
+        // Visual Colors (matching G-Helper reference screenshots & Jelli aesthetic)
         private static readonly Color GpuGreen = Color.FromArgb(255, 0, 229, 117);  // Neon Mint/Green (#00E575)
         private static readonly Color CpuTeal = Color.FromArgb(255, 0, 180, 216);   // Sky Cyan/Blue (#00B4D8 / #38B6FF)
         private static readonly Color DimGpu = Color.FromArgb(170, 0, 190, 95);
@@ -131,6 +133,10 @@ namespace PredatorControlApp
         private string? _toastText;
         private DateTime _toastExpiry;
 
+        // Jelli Settings & Corner Position
+        private JelliSettings _jelliSettings = JelliSettings.Load();
+        private bool _hasCustomPosition;
+
         // Desktop shell executables where FPS monitoring is paused
         private static readonly HashSet<string> ExcludedProcesses = new(StringComparer.OrdinalIgnoreCase)
         {
@@ -147,7 +153,7 @@ namespace PredatorControlApp
             StartPosition = FormStartPosition.Manual;
             DoubleBuffered = true;
             BackColor = OverlayBg;
-            Opacity = 0.88; // Translucent dark glass look matching G-Helper
+            Opacity = 0.88; // Translucent dark glass look matching G-Helper & Jelli
 
             SetStyle(ControlStyles.AllPaintingInWmPaint |
                      ControlStyles.UserPaint |
@@ -197,6 +203,14 @@ namespace PredatorControlApp
             base.OnHandleCreated(e);
             SetClickThrough(true);
             UpdateDpiAndLayout();
+        }
+
+        protected override void OnDpiChanged(DpiChangedEventArgs e)
+        {
+            base.OnDpiChanged(e);
+            _dpiScale = e.DeviceDpiNew / 96.0f;
+            UpdateDpiAndLayout();
+            Invalidate();
         }
 
         public void ToggleOverlay()
@@ -354,40 +368,36 @@ namespace PredatorControlApp
 
         private void CheckDragModifierKeys()
         {
-            // Support Ctrl + Shift + Alt (from screenshot 4) and Ctrl + Shift
+            // Support Ctrl + Shift + Alt and Ctrl + Shift
             bool ctrl = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
             bool shift = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
             bool alt = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
 
-            bool isModPressed = (ctrl && shift && alt) || (ctrl && shift);
-            Point mousePos = Cursor.Position;
-            bool isHover = Bounds.Contains(mousePos);
+            bool interactiveRequested = (ctrl && shift && alt) || (ctrl && shift);
 
-            bool shouldAllowClick = isModPressed && isHover;
-
-            if (shouldAllowClick && _isClickThrough)
+            if (interactiveRequested && _isClickThrough)
             {
                 SetClickThrough(false);
-                Cursor = Cursors.SizeAll;
+                ShowToast("OVERLAY REPOSITIONING ACTIVE (DRAG TO MOVE)");
                 Invalidate();
             }
-            else if (!shouldAllowClick && !_isClickThrough)
+            else if (!interactiveRequested && !_isClickThrough)
             {
                 SetClickThrough(true);
-                Cursor = Cursors.Default;
                 Invalidate();
             }
         }
 
-        private void SetClickThrough(bool clickThrough)
+        private void SetClickThrough(bool enable)
         {
-            if (!IsHandleCreated) return;
-            _isClickThrough = clickThrough;
-            int style = GetWindowLong(Handle, GWL_EXSTYLE);
-            if (clickThrough)
-                SetWindowLong(Handle, GWL_EXSTYLE, style | WS_EX_TRANSPARENT);
+            _isClickThrough = enable;
+            int exStyle = GetWindowLong(Handle, GWL_EXSTYLE);
+            if (enable)
+                exStyle |= WS_EX_TRANSPARENT | WS_EX_LAYERED;
             else
-                SetWindowLong(Handle, GWL_EXSTYLE, style & ~WS_EX_TRANSPARENT);
+                exStyle = (exStyle & ~WS_EX_TRANSPARENT) | WS_EX_LAYERED;
+
+            SetWindowLong(Handle, GWL_EXSTYLE, exStyle);
         }
 
         protected override void OnMouseDown(MouseEventArgs e)
@@ -424,6 +434,7 @@ namespace PredatorControlApp
                     else
                     {
                         // Drag: save coordinates
+                        _hasCustomPosition = true;
                         SavePosition();
                     }
 
@@ -445,6 +456,7 @@ namespace PredatorControlApp
 
         private float GetTotalScale()
         {
+            // Fully dynamic to display scale (DPI) and user scale percent
             return _dpiScale * (ScalePercent / 100.0f);
         }
 
@@ -452,38 +464,87 @@ namespace PredatorControlApp
         {
             if (!IsHandleCreated) return;
 
-            using (var g = CreateGraphics())
-            {
-                _dpiScale = g.DpiX / 96.0f;
-                if (_dpiScale < 1.0f) _dpiScale = 1.0f;
-            }
+            // Authoritative monitor DPI via PerMonitorV2
+            float formDpi = DeviceDpi > 0 ? DeviceDpi : 96.0f;
+            _dpiScale = formDpi / 96.0f;
+            if (_dpiScale < 0.5f) _dpiScale = 1.0f;
 
             float scale = GetTotalScale();
+            EnsureFonts();
 
-            // Calibrated widths per mode matching G-Helper
-            int baseW = Mode switch
+            // Calculate precise required size using Graphics.MeasureString so no clipping ever occurs
+            int w, h;
+            using (var g = CreateGraphics())
             {
-                OverlayMode.Light => 155,
-                OverlayMode.Default => 315,
-                OverlayMode.Full => 435,
-                _ => 315
-            };
+                float calculatedW = CalculateRequiredWidth(g, scale);
+                w = Math.Max((int)Math.Ceiling(calculatedW), (int)Math.Ceiling(140f * scale));
+                h = (int)Math.Ceiling(46f * scale);
+            }
 
-            int w = (int)(baseW * scale);
-            int h = (int)(44 * scale);
             Size = new Size(w, h);
 
-            int radius = (int)(7 * scale);
+            int radius = Math.Max(4, (int)(8 * scale));
             IntPtr rgn = CreateRoundRectRgn(0, 0, w + 1, h + 1, radius, radius);
             SetWindowRgn(Handle, rgn, true);
 
-            EnsureFonts();
+            if (!_hasCustomPosition)
+            {
+                ApplyCorner();
+            }
+        }
+
+        private float CalculateRequiredWidth(Graphics g, float scale)
+        {
+            float curX = 10f * scale;
+
+            // Col 1: Big FPS counter (measured with dummy 3 digits "144")
+            var fpsSize = g.MeasureString("144", _fontFps!);
+            curX += Math.Max(38f * scale, fpsSize.Width + 6f * scale);
+
+            // Col 2: GPU/CPU stats
+            if (Mode == OverlayMode.Light)
+            {
+                var lblSz = g.MeasureString("GPU: ", _fontLabel!);
+                var tempSz = g.MeasureString("88°", _fontMain!);
+                var pwrSz = g.MeasureString(" 140.0W", _fontMain!);
+                curX += lblSz.Width + tempSz.Width + pwrSz.Width + 14f * scale;
+            }
+            else
+            {
+                var lblSz = g.MeasureString("GPU: ", _fontLabel!);
+                var tempSz = g.MeasureString("88°", _fontMain!);
+                var rpmSz = g.MeasureString(" 4800", _fontMain!);
+                var supSz = g.MeasureString("RPM", _fontSuperscript!);
+                curX += lblSz.Width + tempSz.Width + rpmSz.Width + supSz.Width + 16f * scale;
+
+                // Col 3: Sparkline chart
+                float chartW = 86f * scale;
+                curX += chartW + 10f * scale;
+
+                // Col 4: Power
+                var pwrSz = g.MeasureString("140.0W", _fontMain!);
+                curX += pwrSz.Width + 10f * scale;
+
+                if (Mode == OverlayMode.Full)
+                {
+                    // Col 5: Load %
+                    var loadSz = g.MeasureString("100%", _fontMain!);
+                    float barW = 4.0f * scale;
+                    curX += loadSz.Width + 3f * scale + barW + 12f * scale;
+
+                    // Col 6: VRAM / RAM
+                    var memSz = g.MeasureString("32.0GB", _fontMain!);
+                    curX += memSz.Width + 3f * scale + barW + 12f * scale;
+                }
+            }
+
+            return curX;
         }
 
         private void EnsureFonts()
         {
             float scale = GetTotalScale();
-            if (Math.Abs(_fontDpiScale - scale) > 0.01f || _fontFps == null || _fontMain == null || _fontSmall == null || _fontLabel == null || _fontSuperscript == null || _fontToast == null)
+            if (Math.Abs(_fontDpiScale - scale) > 0.005f || _fontFps == null || _fontMain == null || _fontSmall == null || _fontLabel == null || _fontSuperscript == null || _fontToast == null)
             {
                 _fontFps?.Dispose();
                 _fontMain?.Dispose();
@@ -492,12 +553,13 @@ namespace PredatorControlApp
                 _fontSuperscript?.Dispose();
                 _fontToast?.Dispose();
 
-                _fontFps = new Font("Segoe UI", 17f * scale, FontStyle.Bold);
-                _fontMain = new Font("Segoe UI", 8.25f * scale, FontStyle.Bold);
-                _fontSmall = new Font("Segoe UI", 7.0f * scale, FontStyle.Regular);
-                _fontLabel = new Font("Segoe UI", 7.5f * scale, FontStyle.Bold);
-                _fontSuperscript = new Font("Segoe UI", 5.5f * scale, FontStyle.Bold);
-                _fontToast = new Font("Segoe UI", 7.5f * scale, FontStyle.Bold);
+                // Using GraphicsUnit.Pixel guarantees exact linear scaling with display scale (DPI) & user scale
+                _fontFps = new Font("Segoe UI", Math.Max(10f, 22.0f * scale), FontStyle.Bold, GraphicsUnit.Pixel);
+                _fontMain = new Font("Segoe UI", Math.Max(7f, 11.0f * scale), FontStyle.Bold, GraphicsUnit.Pixel);
+                _fontSmall = new Font("Segoe UI", Math.Max(6f, 9.5f * scale), FontStyle.Regular, GraphicsUnit.Pixel);
+                _fontLabel = new Font("Segoe UI", Math.Max(6f, 10.0f * scale), FontStyle.Bold, GraphicsUnit.Pixel);
+                _fontSuperscript = new Font("Segoe UI", Math.Max(5f, 7.5f * scale), FontStyle.Bold, GraphicsUnit.Pixel);
+                _fontToast = new Font("Segoe UI", Math.Max(6f, 10.0f * scale), FontStyle.Bold, GraphicsUnit.Pixel);
 
                 _fontDpiScale = scale;
             }
@@ -525,8 +587,11 @@ namespace PredatorControlApp
             try
             {
                 using var key = Registry.CurrentUser.CreateSubKey(@"SOFTWARE\PredatorControl");
-                key?.SetValue("OverlayMode", (int)Mode, RegistryValueKind.DWord);
-                key?.SetValue("OverlayScale", ScalePercent, RegistryValueKind.DWord);
+                if (key != null)
+                {
+                    key.SetValue("OverlayMode", (int)Mode, RegistryValueKind.DWord);
+                    key.SetValue("OverlayScale", ScalePercent, RegistryValueKind.DWord);
+                }
             }
             catch { }
         }
@@ -538,23 +603,25 @@ namespace PredatorControlApp
                 using var key = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\PredatorControl");
                 if (key != null)
                 {
-                    int x = (int)(key.GetValue("OverlayX", -1) ?? -1);
-                    int y = (int)(key.GetValue("OverlayY", -1) ?? -1);
-                    if (x >= 0 && y >= 0)
+                    object? xVal = key.GetValue("OverlayX");
+                    object? yVal = key.GetValue("OverlayY");
+                    if (xVal != null && yVal != null)
                     {
-                        var screen = Screen.FromPoint(new Point(x, y)).WorkingArea;
-                        if (screen.Contains(x, y))
-                        {
-                            Location = new Point(x, y);
-                            return;
-                        }
+                        int x = (int)xVal;
+                        int y = (int)yVal;
+                        Screen scr = Screen.FromPoint(new Point(x, y));
+                        var bounds = scr.WorkingArea;
+                        x = Math.Clamp(x, bounds.Left, Math.Max(bounds.Left, bounds.Right - Width));
+                        y = Math.Clamp(y, bounds.Top, Math.Max(bounds.Top, bounds.Bottom - Height));
+                        Location = new Point(x, y);
+                        _hasCustomPosition = true;
+                        return;
                     }
                 }
             }
             catch { }
 
-            var primary = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1920, 1080);
-            Location = new Point(primary.Left + 24, primary.Top + 24);
+            ApplyCorner();
         }
 
         private void SavePosition()
@@ -562,52 +629,89 @@ namespace PredatorControlApp
             try
             {
                 using var key = Registry.CurrentUser.CreateSubKey(@"SOFTWARE\PredatorControl");
-                key?.SetValue("OverlayX", Location.X, RegistryValueKind.DWord);
-                key?.SetValue("OverlayY", Location.Y, RegistryValueKind.DWord);
+                if (key != null)
+                {
+                    key.SetValue("OverlayX", Location.X, RegistryValueKind.DWord);
+                    key.SetValue("OverlayY", Location.Y, RegistryValueKind.DWord);
+                }
             }
             catch { }
+        }
+
+        internal void Configure(JelliSettings settings)
+        {
+            _jelliSettings = settings;
+
+            // If settings contains overlay mode or scale, apply them
+            if (!string.IsNullOrEmpty(settings.OverlayMode))
+            {
+                Mode = settings.OverlayMode.ToLowerInvariant() switch
+                {
+                    "light" => OverlayMode.Light,
+                    "full" => OverlayMode.Full,
+                    _ => OverlayMode.Default
+                };
+            }
+
+            if (settings.OverlayScale >= 50 && settings.OverlayScale <= 300)
+            {
+                ScalePercent = settings.OverlayScale;
+            }
+
+            if (IsHandleCreated) UpdateDpiAndLayout();
+            ApplyCorner();
+            Invalidate();
+        }
+
+        private void ApplyCorner()
+        {
+            var screen = Screen.AllScreens.FirstOrDefault(s => s.DeviceName == _jelliSettings.OverlayMonitor) ?? Screen.PrimaryScreen ?? Screen.AllScreens[0];
+            var area = screen.WorkingArea;
+            int pad = (int)(16 * _dpiScale);
+            bool right = _jelliSettings.OverlayCorner.EndsWith("Right", StringComparison.Ordinal);
+            bool bottom = _jelliSettings.OverlayCorner.StartsWith("bottom", StringComparison.Ordinal);
+
+            int targetX = right ? area.Right - Width - pad : area.Left + pad;
+            int targetY = bottom ? area.Bottom - Height - pad : area.Top + pad;
+
+            targetX = Math.Clamp(targetX, area.Left, Math.Max(area.Left, area.Right - Width));
+            targetY = Math.Clamp(targetY, area.Top, Math.Max(area.Top, area.Bottom - Height));
+
+            Location = new Point(targetX, targetY);
         }
 
         protected override void OnPaint(PaintEventArgs e)
         {
             base.OnPaint(e);
+
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
-
-            EnsureFonts();
+            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
 
             float scale = GetTotalScale();
-            int w = Width;
-            int h = Height;
+            int w = ClientSize.Width;
+            int h = ClientSize.Height;
 
-            // 1. Dark translucent glass background
-            using (var bgBrush = new SolidBrush(OverlayBg))
+            // Outer subtle border
+            using (var borderPen = new Pen(!_isClickThrough ? ActiveBorderColor : BorderColor, 1.0f))
+            using (var borderPath = GetRoundedPath(new Rectangle(0, 0, w - 1, h - 1), (int)(7 * scale)))
             {
-                g.FillRectangle(bgBrush, 0, 0, w, h);
+                g.DrawPath(borderPen, borderPath);
             }
 
-            // 2. Subtle border (glowing amber while interactive/hovered)
-            Color border = !_isClickThrough ? ActiveBorderColor : BorderColor;
-            using (var borderPen = new Pen(border, 1.2f * scale))
-            {
-                int r = (int)(7 * scale);
-                using var path = GetRoundedPath(new Rectangle(0, 0, w - 1, h - 1), r);
-                g.DrawPath(borderPen, path);
-            }
+            float curX = 10f * scale;
+            float row1Y = (float)Math.Round(5f * scale);
+            float row2Y = (float)Math.Round(23f * scale);
 
-            float curX = 8 * scale;
-            float row1Y = 5f * scale;
-            float row2Y = 22.5f * scale;
-
-            // ── COLUMN 1: BIG BOLD FPS COUNTER (Green #00E575) ──────────────────────────
+            // ── COLUMN 1: BIG BOLD FPS COUNTER ──────────────────────────────────────────
             string fpsText = _fps.HasValue ? _fps.Value.ToString() : "--";
             using (var fpsBrush = new SolidBrush(GpuGreen))
             {
                 var fpsSize = g.MeasureString(fpsText, _fontFps!);
                 float fpsY = (h - fpsSize.Height) / 2f;
                 g.DrawString(fpsText, _fontFps!, fpsBrush, curX, fpsY);
-                curX += Math.Max(42 * scale, fpsSize.Width + 6 * scale);
+                curX += Math.Max(38f * scale, fpsSize.Width + 6f * scale);
             }
 
             // ── COLUMN 2: HARDWARE STATS (GPU & CPU) ────────────────────────────────────
@@ -621,9 +725,6 @@ namespace PredatorControlApp
 
                 if (Mode == OverlayMode.Light)
                 {
-                    // Light Mode (Screenshot 2):
-                    // GPU: 51°  7.9W
-                    // CPU: 55°  10.8W
                     string gpuPower = _gpuPowerW.HasValue ? $"{_gpuPowerW.Value:F1}W" : (_isPluggedIn ? "--W" : "BAT");
                     string cpuPower = _cpuPowerW.HasValue && _cpuPowerW.Value > 0 ? $"{_cpuPowerW.Value:F1}W" : (_batteryPercent.HasValue ? $"{_batteryPercent.Value:F0}%" : "--W");
 
@@ -635,18 +736,15 @@ namespace PredatorControlApp
 
                     g.DrawString($"  {gpuPower}", _fontMain!, gpuBrush, curX + lblW + tempW, row1Y);
 
-                    // CPU Row
                     g.DrawString("CPU: ", _fontLabel!, cpuBrush, curX, row2Y + 1 * scale);
                     g.DrawString(cpuTemp, _fontMain!, cpuBrush, curX + lblW, row2Y);
                     g.DrawString($"  {cpuPower}", _fontMain!, cpuBrush, curX + lblW + tempW, row2Y);
 
-                    curX += lblW + tempW + 55 * scale;
+                    float pwrW = Math.Max(g.MeasureString($"  {gpuPower}", _fontMain!).Width, g.MeasureString($"  {cpuPower}", _fontMain!).Width);
+                    curX += lblW + tempW + pwrW + 12f * scale;
                 }
                 else
                 {
-                    // Default and Full Modes (Screenshots 1 & 3):
-                    // GPU: 50° 2900 RPM
-                    // CPU: 56° 3500 RPM
                     string gpuRpm = _gpuFanRpm.HasValue && _gpuFanRpm.Value > 0 ? $" {_gpuFanRpm.Value}" : " --";
                     string cpuRpm = _cpuFanRpm.HasValue && _cpuFanRpm.Value > 0 ? $" {_cpuFanRpm.Value}" : " --";
 
@@ -661,6 +759,7 @@ namespace PredatorControlApp
                     float rpmW = g.MeasureString(gpuRpm, _fontMain!).Width;
 
                     g.DrawString("RPM", _fontSuperscript!, dimGpuBrush, curX + lblW + tempW + rpmW, row1Y + 1.2f * scale);
+                    float supW = g.MeasureString("RPM", _fontSuperscript!).Width;
 
                     // CPU Row
                     g.DrawString("CPU: ", _fontLabel!, cpuBrush, curX, row2Y + 1 * scale);
@@ -668,7 +767,7 @@ namespace PredatorControlApp
                     g.DrawString(cpuRpm, _fontMain!, cpuBrush, curX + lblW + tempW, row2Y);
                     g.DrawString("RPM", _fontSuperscript!, dimCpuBrush, curX + lblW + tempW + rpmW, row2Y + 1.2f * scale);
 
-                    curX += lblW + tempW + rpmW + 28 * scale;
+                    curX += lblW + tempW + rpmW + supW + 14f * scale;
                 }
             }
 
@@ -680,8 +779,8 @@ namespace PredatorControlApp
             if (Mode != OverlayMode.Light)
             {
                 hasChart = true;
-                chartW = 84 * scale;
-                float chartH = 30 * scale;
+                chartW = 86f * scale;
+                float chartH = 30f * scale;
                 chartX = curX;
                 float chartY = (h - chartH) / 2f;
 
@@ -693,7 +792,7 @@ namespace PredatorControlApp
                 }
 
                 DrawSparklines(g, chartX, chartY, chartW, chartH, scale);
-                curX += chartW + 10 * scale;
+                curX += chartW + 10f * scale;
 
                 // ── COLUMN 4: POWER DRAW (W) / BATTERY ──────────────────────────────────
                 using (var gpuBrush = new SolidBrush(GpuGreen))
@@ -706,7 +805,7 @@ namespace PredatorControlApp
                     g.DrawString(cpuPower, _fontMain!, cpuBrush, curX, row2Y);
 
                     float powerW = Math.Max(g.MeasureString(gpuPower, _fontMain!).Width, g.MeasureString(cpuPower, _fontMain!).Width);
-                    curX += powerW + 10 * scale;
+                    curX += powerW + 10f * scale;
                 }
             }
 
@@ -729,12 +828,12 @@ namespace PredatorControlApp
                     g.DrawString(cpuPct, _fontMain!, cpuBrush, curX, row2Y);
 
                     float pctW = Math.Max(g.MeasureString(gpuPct, _fontMain!).Width, g.MeasureString(cpuPct, _fontMain!).Width);
-                    float barX = curX + pctW + 3 * scale;
+                    float barX = curX + pctW + 3f * scale;
 
                     DrawMiniBar(g, barX, row1Y + 1 * scale, barW, barH, gpuVal, GpuGreen, DimGpu, scale);
                     DrawMiniBar(g, barX, row2Y + 1 * scale, barW, barH, cpuVal, CpuTeal, DimCpu, scale);
 
-                    curX = barX + barW + 10 * scale;
+                    curX = barX + barW + 10f * scale;
                 }
 
                 // Column 6: VRAM (GPU) & RAM (CPU) GB + vertical segmented bar
@@ -756,7 +855,7 @@ namespace PredatorControlApp
                     g.DrawString(ramText, _fontMain!, cpuBrush, curX, row2Y);
 
                     float memW = Math.Max(g.MeasureString(vramText, _fontMain!).Width, g.MeasureString(ramText, _fontMain!).Width);
-                    float barX = curX + memW + 3 * scale;
+                    float barX = curX + memW + 3f * scale;
 
                     DrawMiniBar(g, barX, row1Y + 1 * scale, barW, barH, vramPct, GpuGreen, DimGpu, scale);
                     DrawMiniBar(g, barX, row2Y + 1 * scale, barW, barH, ramPct, CpuTeal, DimCpu, scale);
@@ -789,16 +888,17 @@ namespace PredatorControlApp
             float gap = 1.0f * scale;
             float totalGap = (segmentCount - 1) * gap;
             float segH = Math.Max(1.0f, (h - totalGap) / segmentCount);
-            int litCount = (int)Math.Round((percent / 100f) * segmentCount);
+
+            int filledSegments = (int)Math.Round((percent / 100.0) * segmentCount);
 
             using var activeBrush = new SolidBrush(activeColor);
-            using var dimBrush = new SolidBrush(Color.FromArgb(50, inactiveBg.R, inactiveBg.G, inactiveBg.B));
+            using var inactiveBrush = new SolidBrush(inactiveBg);
 
             for (int i = 0; i < segmentCount; i++)
             {
-                float segY = y + h - (i + 1) * segH - (i * gap);
-                bool isLit = i < litCount;
-                g.FillRectangle(isLit ? activeBrush : dimBrush, x, segY, w, segH);
+                float segY = y + (segmentCount - 1 - i) * (segH + gap);
+                var brush = i < filledSegments ? activeBrush : inactiveBrush;
+                g.FillRectangle(brush, x, segY, w, segH);
             }
         }
 
@@ -806,52 +906,52 @@ namespace PredatorControlApp
         {
             if (_historyCount < 2) return;
 
-            int count = Math.Min(_historyCount, HistoryLength);
-            float minTemp = 35f;
-            float maxTemp = 95f;
+            const float minTemp = 35f;
+            const float maxTemp = 95f;
+            float tempRange = maxTemp - minTemp;
 
-            var gpuPts = new List<PointF>(count);
-            var cpuPts = new List<PointF>(count);
+            var gpuPts = new List<PointF>();
+            var cpuPts = new List<PointF>();
+
+            int count = Math.Min(_historyCount, HistoryLength);
+            float stepX = w / (HistoryLength - 1);
 
             for (int i = 0; i < count; i++)
             {
-                int idx = (_historyHead - count + i + HistoryLength) % HistoryLength;
-                float px = x + (i / (float)(count - 1)) * w;
+                int ringIdx = (_historyHead - count + i + HistoryLength) % HistoryLength;
+                float px = x + (HistoryLength - count + i) * stepX;
 
-                float gVal = Math.Clamp(_gpuHistory[idx], minTemp, maxTemp);
-                float gNorm = (gVal - minTemp) / (maxTemp - minTemp);
-                float gy = y + h - (gNorm * (h - 4)) - 2;
-                gpuPts.Add(new PointF(px, gy));
+                float gTemp = _gpuHistory[ringIdx];
+                if (gTemp > 0)
+                {
+                    float normG = Math.Clamp((gTemp - minTemp) / tempRange, 0f, 1f);
+                    float pyG = y + h - (normG * h);
+                    gpuPts.Add(new PointF(px, pyG));
+                }
 
-                float cVal = Math.Clamp(_cpuHistory[idx], minTemp, maxTemp);
-                float cNorm = (cVal - minTemp) / (maxTemp - minTemp);
-                float cy = y + h - (cNorm * (h - 4)) - 2;
-                cpuPts.Add(new PointF(px, cy));
+                float cTemp = _cpuHistory[ringIdx];
+                if (cTemp > 0)
+                {
+                    float normC = Math.Clamp((cTemp - minTemp) / tempRange, 0f, 1f);
+                    float pyC = y + h - (normC * h);
+                    cpuPts.Add(new PointF(px, pyC));
+                }
             }
 
-            // Subtle gradient area fill under lines
-            if (gpuPts.Count >= 2)
-            {
-                using var gpuAreaPath = new GraphicsPath();
-                gpuAreaPath.AddLine(x, y + h, gpuPts[0].X, gpuPts[0].Y);
-                for (int i = 1; i < gpuPts.Count; i++) gpuAreaPath.AddLine(gpuPts[i - 1], gpuPts[i]);
-                gpuAreaPath.AddLine(gpuPts[^1], new PointF(gpuPts[^1].X, y + h));
-                gpuAreaPath.CloseFigure();
-
-                using var gpuGrad = new LinearGradientBrush(new RectangleF(x, y, w, h), Color.FromArgb(40, 0, 229, 117), Color.FromArgb(0, 0, 229, 117), LinearGradientMode.Vertical);
-                g.FillPath(gpuGrad, gpuAreaPath);
-            }
-
+            // Shaded gradient fill beneath CPU line
             if (cpuPts.Count >= 2)
             {
-                using var cpuAreaPath = new GraphicsPath();
-                cpuAreaPath.AddLine(x, y + h, cpuPts[0].X, cpuPts[0].Y);
-                for (int i = 1; i < cpuPts.Count; i++) cpuAreaPath.AddLine(cpuPts[i - 1], cpuPts[i]);
-                cpuAreaPath.AddLine(cpuPts[^1], new PointF(cpuPts[^1].X, y + h));
-                cpuAreaPath.CloseFigure();
+                using var fillPath = new GraphicsPath();
+                fillPath.AddLine(cpuPts[0].X, y + h, cpuPts[0].X, cpuPts[0].Y);
+                for (int i = 1; i < cpuPts.Count; i++)
+                    fillPath.AddLine(cpuPts[i - 1], cpuPts[i]);
+                fillPath.AddLine(cpuPts[^1].X, cpuPts[^1].Y, cpuPts[^1].X, y + h);
+                fillPath.CloseFigure();
 
-                using var cpuGrad = new LinearGradientBrush(new RectangleF(x, y, w, h), Color.FromArgb(30, 0, 180, 216), Color.FromArgb(0, 0, 180, 216), LinearGradientMode.Vertical);
-                g.FillPath(cpuGrad, cpuAreaPath);
+                using var fillBrush = new LinearGradientBrush(
+                    new PointF(x, y), new PointF(x, y + h),
+                    Color.FromArgb(40, 0, 180, 216), Color.FromArgb(0, 0, 180, 216));
+                g.FillPath(fillBrush, fillPath);
             }
 
             // Crisp line strokes
@@ -866,7 +966,8 @@ namespace PredatorControlApp
         private static GraphicsPath GetRoundedPath(Rectangle rect, int radius)
         {
             var path = new GraphicsPath();
-            int d = radius * 2;
+            float d = radius * 2f;
+
             path.AddArc(rect.X, rect.Y, d, d, 180, 90);
             path.AddArc(rect.Right - d, rect.Y, d, d, 270, 90);
             path.AddArc(rect.Right - d, rect.Bottom - d, d, d, 0, 90);

@@ -32,4 +32,8 @@ scratch_*.ps1
 *.zip
 publish_standalone/
 publish_unpacked/
+publish_winx64/
+scratch/
+node_modules/
+dist/
 *.log

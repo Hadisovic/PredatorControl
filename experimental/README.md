@@ -6,9 +6,13 @@ This folder contains pre-built experimental binaries for testing on Predator and
   - Framework-dependent single-file executable.
   - Requires .NET 10 Desktop Runtime installed.
 
-- **`PredatorControl-exp-standalone.zip`** (~44.5 MB)
-  - Self-contained single-file executable (`PredatorControl-exp-standalone.exe`).
-  - Extract and double-click to run. Includes embedded .NET runtime and WebView2 Jelli companion.
+- **`PredatorControl-exp-standalone.exe`** (~52.8 MB)
+  - Self-contained single-file executable with native assembly compression (`EnableCompressionInSingleFile=true`).
+  - No .NET installation required; double-click to run anywhere.
+  - Reduced by 55.7% from the uncompressed 119 MB build.
+
+- **`PredatorControl-exp-standalone.zip`** (~46.7 MB)
+  - Compressed zip archive of the standalone executable.
 
 ### Features in this Experimental Build:
 1. **Dedicated Overlay Settings Dialog**:

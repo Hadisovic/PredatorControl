@@ -73,7 +73,10 @@ internal sealed class JelliHostForm : Form
     {
         _gaming = startSuspended;
         string profile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PredatorControl", _persist ? "WebView2" : "WebView2-Test");
-        var options = new CoreWebView2EnvironmentOptions { AdditionalBrowserArguments = "--disable-gpu --js-flags=\"--max-old-space-size=16 --max-semi-space-size=1 --optimize-for-size\"" };
+        var options = new CoreWebView2EnvironmentOptions
+        {
+            AdditionalBrowserArguments = "--single-process --in-process-gpu --disable-gpu-compositing --disable-software-rasterizer --renderer-process-limit=1 --disable-features=TranslateUI,MediaSessionService,OptimizationHints --js-flags=\"--max-old-space-size=16 --max-semi-space-size=1 --optimize-for-size\""
+        };
         var env = await CoreWebView2Environment.CreateAsync(userDataFolder: profile, options: options);
         await _web.EnsureCoreWebView2Async(env);
         var core = _web.CoreWebView2;

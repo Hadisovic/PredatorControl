@@ -352,22 +352,14 @@ e5555ed 2026-09-08 Remove obsolete revision executables, keep active running EXE
 8517795 2026-09-08 Pin update checker to Hadisovic/PredatorControl GitHub releases and set version to 1.0.0
 05b366a 2026-09-08 Fix System.Management.dll reference stub replacing with runtime library to restore WMI sensors
 c112daa 2026-09-08 Add UI preview screenshot to assets
-ff3b7c8 2026-09-08 Add updated dashboard and controls preview screenshots
-84a3900 2026-09-08 Add credits to original creator supesonly/Acer-P-Helper
-6e9c66a 2026-09-10 Fix startup task: eliminate logon delay (PT0S), prevent task skip on reboot, add boot task
-5e34300 2026-09-10 Bump version to 1.0.1 hotfix (zero-delay startup, boot limiter, and single-click tray)
-d96d3d2 2026-09-10 Fix hardware power and fan modes: connect Acer OEM agent service, dual-dispatch ACPI profiles
-8e14b8c 2026-09-11 Revert automatic fan mode override on Turbo mode selection: keep active fan mode
-1814690 2026-09-14 Fix keyboard backlight getting stuck on Amber on boot/reboot: correct LightingProfile.ini offset
-890f87c 2026-09-14 Fix RGB effect speed slider double-scaling calculation and optimize live RGB responsiveness
-2498c8f 2026-09-16 Bump version to 1.1.0: Add GPU MUX switch support (Optimus, Discrete GPU, Auto)
-71c11de 2026-09-16 Update release binaries to v1.1.0 with latest commit SHA
-daeb3a7 2026-09-16 Add automatic Acer OEM services optimization to silence bloatware and telemetry
-1b3d7d6 2026-09-16 feat: enforce High CPU Priority class, logon task priority, and IFEO registration
-4b8850c 2026-09-16 fix: Predator key true toggle -- hides app regardless of focus state
-5d793a9 2026-09-16 fix: Predator key -- add confirmed hardware codes VK=0xFF SC=0x75 captured via sniffer
-1e94952 2026-09-17 fix: resolve overlay BackColor transparency crash and package standalone and win-x64 binaries
-49a556c 2026-09-17 docs: update README with Gaming Overlay HUD, new screenshots, 4 essential Acer services, and 40MB footprint
+1.0.0   2026-09-08 Initial pre-release with Acer ACPI WMI hardware control and tray management
+1.0.1   2026-09-10 Fix startup task: zero logon delay (PT0S), prevent task skip on reboot, add boot task
+1.1.0   2026-09-16 Major: Add GPU MUX switch support (Optimus, Discrete GPU, Auto) and hardware Predator Key
+1.1.1   2026-09-16 Add automatic Acer OEM services optimization to silence bloatware and enforce High CPU Priority
+1.1.2   2026-09-16 In-Game Gaming Overlay HUD (ETW frame monitor) and automatic update system
+1.1.3   2026-09-17 3-Mode Overlay HUD & Native NVML GPU telemetry / RAPL power readings
+1.2.0   2026-09-17 Major: Jelli Desktop companion UI integration via Microsoft Edge WebView2
+1.2.1   2026-09-17 Jelli toggle true-off, RGB 4-zone synchronization, and LightingProfile.ini fixes
 1.2.2   2026-09-19 Release v1.2.2: Dedicated Overlay Settings dialog, universal chassis adaptation, Nitro/Predator profile routing, Ctrl+Shift hotkeys, embedded native WebView2Loader with zero-DLL dependency, and non-exp binaries.
 ```
 

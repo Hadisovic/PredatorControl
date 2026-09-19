@@ -1,3 +1,4 @@
+#if DEBUG
 using System.Diagnostics;
 
 namespace PredatorControlApp
@@ -139,3 +140,5 @@ namespace PredatorControlApp
         }
     }
 }
+#endif
+

@@ -140,7 +140,9 @@ namespace PredatorControlApp
             ApplicationConfiguration.Initialize();
             Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
 
+#if DEBUG
             SelfCheck.Run();
+#endif
 
             Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
             Application.ThreadException += (s, e) => Report(e.Exception, false);

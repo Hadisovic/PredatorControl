@@ -455,6 +455,7 @@ namespace PredatorControlApp
 
         private void OnRenderTick()
         {
+            bool isExcluded = false;
             try
             {
                 IntPtr fgWnd = GetForegroundWindow();
@@ -466,10 +467,8 @@ namespace PredatorControlApp
                         try
                         {
                             using var proc = Process.GetProcessById((int)procId);
-                            if (!ExcludedProcesses.Contains(proc.ProcessName))
-                                _fpsMonitor.TargetPid = (int)procId;
-                            else
-                                _fpsMonitor.TargetPid = 0;
+                            isExcluded = ExcludedProcesses.Contains(proc.ProcessName);
+                            _fpsMonitor.TargetPid = isExcluded ? 0 : (int)procId;
                         }
                         catch
                         {
@@ -480,23 +479,10 @@ namespace PredatorControlApp
             }
             catch { }
 
-            if (OverlayOnlyInGames)
+            if (OverlayOnlyInGames && isExcluded)
             {
-                IntPtr fgHwnd = GetForegroundWindow();
-                if (fgHwnd != IntPtr.Zero)
-                {
-                    GetWindowThreadProcessId(fgHwnd, out uint pid);
-                    try
-                    {
-                        using var proc = Process.GetProcessById((int)pid);
-                        if (ExcludedProcesses.Contains(proc.ProcessName))
-                        {
-                            if (Opacity > 0.0) Opacity = 0.0;
-                            return;
-                        }
-                    }
-                    catch { }
-                }
+                if (Opacity > 0.0) Opacity = 0.0;
+                return;
             }
 
             double targetOpacity = Math.Clamp(TransparencyPercent / 100.0, 0.1, 1.0);

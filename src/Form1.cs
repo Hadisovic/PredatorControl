@@ -197,7 +197,7 @@ namespace PredatorControlApp
         internal static readonly byte[] AcProfileValues = { 0xFF, 0x00, 0x01, 0x04, 0x05 };
         internal static readonly byte[] BatteryProfileValues = { 0xFF, 0x00, 0x01, 0x06 };
 
-        private PredatorSwitch _switchBatteryLimit = null!;
+        private PredatorToggle _switchBatteryLimit = null!;
         private Label _lblBatteryStatus = null!;
 
         private GameSyncController _gameSync = null!;
@@ -404,14 +404,17 @@ namespace PredatorControlApp
         {
             try
             {
-                var procs = System.Diagnostics.Process.GetProcessesByName("PredatorSense");
+                var procs = System.Diagnostics.Process.GetProcessesByName("PredatorSense")
+                    .Concat(System.Diagnostics.Process.GetProcessesByName("NitroSense"))
+                    .ToArray();
                 if (procs.Length > 0)
                 {
+                    string senseName = procs[0].ProcessName;
                     var res = MessageBox.Show(
-                        "PredatorSense is currently running in the background.\n\n" +
-                        "Running both PredatorSense and Predator Control simultaneously causes hardware conflicts on the laptop's Embedded Controller (EC), causing keyboard lighting and sensor glitches.\n\n" +
-                        "Would you like to close PredatorSense now to ensure smooth operation?",
-                        "PredatorSense Conflict Detected",
+                        $"{senseName} is currently running in the background.\n\n" +
+                        $"Running both {senseName} and Predator Control simultaneously causes hardware conflicts on the laptop's Embedded Controller (EC), causing keyboard lighting and sensor glitches.\n\n" +
+                        $"Would you like to close {senseName} now to ensure smooth operation?",
+                        $"{senseName} Conflict Detected",
                         MessageBoxButtons.YesNo,
                         MessageBoxIcon.Warning);
 
@@ -1471,7 +1474,7 @@ namespace PredatorControlApp
             _lblBatteryStatus = MakeLabel("Full Charge (100%)", pad, y, FontBody, Color.FromArgb(120, 120, 135));
             CenterV(_lblBatteryStatus, y, switchH);
 
-            _switchBatteryLimit = new PredatorSwitch
+            _switchBatteryLimit = new PredatorToggle
             {
                 Location = new Point(ClientSize.Width - pad - S(48), y),
                 Size = new Size(S(48), switchH)

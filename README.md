@@ -24,7 +24,7 @@ Direct ACPI WMI hardware control, **~40 MB RAM** (vs 1.5 GB+), and only **4 esse
 ### 🖼️ UI & Gaming Overlay Previews
 
 <div align="center">
-  <h4>🎮 In-Game Gaming Overlay HUD (G-Helper Style & Zero-Injection ETW FPS Counter)</h4>
+  <h4>🎮 In-Game Gaming Overlay HUD (Zero-Injection ETW FPS Counter)</h4>
   <p><img src="assets/preview_overlay.png" width="620" alt="In-Game Gaming Overlay HUD"/></p>
   <br/>
   <table>
@@ -143,7 +143,7 @@ You can run `disable_acer_bloatware.bat` anytime to apply this optimization with
 - 🖥️ **Refresh Rate Switcher**: Switch internal display (60Hz ↔ 165Hz/240Hz) and external monitors via Win32 CCD API.
 
 ### 🎮 OSD & In-Game Gaming Overlay
-- ⚡ **In-Game Gaming Overlay HUD (G-Helper Style)**: Real-time neon green FPS counter (powered by zero-injection Windows ETW kernel Present monitoring), CPU/GPU temperatures, fan RPMs, active GPU wattage (`0x0D`), 60-second rolling sparkline performance graph, and battery gauge. Toggle with `Ctrl + Shift + O`, drag anywhere with `Ctrl + Shift + Drag`.
+- ⚡ **In-Game Gaming Overlay HUD**: Real-time neon green FPS counter (powered by zero-injection Windows ETW kernel Present monitoring), CPU/GPU temperatures, fan RPMs, active GPU wattage (`0x0D`), 60-second rolling sparkline performance graph, and battery gauge. Toggle with `Ctrl + Shift + O`, drag anywhere with `Ctrl + Shift + Drag`.
 - 🛡️ **100% Anti-Cheat Safe**: Uses Windows ETW kernel tracing (`Microsoft-Windows-DxgKrnl` Event ID 184 / `DXGI` Event ID 42). Zero DLL injection, zero API hooking (safe with Vanguard, EAC, BattlEye, Ricochet).
 - 🔑 **Dedicated Predator Key Intercept**: Low-level hardware hook (`WH_KEYBOARD_LL`) intercepting Acer scan code `0x75` (`VK_0xFF`) to toggle the app window instantly without stealing in-game focus.
 - 🏎️ **High CPU Priority Enforcement**: Automatically configures Windows Registry IFEO (`CpuPriorityClass=3`), Task Scheduler `<Priority>2</Priority>`, and runtime `ProcessPriorityClass.High` (`BasePriority=13`) for zero latency and micro-stutter immunity during AAA gaming.
@@ -152,9 +152,9 @@ You can run `disable_acer_bloatware.bat` anytime to apply this optimization with
 
 ---
 
-## 🎮 Gaming Overlay HUD & Interactive Gestures (G-Helper Style)
+## 🎮 Gaming Overlay HUD & Interactive Gestures
 
-Predator Control includes an ultra-lightweight, 3-mode in-game telemetry HUD inspired by **G-Helper**, rendering live performance stats directly on your screen without any performance impact or anti-cheat triggers.
+Predator Control includes an ultra-lightweight, customizable in-game telemetry HUD, rendering live performance stats directly on your screen without any performance impact or anti-cheat triggers.
 
 ### 🕹️ Display Modes
 - **Light Mode (`Light`):** Compact minimal HUD (`FPS | GPU Temp & Watts | CPU Temp & Watts`).
@@ -183,7 +183,7 @@ PredatorControl/
 │   ├── Form1.cs                   # Main UI, layout, and IPC handlers
 │   ├── WmiController.cs           # ACPI WMI hardware driver (Power, Fans, RGB, Battery)
 │   ├── PredatorKeyHook.cs         # WH_KEYBOARD_LL low-level keyboard hook
-│   ├── GameOverlayForm.cs         # In-Game Gaming Overlay HUD (G-Helper style)
+│   ├── GameOverlayForm.cs         # In-Game Gaming Overlay HUD
 │   ├── EtwFpsMonitor.cs           # Kernel ETW DxgKrnl / DXGI Present FPS monitor
 │   ├── OSDOverlayForm.cs          # Focus-safe floating HUD overlay
 │   ├── DisplayCcdController.cs    # Win32 CCD display & refresh rate switcher
@@ -227,7 +227,7 @@ PredatorControl/
 - 🎛️ **Settings Panel**: Toggle Jelli on/off, choose Expanded or Attached flyout mode, configure floating metrics HUD (Off / Light / Default / Full).
 - 📊 **Floating Metrics HUD**: Real-time CPU/GPU stats with multiple display modes.
 
-### v1.1.7 — G-Helper Style Overlay HUD
+### v1.1.7 — Gaming Overlay HUD
 - ⚡ **3-Mode Gaming Overlay HUD** (Light / Default / Full) with ETW kernel FPS counter.
 - 🖥️ **Native NVML GPU Telemetry** for accurate wattage and load readings.
 - 🎯 Tightened layout, README keyboard shortcut reference.

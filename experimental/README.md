@@ -8,7 +8,7 @@ This folder contains pre-built binaries for testing and release v1.2.5:
   - Native `WebView2Loader.dll` is embedded and auto-extracted, with full Jelli companion support.
 
 - **`PredatorControl-win-x64.exe`** (~3.4 MB)
-  - Ultra-lightweight framework-dependent executable (comparable to G-Helper).
+  - Ultra-lightweight framework-dependent executable.
   - Requires .NET 10 Desktop Runtime installed.
 
 - **`WebView2Loader.dll`** (~160 KB)

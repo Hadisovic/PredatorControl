@@ -152,7 +152,7 @@ namespace PredatorControlApp
         private int _historyHead = 0;
         private int _historyCount = 0;
 
-        // Visual Colors (matching G-Helper reference screenshots & Jelli aesthetic)
+        // Visual Colors (matching clean telemetry aesthetic & Jelli styling)
         private static readonly Color GpuGreen = Color.FromArgb(255, 0, 229, 117);  // Neon Mint/Green (#00E575)
         private static readonly Color CpuTeal = Color.FromArgb(255, 0, 180, 216);   // Sky Cyan/Blue (#00B4D8 / #38B6FF)
         private static readonly Color DimGpu = Color.FromArgb(170, 0, 190, 95);
@@ -198,7 +198,7 @@ namespace PredatorControlApp
             StartPosition = FormStartPosition.Manual;
             DoubleBuffered = true;
             BackColor = OverlayBg;
-            Opacity = 0.88; // Translucent dark glass look matching G-Helper & Jelli
+            Opacity = 0.88; // Translucent dark glass look matching Jelli aesthetic
 
             SetStyle(ControlStyles.AllPaintingInWmPaint |
                      ControlStyles.UserPaint |

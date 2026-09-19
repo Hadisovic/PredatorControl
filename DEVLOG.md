@@ -35,7 +35,7 @@
    - [Developing Custom Low-Level Diagnostic Tools (`KeySniffer`)](#developing-custom-low-level-diagnostic-tools-keysniffer)
    - [The Hardware Revelation: VK=0xFF & SC=0x75](#the-hardware-revelation-vk0xff--sc0x75)
    - [Implementation & Breakthrough Confirmation](#implementation--breakthrough-confirmation)
-8. [Phase 7: In-Game Gaming Overlay HUD (G-Helper Style) & ETW Engine](#8-phase-7-in-game-gaming-overlay-hud-g-helper-style--etw-engine)
+8. [Phase 7: In-Game Gaming Overlay HUD & ETW Engine](#8-phase-7-in-game-gaming-overlay-hud--etw-engine)
    - [Architecture & Design Decisions](#architecture--design-decisions)
    - [Zero-Injection Kernel ETW Present Monitoring](#zero-injection-kernel-etw-present-monitoring)
    - [Double-Buffered GDI+ Canvas & 60s Sparklines](#double-buffered-gdi-canvas--60s-sparklines)
@@ -52,7 +52,7 @@
 
 Acer gaming laptops (Predator Helios, Triton, Nitro) ship with **PredatorSense** / **Acer Care Center**, bulky Electron/UWP bloatware suites consuming 500MB–1.5GB of RAM, running multiple background telemetry daemons (`AcerCCAgentSvis`, `AcerDIAgentSvis`, `ASMSvc`), causing micro-stuttering in competitive gaming, and suffering from long-standing firmware bugs (such as keyboard backlights constantly resetting to Amber on reboot).
 
-**PredatorControl** was developed as a clean, hyper-optimized, standalone C# .NET WinForms replacement inspired by Asus's **G-Helper**:
+**PredatorControl** was developed as a clean, hyper-optimized, standalone C# .NET WinForms replacement:
 - **RAM usage:** ~18MB (vs 1GB+ for PredatorSense)
 - **Startup time:** <200ms instantaneous zero-delay boot
 - **Zero background telemetry:** Silences all intrusive Acer daemons while keeping essential OEM hardware pipes intact
@@ -196,7 +196,7 @@ Confirmed via PowerShell: `BasePriority = 13` (High Priority level), ensuring ze
 ## 7. Phase 6: The Dedicated Predator Key Hardware Hook
 
 ### The Challenge
-The user requested that pressing the dedicated physical **Predator key** on the keyboard should seamlessly toggle the PredatorControl dashboard open and closed (identical to G-Helper's ROG key functionality).
+The user requested that pressing the dedicated physical **Predator key** on the keyboard should seamlessly toggle the PredatorControl dashboard open and closed.
 
 ### Focus Bug in App Toggle
 Inspection of `PredatorKeyHook.cs` and `Form1.cs` revealed that `ToggleApp()` already existed, but had a logic flaw:
@@ -254,9 +254,9 @@ Committed as `5d793a9` and pushed to `origin/Revs`.
 
 ---
 
-## 8. Phase 7: In-Game Gaming Overlay HUD (G-Helper Style) & ETW Engine
+## 8. Phase 7: In-Game Gaming Overlay HUD & ETW Engine
 
-Following user request and reference design (matching G-Helper's in-game telemetry OSD), a complete gaming overlay HUD was designed and integrated into version **1.1.5**.
+Following user request and reference design, a complete gaming overlay HUD was designed and integrated into version **1.1.5**.
 
 ### Architecture & Design Decisions
 1. **Zero Game Injection**: Traditional overlays inject DLLs (Detours / MinHook) into DirectX / Vulkan swapchains, risking anti-cheat bans (Easy Anti-Cheat, BattlEye, Ricochet, Vanguard). PredatorControl implements a 100% external, kernel-level ETW (Event Tracing for Windows) frame monitor that never touches game memory.
@@ -298,10 +298,10 @@ Following user request and reference design (matching G-Helper's in-game telemet
 
 ---
 
-## 9. Phase 9: G-Helper 3-Mode Gaming Overlay HUD & Native NVML/RAPL Telemetry (v1.1.7)
+## 9. Phase 9: Multi-Mode Gaming Overlay HUD & Native NVML/RAPL Telemetry (v1.1.7)
 
 ### Motivation & Visual Alignment
-The user requested a faithful, pixel-precise recreation of the 3-mode gaming overlay HUD inspired by **G-Helper**:
+The user requested a faithful, pixel-precise recreation of the multi-mode gaming overlay HUD:
 - **Light Mode:** Ultra-compact HUD displaying `FPS | GPU: [temp]° [gpu_power]W | CPU: [temp]° [cpu_power]W`.
 - **Default Mode:** Balanced telemetry showing `FPS | GPU: [temp]° [rpm]RPM | CPU: [temp]° [rpm]RPM | 60s Sparkline Graph | [gpu_power]W / [cpu_power]W`.
 - **Full Mode:** Complete hardware monitor showing `FPS | GPU: [temp]° [rpm]RPM | CPU: [temp]° [rpm]RPM | Graph | [gpu_power]W / [cpu_power]W | [gpu_load]% [bar] / [cpu_load]% [bar] | [vram]GB [bar] / [ram]GB [bar]`.

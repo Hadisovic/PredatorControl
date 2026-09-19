@@ -2,14 +2,20 @@
 
 This folder contains pre-built experimental binaries for testing on Predator and Nitro laptops:
 
-- **`PredatorControl-exp-win-x64.exe`** (~3.5 MB)
-  - Framework-dependent single-file executable.
+- **`PredatorControl-exp-standalone.exe`** (~50.4 MB)
+  - Self-contained standalone executable with native single-file assembly compression (`EnableCompressionInSingleFile=true`).
+  - No .NET installation required; double-click to run anywhere on any PC.
+  - Native `WebView2Loader.dll` is embedded and auto-extracted, with full Jelli companion support.
+
+- **`PredatorControl-exp-win-x64.exe`** (~3.4 MB)
+  - Ultra-lightweight framework-dependent executable (comparable to G-Helper).
   - Requires .NET 10 Desktop Runtime installed.
 
-- **`PredatorControl-exp-standalone.zip`** (~46.8 MB)
-  - Full uncompressed self-contained standalone executable (`PredatorControl-exp-standalone.exe`, ~119 MB) and `WebView2Loader.dll`.
-  - No .NET installation required; double-click to run anywhere.
-  - Provided in a zip package to adhere to GitHub's 100 MB per-file tracking limit.
+- **`WebView2Loader.dll`** (~160 KB)
+  - Native runtime library for Microsoft Edge WebView2.
+
+- **`appicon.ico`**
+  - Application icon asset.
 
 ### Features in this Experimental Build:
 1. **Dedicated Overlay Settings Dialog**:

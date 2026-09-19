@@ -1,13 +1,13 @@
-# Experimental Test Binaries
+# Release 1.2.5 Binaries
 
-This folder contains pre-built experimental binaries for testing on Predator and Nitro laptops:
+This folder contains pre-built binaries for testing and release v1.2.5:
 
-- **`PredatorControl-exp-standalone.exe`** (~50.4 MB)
-  - Self-contained standalone executable with native single-file assembly compression (`EnableCompressionInSingleFile=true`).
+- **`PredatorControl-standalone.exe`** (~50.4 MB)
+  - Self-contained standalone executable with native single-file assembly compression.
   - No .NET installation required; double-click to run anywhere on any PC.
   - Native `WebView2Loader.dll` is embedded and auto-extracted, with full Jelli companion support.
 
-- **`PredatorControl-exp-win-x64.exe`** (~3.4 MB)
+- **`PredatorControl-win-x64.exe`** (~3.4 MB)
   - Ultra-lightweight framework-dependent executable (comparable to G-Helper).
   - Requires .NET 10 Desktop Runtime installed.
 

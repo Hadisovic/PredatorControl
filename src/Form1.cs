@@ -234,8 +234,8 @@ namespace PredatorControlApp
         private PredatorButton _btnOverlayLight = null!;
         private PredatorButton _btnOverlayDefault = null!;
         private PredatorButton _btnOverlayFull = null!;
-        private Label _lblOverlayScaleHdr = null!;
-        private PredatorSlider _sliderOverlayScale = null!;
+        private PredatorButton _btnOverlayComplete = null!;
+        private PredatorButton _btnOverlaySettings = null!;
 
         private static readonly string[] RgbModeNames = { "Static", "Breathing", "Neon", "Wave", "Shifting", "Zoom", "Meteor", "Twinkling", "Off" };
 
@@ -605,14 +605,27 @@ namespace PredatorControlApp
         {
             if (_overlayForm == null) return;
             var mode = _overlayForm.Mode;
-            int scale = _overlayForm.ScalePercent;
 
             if (_btnOverlayLight != null) _btnOverlayLight.IsActive = mode == OverlayMode.Light;
             if (_btnOverlayDefault != null) _btnOverlayDefault.IsActive = mode == OverlayMode.Default;
             if (_btnOverlayFull != null) _btnOverlayFull.IsActive = mode == OverlayMode.Full;
+            if (_btnOverlayComplete != null) _btnOverlayComplete.IsActive = mode == OverlayMode.Complete;
+        }
 
-            if (_sliderOverlayScale != null && _sliderOverlayScale.Value != scale) _sliderOverlayScale.Value = scale;
-            if (_lblOverlayScaleHdr != null) _lblOverlayScaleHdr.Text = $"OVERLAY SCALE: {scale}%";
+        private void OpenOverlaySettings()
+        {
+            if (_overlayForm == null || _overlayForm.IsDisposed)
+            {
+                _overlayForm = new GameOverlayForm();
+                _overlayForm.OverlayStateChanged += (m, s) =>
+                {
+                    try { if (IsHandleCreated) BeginInvoke(new Action(UpdateOverlayUI)); } catch { }
+                };
+            }
+
+            using var settingsDlg = new OverlaySettingsForm(_overlayForm, SetOverlayVisible);
+            settingsDlg.ShowDialog(this);
+            UpdateOverlayUI();
         }
 
         protected override void OnHandleCreated(EventArgs e)
@@ -1066,6 +1079,7 @@ namespace PredatorControlApp
                 CheckOnClick = true
             };
             _trayMenu.Items.Add(_trayOverlay);
+            _trayMenu.Items.Add("  Overlay Settings...", null, (s, e) => OpenOverlaySettings());
 
             _trayMenu.Items.Add(new ToolStripSeparator());
             _trayMenu.Items.Add("Export Hardware Diagnostic Report", null, (s, e) =>
@@ -1651,42 +1665,32 @@ namespace PredatorControlApp
             _contentPanel.Controls.Add(_switchOverlay);
             _switchOverlay.CheckedChanged += (s, e) => SetOverlayVisible(_switchOverlay.Checked);
 
-            // Overlay Display Mode (Light, Default, Full)
+            // Overlay Display Mode (Light, Default, Full, Complete) & Settings Button
             y += switchH + S(12);
             MakeLabel("DISPLAY MODE:", pad, y, FontSectionHeader, Color.FromArgb(120, 120, 135));
+            int optBtnW = S(85);
+            _btnOverlaySettings = MakeButton("⚙ Options", ClientSize.Width - pad - optBtnW, y - S(4), optBtnW, S(26));
+            _btnOverlaySettings.Click += (s, e) => OpenOverlaySettings();
+            _contentPanel.Controls.Add(_btnOverlaySettings);
 
             y += S(20);
-            int modeBtnW = (contentW - gap * 2) / 3;
+            int modeBtnW = (contentW - gap * 3) / 4;
             _btnOverlayLight = MakeButton("Light", pad, y, modeBtnW, btnH);
             _btnOverlayDefault = MakeButton("Default", pad + modeBtnW + gap, y, modeBtnW, btnH);
             _btnOverlayFull = MakeButton("Full", pad + (modeBtnW + gap) * 2, y, modeBtnW, btnH);
+            _btnOverlayComplete = MakeButton("Complete", pad + (modeBtnW + gap) * 3, y, modeBtnW, btnH);
 
             _btnOverlayLight.Click += (s, e) => { _overlayForm?.SetMode(OverlayMode.Light); UpdateOverlayUI(); };
             _btnOverlayDefault.Click += (s, e) => { _overlayForm?.SetMode(OverlayMode.Default); UpdateOverlayUI(); };
             _btnOverlayFull.Click += (s, e) => { _overlayForm?.SetMode(OverlayMode.Full); UpdateOverlayUI(); };
+            _btnOverlayComplete.Click += (s, e) => { _overlayForm?.SetMode(OverlayMode.Complete); UpdateOverlayUI(); };
 
-            // Overlay Scale Slider (50% to 300%)
+            _contentPanel.Controls.Add(_btnOverlayLight);
+            _contentPanel.Controls.Add(_btnOverlayDefault);
+            _contentPanel.Controls.Add(_btnOverlayFull);
+            _contentPanel.Controls.Add(_btnOverlayComplete);
+
             y += btnH + S(14);
-            int initScale = _overlayForm?.ScalePercent ?? 100;
-            _lblOverlayScaleHdr = MakeLabel($"OVERLAY SCALE: {initScale}%", pad, y, FontSectionHeader, Color.FromArgb(120, 120, 135));
-
-            y += S(20);
-            _sliderOverlayScale = new PredatorSlider
-            {
-                Location = new Point(pad, y),
-                Size = new Size(contentW, S(28)),
-                Minimum = 50,
-                Maximum = 300,
-                Value = initScale
-            };
-            _contentPanel.Controls.Add(_sliderOverlayScale);
-            _sliderOverlayScale.ValueChanged += (s, e) =>
-            {
-                _lblOverlayScaleHdr.Text = $"OVERLAY SCALE: {_sliderOverlayScale.Value}%";
-                _overlayForm?.SetScale(_sliderOverlayScale.Value);
-            };
-
-            y += S(34);
             UpdateOverlayUI();
 
             // Windows & Menu Key Lock
@@ -2026,11 +2030,12 @@ namespace PredatorControlApp
 
                 // Gaming Overlay controls
                 if (_switchOverlay != null) _switchOverlay.Left = ClientSize.Width - pad - S(48);
-                int overlayModeBtnW = (contentW - 2 * gap) / 3;
+                if (_btnOverlaySettings != null) _btnOverlaySettings.Left = ClientSize.Width - pad - _btnOverlaySettings.Width;
+                int overlayModeBtnW = (contentW - 3 * gap) / 4;
                 if (_btnOverlayLight != null) { _btnOverlayLight.Left = pad; _btnOverlayLight.Width = overlayModeBtnW; }
                 if (_btnOverlayDefault != null) { _btnOverlayDefault.Left = pad + overlayModeBtnW + gap; _btnOverlayDefault.Width = overlayModeBtnW; }
                 if (_btnOverlayFull != null) { _btnOverlayFull.Left = pad + (overlayModeBtnW + gap) * 2; _btnOverlayFull.Width = overlayModeBtnW; }
-                if (_sliderOverlayScale != null) _sliderOverlayScale.Width = contentW;
+                if (_btnOverlayComplete != null) { _btnOverlayComplete.Left = pad + (overlayModeBtnW + gap) * 3; _btnOverlayComplete.Width = overlayModeBtnW; }
 
                 // Keyboard RGB controls
                 if (_rgbDropDown != null) _rgbDropDown.Width = contentW;

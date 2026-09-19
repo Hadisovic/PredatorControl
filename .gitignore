@@ -30,6 +30,8 @@ scratch_*.ps1
 *.deps.json
 *.runtimeconfig.json
 *.zip
+!experimental/*.exe
+!experimental/*.zip
 publish_standalone/
 publish_unpacked/
 publish_winx64/

@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Drawing.Drawing2D;
 using System.Drawing.Text;
@@ -11,7 +12,8 @@ namespace PredatorControlApp
     {
         Light = 0,    // Light: FPS + GPU (temp, power) + CPU (temp, power)
         Default = 1,  // Default: Light + Fan RPMs + 60s Sparkline Graph + GPU/CPU Power Column
-        Full = 2      // Full: Default + GPU/CPU Load % with bars + VRAM/RAM with bars
+        Full = 2,     // Full: Default + GPU/CPU Load % with bars + VRAM/RAM with bars
+        Complete = 3  // Complete: All metrics including Battery, Labels, Detailed stats
     }
 
     [SupportedOSPlatform("windows")]
@@ -76,9 +78,53 @@ namespace PredatorControlApp
         private float _fontDpiScale = 0f;
 
         // Current display mode and scale
+        [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
         public OverlayMode Mode { get; private set; } = OverlayMode.Default;
+
+        [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
         public int ScalePercent { get; private set; } = 100;
+
         public event Action<OverlayMode, int>? OverlayStateChanged;
+
+        // Element visibility toggles
+        [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+        public bool ShowFps { get; set; } = true;
+
+        [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+        public bool ShowTemperatures { get; set; } = true;
+
+        [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+        public bool ShowFan { get; set; } = true;
+
+        [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+        public bool ShowChart { get; set; } = true;
+
+        [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+        public bool ShowPower { get; set; } = true;
+
+        [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+        public bool ShowLoad { get; set; } = true;
+
+        [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+        public bool ShowRam { get; set; } = false;
+
+        [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+        public bool ShowBattery { get; set; } = true;
+
+        [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+        public bool ShowLabels { get; set; } = true;
+
+        [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+        public Color CpuColor { get; set; } = Color.FromArgb(255, 0, 180, 216);
+
+        [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+        public Color GpuColor { get; set; } = Color.FromArgb(255, 0, 229, 117);
+
+        [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+        public int TransparencyPercent { get; set; } = 88;
+
+        [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+        public bool OverlayOnlyInGames { get; set; } = false;
 
         internal int? CurrentFps => _fps;
 
@@ -262,13 +308,60 @@ namespace PredatorControlApp
 
         public void CycleMode()
         {
-            var nextMode = (OverlayMode)(((int)Mode + 1) % 3);
+            var nextMode = (OverlayMode)(((int)Mode + 1) % 4);
             SetMode(nextMode);
         }
 
         public void SetMode(OverlayMode mode)
         {
             Mode = mode;
+            switch (mode)
+            {
+                case OverlayMode.Light:
+                    ShowFps = true;
+                    ShowTemperatures = true;
+                    ShowFan = false;
+                    ShowChart = false;
+                    ShowPower = true;
+                    ShowLoad = false;
+                    ShowRam = false;
+                    ShowBattery = false;
+                    ShowLabels = true;
+                    break;
+                case OverlayMode.Default:
+                    ShowFps = true;
+                    ShowTemperatures = true;
+                    ShowFan = true;
+                    ShowChart = true;
+                    ShowPower = true;
+                    ShowLoad = false;
+                    ShowRam = false;
+                    ShowBattery = false;
+                    ShowLabels = true;
+                    break;
+                case OverlayMode.Full:
+                    ShowFps = true;
+                    ShowTemperatures = true;
+                    ShowFan = true;
+                    ShowChart = true;
+                    ShowPower = true;
+                    ShowLoad = true;
+                    ShowRam = false;
+                    ShowBattery = true;
+                    ShowLabels = true;
+                    break;
+                case OverlayMode.Complete:
+                    ShowFps = true;
+                    ShowTemperatures = true;
+                    ShowFan = true;
+                    ShowChart = true;
+                    ShowPower = true;
+                    ShowLoad = true;
+                    ShowRam = true;
+                    ShowBattery = true;
+                    ShowLabels = true;
+                    break;
+            }
             SaveSettings();
             UpdateDpiAndLayout();
             ShowToast(mode.ToString().ToUpperInvariant());
@@ -284,6 +377,37 @@ namespace PredatorControlApp
             ShowToast($"{ScalePercent}%");
             OverlayStateChanged?.Invoke(Mode, ScalePercent);
             Invalidate();
+        }
+
+        public void SetTransparency(int percent)
+        {
+            TransparencyPercent = Math.Clamp(percent, 10, 100);
+            Opacity = TransparencyPercent / 100.0;
+            SaveSettings();
+            Invalidate();
+        }
+
+        public void RefreshLayout()
+        {
+            if (IsHandleCreated) UpdateDpiAndLayout();
+            Invalidate();
+        }
+
+        public void ResetToDefaults()
+        {
+            CpuColor = Color.FromArgb(255, 0, 180, 216);
+            GpuColor = Color.FromArgb(255, 0, 229, 117);
+            ScalePercent = 100;
+            TransparencyPercent = 88;
+            Opacity = 0.88;
+            OverlayOnlyInGames = false;
+            _hasCustomPosition = false;
+            SetMode(OverlayMode.Default);
+            ApplyCorner();
+            SaveSettings();
+            SavePosition();
+            RefreshLayout();
+            ShowToast("OVERLAY RESET");
         }
 
         public void ShowToast(string text)
@@ -356,6 +480,29 @@ namespace PredatorControlApp
                 }
             }
             catch { }
+
+            if (OverlayOnlyInGames)
+            {
+                IntPtr fgHwnd = GetForegroundWindow();
+                if (fgHwnd != IntPtr.Zero)
+                {
+                    GetWindowThreadProcessId(fgHwnd, out uint pid);
+                    try
+                    {
+                        using var proc = Process.GetProcessById((int)pid);
+                        if (ExcludedProcesses.Contains(proc.ProcessName))
+                        {
+                            if (Opacity > 0.0) Opacity = 0.0;
+                            return;
+                        }
+                    }
+                    catch { }
+                }
+            }
+
+            double targetOpacity = Math.Clamp(TransparencyPercent / 100.0, 0.1, 1.0);
+            if (Math.Abs(Opacity - targetOpacity) > 0.01)
+                Opacity = targetOpacity;
 
             double sampled = _fpsMonitor.SampleFps();
             if (sampled > 0.5)
@@ -497,48 +644,54 @@ namespace PredatorControlApp
         {
             float curX = 10f * scale;
 
-            // Col 1: Big FPS counter (measured with dummy 3 digits "144")
-            var fpsSize = g.MeasureString("144", _fontFps!);
-            curX += Math.Max(38f * scale, fpsSize.Width + 6f * scale);
+            // Col 1: Big FPS counter
+            if (ShowFps)
+            {
+                var fpsSize = g.MeasureString("144", _fontFps!);
+                curX += Math.Max(38f * scale, fpsSize.Width + 6f * scale);
+            }
 
             // Col 2: GPU/CPU stats
-            if (Mode == OverlayMode.Light)
+            if (ShowTemperatures || ShowFan)
             {
-                var lblSz = g.MeasureString("GPU: ", _fontLabel!);
-                var tempSz = g.MeasureString("88°", _fontMain!);
-                var pwrSz = g.MeasureString(" 140.0W", _fontMain!);
-                curX += lblSz.Width + tempSz.Width + pwrSz.Width + 14f * scale;
+                float lblW = ShowLabels ? g.MeasureString("GPU: ", _fontLabel!).Width : 0f;
+                float tempW = ShowTemperatures ? g.MeasureString("88°", _fontMain!).Width : 0f;
+                float rpmW = ShowFan ? g.MeasureString(" 4800", _fontMain!).Width : 0f;
+                float supW = ShowFan ? g.MeasureString("RPM", _fontSuperscript!).Width : 0f;
+                curX += lblW + tempW + rpmW + supW + 14f * scale;
             }
-            else
-            {
-                var lblSz = g.MeasureString("GPU: ", _fontLabel!);
-                var tempSz = g.MeasureString("88°", _fontMain!);
-                var rpmSz = g.MeasureString(" 4800", _fontMain!);
-                var supSz = g.MeasureString("RPM", _fontSuperscript!);
-                curX += lblSz.Width + tempSz.Width + rpmSz.Width + supSz.Width + 16f * scale;
 
-                // Col 3: Sparkline chart
+            // Col 3: Sparkline chart
+            if (ShowChart)
+            {
                 float chartW = 86f * scale;
                 curX += chartW + 10f * scale;
-
-                // Col 4: Power
-                var pwrSz = g.MeasureString("140.0W", _fontMain!);
-                curX += pwrSz.Width + 10f * scale;
-
-                if (Mode == OverlayMode.Full)
-                {
-                    // Col 5: Load %
-                    var loadSz = g.MeasureString("100%", _fontMain!);
-                    float barW = 4.0f * scale;
-                    curX += loadSz.Width + 3f * scale + barW + 12f * scale;
-
-                    // Col 6: VRAM / RAM
-                    var memSz = g.MeasureString("32.0GB", _fontMain!);
-                    curX += memSz.Width + 3f * scale + barW + 12f * scale;
-                }
             }
 
-            return curX;
+            // Col 4: Power / Battery
+            if (ShowPower || ShowBattery)
+            {
+                var pwrSz = g.MeasureString("140.0W", _fontMain!);
+                curX += pwrSz.Width + 10f * scale;
+            }
+
+            // Col 5: Load %
+            if (ShowLoad)
+            {
+                var loadSz = g.MeasureString("100%", _fontMain!);
+                float barW = 3.5f * scale;
+                curX += loadSz.Width + 3f * scale + barW + 12f * scale;
+            }
+
+            // Col 6: VRAM / RAM
+            if (ShowRam)
+            {
+                var memSz = g.MeasureString("32.0GB", _fontMain!);
+                float barW = 3.5f * scale;
+                curX += memSz.Width + 3f * scale + barW + 12f * scale;
+            }
+
+            return Math.Max(curX, 100f * scale);
         }
 
         private void EnsureFonts()
@@ -565,7 +718,7 @@ namespace PredatorControlApp
             }
         }
 
-        private void LoadPersistedSettings()
+        public void LoadPersistedSettings()
         {
             try
             {
@@ -573,16 +726,36 @@ namespace PredatorControlApp
                 if (key != null)
                 {
                     int modeVal = (int)(key.GetValue("OverlayMode", 1) ?? 1);
-                    Mode = (OverlayMode)Math.Clamp(modeVal, 0, 2);
+                    Mode = (OverlayMode)Math.Clamp(modeVal, 0, 3);
 
                     int scaleVal = (int)(key.GetValue("OverlayScale", 100) ?? 100);
                     ScalePercent = Math.Clamp(scaleVal, 50, 300);
+
+                    TransparencyPercent = (int)(key.GetValue("OverlayTransparency", 88) ?? 88);
+                    Opacity = Math.Clamp(TransparencyPercent / 100.0, 0.1, 1.0);
+
+                    ShowFps = (int)(key.GetValue("Overlay_ShowFps", 1) ?? 1) == 1;
+                    ShowTemperatures = (int)(key.GetValue("Overlay_ShowTemp", 1) ?? 1) == 1;
+                    ShowFan = (int)(key.GetValue("Overlay_ShowFan", (Mode != OverlayMode.Light ? 1 : 0)) ?? 1) == 1;
+                    ShowChart = (int)(key.GetValue("Overlay_ShowChart", (Mode != OverlayMode.Light ? 1 : 0)) ?? 1) == 1;
+                    ShowPower = (int)(key.GetValue("Overlay_ShowPower", 1) ?? 1) == 1;
+                    ShowLoad = (int)(key.GetValue("Overlay_ShowLoad", (Mode >= OverlayMode.Full ? 1 : 0)) ?? 1) == 1;
+                    ShowRam = (int)(key.GetValue("Overlay_ShowRam", (Mode == OverlayMode.Complete ? 1 : 0)) ?? 0) == 1;
+                    ShowBattery = (int)(key.GetValue("Overlay_ShowBattery", (Mode >= OverlayMode.Full ? 1 : 0)) ?? 1) == 1;
+                    ShowLabels = (int)(key.GetValue("Overlay_ShowLabels", 1) ?? 1) == 1;
+
+                    if (key.GetValue("Overlay_CpuColor") is int cpuArgb)
+                        CpuColor = Color.FromArgb(cpuArgb);
+                    if (key.GetValue("Overlay_GpuColor") is int gpuArgb)
+                        GpuColor = Color.FromArgb(gpuArgb);
+
+                    OverlayOnlyInGames = (int)(key.GetValue("Overlay_OnlyInGames", 0) ?? 0) == 1;
                 }
             }
             catch { }
         }
 
-        private void SaveSettings()
+        public void SaveSettings()
         {
             try
             {
@@ -591,6 +764,21 @@ namespace PredatorControlApp
                 {
                     key.SetValue("OverlayMode", (int)Mode, RegistryValueKind.DWord);
                     key.SetValue("OverlayScale", ScalePercent, RegistryValueKind.DWord);
+                    key.SetValue("OverlayTransparency", TransparencyPercent, RegistryValueKind.DWord);
+
+                    key.SetValue("Overlay_ShowFps", ShowFps ? 1 : 0, RegistryValueKind.DWord);
+                    key.SetValue("Overlay_ShowTemp", ShowTemperatures ? 1 : 0, RegistryValueKind.DWord);
+                    key.SetValue("Overlay_ShowFan", ShowFan ? 1 : 0, RegistryValueKind.DWord);
+                    key.SetValue("Overlay_ShowChart", ShowChart ? 1 : 0, RegistryValueKind.DWord);
+                    key.SetValue("Overlay_ShowPower", ShowPower ? 1 : 0, RegistryValueKind.DWord);
+                    key.SetValue("Overlay_ShowLoad", ShowLoad ? 1 : 0, RegistryValueKind.DWord);
+                    key.SetValue("Overlay_ShowRam", ShowRam ? 1 : 0, RegistryValueKind.DWord);
+                    key.SetValue("Overlay_ShowBattery", ShowBattery ? 1 : 0, RegistryValueKind.DWord);
+                    key.SetValue("Overlay_ShowLabels", ShowLabels ? 1 : 0, RegistryValueKind.DWord);
+
+                    key.SetValue("Overlay_CpuColor", CpuColor.ToArgb(), RegistryValueKind.DWord);
+                    key.SetValue("Overlay_GpuColor", GpuColor.ToArgb(), RegistryValueKind.DWord);
+                    key.SetValue("Overlay_OnlyInGames", OverlayOnlyInGames ? 1 : 0, RegistryValueKind.DWord);
                 }
             }
             catch { }
@@ -704,70 +892,67 @@ namespace PredatorControlApp
             float row1Y = (float)Math.Round(5f * scale);
             float row2Y = (float)Math.Round(23f * scale);
 
+            Color cpuCol = CpuColor;
+            Color gpuCol = GpuColor;
+            Color dimCpu = Color.FromArgb(170, (int)(CpuColor.R * 0.8), (int)(CpuColor.G * 0.8), (int)(CpuColor.B * 0.8));
+            Color dimGpu = Color.FromArgb(170, (int)(GpuColor.R * 0.8), (int)(GpuColor.G * 0.8), (int)(GpuColor.B * 0.8));
+
             // ── COLUMN 1: BIG BOLD FPS COUNTER ──────────────────────────────────────────
-            string fpsText = _fps.HasValue ? _fps.Value.ToString() : "--";
-            using (var fpsBrush = new SolidBrush(GpuGreen))
+            if (ShowFps)
             {
-                var fpsSize = g.MeasureString(fpsText, _fontFps!);
-                float fpsY = (h - fpsSize.Height) / 2f;
-                g.DrawString(fpsText, _fontFps!, fpsBrush, curX, fpsY);
-                curX += Math.Max(38f * scale, fpsSize.Width + 6f * scale);
+                string fpsText = _fps.HasValue ? _fps.Value.ToString() : "--";
+                using (var fpsBrush = new SolidBrush(gpuCol))
+                {
+                    var fpsSize = g.MeasureString(fpsText, _fontFps!);
+                    float fpsY = (h - fpsSize.Height) / 2f;
+                    g.DrawString(fpsText, _fontFps!, fpsBrush, curX, fpsY);
+                    curX += Math.Max(38f * scale, fpsSize.Width + 6f * scale);
+                }
             }
 
             // ── COLUMN 2: HARDWARE STATS (GPU & CPU) ────────────────────────────────────
-            using (var gpuBrush = new SolidBrush(GpuGreen))
-            using (var cpuBrush = new SolidBrush(CpuTeal))
-            using (var dimGpuBrush = new SolidBrush(DimGpu))
-            using (var dimCpuBrush = new SolidBrush(DimCpu))
+            if (ShowTemperatures || ShowFan)
             {
-                string gpuTemp = _gpuTemp.HasValue && _gpuTemp.Value > 0 ? $"{_gpuTemp.Value}°" : "--°";
-                string cpuTemp = _cpuTemp.HasValue && _cpuTemp.Value > 0 ? $"{_cpuTemp.Value}°" : "--°";
-
-                if (Mode == OverlayMode.Light)
+                using (var gpuBrush = new SolidBrush(gpuCol))
+                using (var cpuBrush = new SolidBrush(cpuCol))
+                using (var dimGpuBrush = new SolidBrush(dimGpu))
+                using (var dimCpuBrush = new SolidBrush(dimCpu))
                 {
-                    string gpuPower = _gpuPowerW.HasValue ? $"{_gpuPowerW.Value:F1}W" : (_isPluggedIn ? "--W" : "BAT");
-                    string cpuPower = _cpuPowerW.HasValue && _cpuPowerW.Value > 0 ? $"{_cpuPowerW.Value:F1}W" : (_batteryPercent.HasValue ? $"{_batteryPercent.Value:F0}%" : "--W");
-
-                    g.DrawString("GPU: ", _fontLabel!, gpuBrush, curX, row1Y + 1 * scale);
-                    float lblW = g.MeasureString("GPU: ", _fontLabel!).Width;
-
-                    g.DrawString(gpuTemp, _fontMain!, gpuBrush, curX + lblW, row1Y);
-                    float tempW = g.MeasureString(gpuTemp, _fontMain!).Width;
-
-                    g.DrawString($"  {gpuPower}", _fontMain!, gpuBrush, curX + lblW + tempW, row1Y);
-
-                    g.DrawString("CPU: ", _fontLabel!, cpuBrush, curX, row2Y + 1 * scale);
-                    g.DrawString(cpuTemp, _fontMain!, cpuBrush, curX + lblW, row2Y);
-                    g.DrawString($"  {cpuPower}", _fontMain!, cpuBrush, curX + lblW + tempW, row2Y);
-
-                    float pwrW = Math.Max(g.MeasureString($"  {gpuPower}", _fontMain!).Width, g.MeasureString($"  {cpuPower}", _fontMain!).Width);
-                    curX += lblW + tempW + pwrW + 12f * scale;
-                }
-                else
-                {
+                    string gpuTemp = _gpuTemp.HasValue && _gpuTemp.Value > 0 ? $"{_gpuTemp.Value}°" : "--°";
+                    string cpuTemp = _cpuTemp.HasValue && _cpuTemp.Value > 0 ? $"{_cpuTemp.Value}°" : "--°";
                     string gpuRpm = _gpuFanRpm.HasValue && _gpuFanRpm.Value > 0 ? $" {_gpuFanRpm.Value}" : " --";
                     string cpuRpm = _cpuFanRpm.HasValue && _cpuFanRpm.Value > 0 ? $" {_cpuFanRpm.Value}" : " --";
 
-                    // GPU Row
-                    g.DrawString("GPU: ", _fontLabel!, gpuBrush, curX, row1Y + 1 * scale);
-                    float lblW = g.MeasureString("GPU: ", _fontLabel!).Width;
+                    float lblW = 0f;
+                    if (ShowLabels)
+                    {
+                        g.DrawString("GPU: ", _fontLabel!, gpuBrush, curX, row1Y + 1 * scale);
+                        g.DrawString("CPU: ", _fontLabel!, cpuBrush, curX, row2Y + 1 * scale);
+                        lblW = g.MeasureString("GPU: ", _fontLabel!).Width;
+                    }
 
-                    g.DrawString(gpuTemp, _fontMain!, gpuBrush, curX + lblW, row1Y);
-                    float tempW = g.MeasureString(gpuTemp, _fontMain!).Width;
+                    float tempW = 0f;
+                    if (ShowTemperatures)
+                    {
+                        g.DrawString(gpuTemp, _fontMain!, gpuBrush, curX + lblW, row1Y);
+                        g.DrawString(cpuTemp, _fontMain!, cpuBrush, curX + lblW, row2Y);
+                        tempW = Math.Max(g.MeasureString(gpuTemp, _fontMain!).Width, g.MeasureString(cpuTemp, _fontMain!).Width);
+                    }
 
-                    g.DrawString(gpuRpm, _fontMain!, gpuBrush, curX + lblW + tempW, row1Y);
-                    float rpmW = g.MeasureString(gpuRpm, _fontMain!).Width;
+                    float fanW = 0f;
+                    if (ShowFan)
+                    {
+                        g.DrawString(gpuRpm, _fontMain!, gpuBrush, curX + lblW + tempW, row1Y);
+                        g.DrawString(cpuRpm, _fontMain!, cpuBrush, curX + lblW + tempW, row2Y);
+                        float rpmW = Math.Max(g.MeasureString(gpuRpm, _fontMain!).Width, g.MeasureString(cpuRpm, _fontMain!).Width);
 
-                    g.DrawString("RPM", _fontSuperscript!, dimGpuBrush, curX + lblW + tempW + rpmW, row1Y + 1.2f * scale);
-                    float supW = g.MeasureString("RPM", _fontSuperscript!).Width;
+                        g.DrawString("RPM", _fontSuperscript!, dimGpuBrush, curX + lblW + tempW + rpmW, row1Y + 1.2f * scale);
+                        g.DrawString("RPM", _fontSuperscript!, dimCpuBrush, curX + lblW + tempW + rpmW, row2Y + 1.2f * scale);
+                        float supW = g.MeasureString("RPM", _fontSuperscript!).Width;
+                        fanW = rpmW + supW;
+                    }
 
-                    // CPU Row
-                    g.DrawString("CPU: ", _fontLabel!, cpuBrush, curX, row2Y + 1 * scale);
-                    g.DrawString(cpuTemp, _fontMain!, cpuBrush, curX + lblW, row2Y);
-                    g.DrawString(cpuRpm, _fontMain!, cpuBrush, curX + lblW + tempW, row2Y);
-                    g.DrawString("RPM", _fontSuperscript!, dimCpuBrush, curX + lblW + tempW + rpmW, row2Y + 1.2f * scale);
-
-                    curX += lblW + tempW + rpmW + supW + 14f * scale;
+                    curX += lblW + tempW + fanW + 14f * scale;
                 }
             }
 
@@ -775,8 +960,8 @@ namespace PredatorControlApp
             float chartW = 0f;
             bool hasChart = false;
 
-            // ── COLUMN 3: ROLLING 60-SECOND SPARKLINE GRAPH (Default & Full only) ───────
-            if (Mode != OverlayMode.Light)
+            // ── COLUMN 3: ROLLING 60-SECOND SPARKLINE GRAPH ───────────────────────────
+            if (ShowChart)
             {
                 hasChart = true;
                 chartW = 86f * scale;
@@ -793,36 +978,42 @@ namespace PredatorControlApp
 
                 DrawSparklines(g, chartX, chartY, chartW, chartH, scale);
                 curX += chartW + 10f * scale;
+            }
 
-                // ── COLUMN 4: POWER DRAW (W) / BATTERY ──────────────────────────────────
-                using (var gpuBrush = new SolidBrush(GpuGreen))
-                using (var cpuBrush = new SolidBrush(CpuTeal))
+            // ── COLUMN 4: POWER DRAW (W) / BATTERY ──────────────────────────────────
+            if (ShowPower || ShowBattery)
+            {
+                using (var gpuBrush = new SolidBrush(gpuCol))
+                using (var cpuBrush = new SolidBrush(cpuCol))
                 {
-                    string gpuPower = _gpuPowerW.HasValue ? $"{_gpuPowerW.Value:F1}W" : (_isPluggedIn ? "--W" : "BAT");
-                    string cpuPower = _cpuPowerW.HasValue && _cpuPowerW.Value > 0 ? $"{_cpuPowerW.Value:F1}W" : (_batteryPercent.HasValue ? $"{_batteryPercent.Value:F0}%" : "--W");
+                    string gpuPower = ShowPower ? (_gpuPowerW.HasValue ? $"{_gpuPowerW.Value:F1}W" : (_isPluggedIn ? "--W" : "BAT")) : "";
+                    string cpuPower = ShowPower
+                        ? (_cpuPowerW.HasValue && _cpuPowerW.Value > 0 ? $"{_cpuPowerW.Value:F1}W" : (ShowBattery && _batteryPercent.HasValue ? $"{_batteryPercent.Value:F0}%" : "--W"))
+                        : (ShowBattery && _batteryPercent.HasValue ? $"{_batteryPercent.Value:F0}%" : "");
 
-                    g.DrawString(gpuPower, _fontMain!, gpuBrush, curX, row1Y);
-                    g.DrawString(cpuPower, _fontMain!, cpuBrush, curX, row2Y);
+                    if (!string.IsNullOrEmpty(gpuPower))
+                        g.DrawString(gpuPower, _fontMain!, gpuBrush, curX, row1Y);
+                    if (!string.IsNullOrEmpty(cpuPower))
+                        g.DrawString(cpuPower, _fontMain!, cpuBrush, curX, row2Y);
 
                     float powerW = Math.Max(g.MeasureString(gpuPower, _fontMain!).Width, g.MeasureString(cpuPower, _fontMain!).Width);
                     curX += powerW + 10f * scale;
                 }
             }
 
-            // ── COLUMNS 5 & 6: LOAD % & VRAM/RAM WITH MINI BARS (Full Mode only) ─────────
-            if (Mode == OverlayMode.Full)
+            // ── COLUMN 5: LOAD % WITH MINI BARS ─────────────────────────────────────
+            if (ShowLoad)
             {
                 float barW = 3.5f * scale;
                 float barH = 12f * scale;
 
-                // Column 5: GPU & CPU Load % + vertical segmented bar
                 int gpuVal = Math.Clamp(_gpuUsage ?? 0, 0, 100);
                 int cpuVal = Math.Clamp(_cpuUsage ?? 0, 0, 100);
                 string gpuPct = $"{gpuVal}%";
                 string cpuPct = $"{cpuVal}%";
 
-                using (var gpuBrush = new SolidBrush(GpuGreen))
-                using (var cpuBrush = new SolidBrush(CpuTeal))
+                using (var gpuBrush = new SolidBrush(gpuCol))
+                using (var cpuBrush = new SolidBrush(cpuCol))
                 {
                     g.DrawString(gpuPct, _fontMain!, gpuBrush, curX, row1Y);
                     g.DrawString(cpuPct, _fontMain!, cpuBrush, curX, row2Y);
@@ -830,13 +1021,19 @@ namespace PredatorControlApp
                     float pctW = Math.Max(g.MeasureString(gpuPct, _fontMain!).Width, g.MeasureString(cpuPct, _fontMain!).Width);
                     float barX = curX + pctW + 3f * scale;
 
-                    DrawMiniBar(g, barX, row1Y + 1 * scale, barW, barH, gpuVal, GpuGreen, DimGpu, scale);
-                    DrawMiniBar(g, barX, row2Y + 1 * scale, barW, barH, cpuVal, CpuTeal, DimCpu, scale);
+                    DrawMiniBar(g, barX, row1Y + 1 * scale, barW, barH, gpuVal, gpuCol, dimGpu, scale);
+                    DrawMiniBar(g, barX, row2Y + 1 * scale, barW, barH, cpuVal, cpuCol, dimCpu, scale);
 
                     curX = barX + barW + 10f * scale;
                 }
+            }
 
-                // Column 6: VRAM (GPU) & RAM (CPU) GB + vertical segmented bar
+            // ── COLUMN 6: VRAM / RAM WITH MINI BARS ─────────────────────────────────
+            if (ShowRam)
+            {
+                float barW = 3.5f * scale;
+                float barH = 12f * scale;
+
                 float vramGb = _vramUsedGb ?? 0f;
                 float vramMax = _vramTotalGb ?? 8.0f;
                 int vramPct = (int)Math.Clamp((vramGb / Math.Max(1f, vramMax)) * 100f, 0, 100);
@@ -848,8 +1045,8 @@ namespace PredatorControlApp
                 string vramText = $"{vramGb:F1}GB";
                 string ramText = $"{ramGb:F1}GB";
 
-                using (var gpuBrush = new SolidBrush(GpuGreen))
-                using (var cpuBrush = new SolidBrush(CpuTeal))
+                using (var gpuBrush = new SolidBrush(gpuCol))
+                using (var cpuBrush = new SolidBrush(cpuCol))
                 {
                     g.DrawString(vramText, _fontMain!, gpuBrush, curX, row1Y);
                     g.DrawString(ramText, _fontMain!, cpuBrush, curX, row2Y);
@@ -857,8 +1054,8 @@ namespace PredatorControlApp
                     float memW = Math.Max(g.MeasureString(vramText, _fontMain!).Width, g.MeasureString(ramText, _fontMain!).Width);
                     float barX = curX + memW + 3f * scale;
 
-                    DrawMiniBar(g, barX, row1Y + 1 * scale, barW, barH, vramPct, GpuGreen, DimGpu, scale);
-                    DrawMiniBar(g, barX, row2Y + 1 * scale, barW, barH, ramPct, CpuTeal, DimCpu, scale);
+                    DrawMiniBar(g, barX, row1Y + 1 * scale, barW, barH, vramPct, gpuCol, dimGpu, scale);
+                    DrawMiniBar(g, barX, row2Y + 1 * scale, barW, barH, ramPct, cpuCol, dimCpu, scale);
                 }
             }
 
@@ -955,8 +1152,8 @@ namespace PredatorControlApp
             }
 
             // Crisp line strokes
-            using (var gpuPen = new Pen(GpuGreen, 1.3f * scale))
-            using (var cpuPen = new Pen(CpuTeal, 1.3f * scale))
+            using (var gpuPen = new Pen(GpuColor, 1.3f * scale))
+            using (var cpuPen = new Pen(CpuColor, 1.3f * scale))
             {
                 if (gpuPts.Count >= 2) g.DrawLines(gpuPen, gpuPts.ToArray());
                 if (cpuPts.Count >= 2) g.DrawLines(cpuPen, cpuPts.ToArray());

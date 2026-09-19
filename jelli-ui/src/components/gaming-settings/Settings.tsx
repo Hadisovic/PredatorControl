@@ -41,7 +41,7 @@ export function Settings({state: s}: {state: State}) {
     </button>
   )
 
-  const setOverlayMode = (mode: 'light' | 'default' | 'full') => {
+  const setOverlayMode = (mode: 'light' | 'default' | 'full' | 'complete') => {
     update({ overlayMode: mode })
   }
 
@@ -106,14 +106,14 @@ export function Settings({state: s}: {state: State}) {
 
       <label className="field"><span>HUD Mode</span></label>
       <div className="segments">
-        {(['light', 'default', 'full'] as const).map(m => (
+        {(['light', 'default', 'full', 'complete'] as const).map(m => (
           <button
             key={m}
             className={currentMode === m ? 'selected' : ''}
             aria-pressed={currentMode === m}
             onClick={() => setOverlayMode(m)}
           >
-            {m === 'light' ? 'Light' : m === 'default' ? 'Default' : 'Full'}
+            {m === 'light' ? 'Light' : m === 'default' ? 'Default' : m === 'full' ? 'Full' : 'Complete'}
           </button>
         ))}
       </div>

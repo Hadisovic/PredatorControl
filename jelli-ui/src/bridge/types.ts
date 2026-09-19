@@ -1,7 +1,7 @@
 export type Surface = 'compact' | 'summary' | 'dashboard' | 'menu'
 export interface Preferences {
   presentation: 'expand' | 'flyout'; metric1: string; metric2: string; overlayCorner: string;
-  overlayMonitor: string; overlayMode?: 'light' | 'default' | 'full'; overlayScale?: number;
+  overlayMonitor: string; overlayMode?: 'light' | 'default' | 'full' | 'complete'; overlayScale?: number;
   overlayGraphs: boolean; overlayPower: boolean; overlayUsage: boolean; syncRgb: boolean; jelliEnabled?: boolean; x: number; y: number
 }
 export interface Control {
@@ -11,7 +11,7 @@ export interface Control {
 export interface MenuItem { id: string; label: string; enabled: boolean; checked: boolean; children: MenuItem[] }
 export interface State {
   telemetry: Record<string, number | boolean | null> | null; powerMode: string; fanMode: string; gpuMode: string;
-  gpuNotice: string; fps: number | null; overlay: boolean; overlayMode?: 'light' | 'default' | 'full'; overlayScale?: number;
+  gpuNotice: string; fps: number | null; overlay: boolean; overlayMode?: 'light' | 'default' | 'full' | 'complete'; overlayScale?: number;
   sections: {id: string; label: string; controls: Control[]}[];
   menu: MenuItem[]; settings: Preferences; monitors: {id: string; label: string}[]; version: string; doubleClickMs: number; gameSyncStatus: string
 }

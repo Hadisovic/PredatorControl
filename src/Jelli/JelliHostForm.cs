@@ -62,6 +62,37 @@ internal sealed class JelliHostForm : Form
     [DllImport("dwmapi.dll", PreserveSig = true)]
     private static extern int DwmExtendFrameIntoClientArea(nint window, ref Margins margins);
 
+    [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+    private static extern bool SetDllDirectory(string lpPathName);
+
+    internal static void EnsureWebView2Loader()
+    {
+        try
+        {
+            string targetDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PredatorControl");
+            Directory.CreateDirectory(targetDir);
+            string targetDll = Path.Combine(targetDir, "WebView2Loader.dll");
+
+            if (!File.Exists(targetDll))
+            {
+                var asm = typeof(JelliHostForm).Assembly;
+                using var stream = asm.GetManifestResourceStream("WebView2Loader.dll");
+                if (stream != null)
+                {
+                    using var fs = new FileStream(targetDll, FileMode.Create, FileAccess.Write, FileShare.None);
+                    stream.CopyTo(fs);
+                }
+            }
+
+            if (File.Exists(targetDll))
+            {
+                CoreWebView2Environment.SetLoaderDllFolderPath(targetDir);
+                SetDllDirectory(targetDir);
+            }
+        }
+        catch { }
+    }
+
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);
@@ -71,11 +102,12 @@ internal sealed class JelliHostForm : Form
 
     internal async Task InitializeAsync(bool startSuspended = false)
     {
+        EnsureWebView2Loader();
         _gaming = startSuspended;
         string profile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PredatorControl", _persist ? "WebView2" : "WebView2-Test");
         var options = new CoreWebView2EnvironmentOptions
         {
-            AdditionalBrowserArguments = "--single-process --in-process-gpu --disable-gpu-compositing --disable-software-rasterizer --renderer-process-limit=1 --disable-features=TranslateUI,MediaSessionService,OptimizationHints --js-flags=\"--max-old-space-size=16 --max-semi-space-size=1 --optimize-for-size\""
+            AdditionalBrowserArguments = "--disable-gpu --js-flags=\"--max-old-space-size=16 --max-semi-space-size=1 --optimize-for-size\""
         };
         var env = await CoreWebView2Environment.CreateAsync(userDataFolder: profile, options: options);
         await _web.EnsureCoreWebView2Async(env);

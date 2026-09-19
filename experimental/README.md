@@ -2,17 +2,14 @@
 
 This folder contains pre-built experimental binaries for testing on Predator and Nitro laptops:
 
-- **`PredatorControl-exp-win-x64.exe`** (~3.4 MB)
+- **`PredatorControl-exp-win-x64.exe`** (~3.5 MB)
   - Framework-dependent single-file executable.
   - Requires .NET 10 Desktop Runtime installed.
 
-- **`PredatorControl-exp-standalone.exe`** (~52.8 MB)
-  - Self-contained single-file executable with native assembly compression (`EnableCompressionInSingleFile=true`).
+- **`PredatorControl-exp-standalone.zip`** (~46.8 MB)
+  - Full uncompressed self-contained standalone executable (`PredatorControl-exp-standalone.exe`, ~119 MB) and `WebView2Loader.dll`.
   - No .NET installation required; double-click to run anywhere.
-  - Reduced by 55.7% from the uncompressed 119 MB build.
-
-- **`PredatorControl-exp-standalone.zip`** (~46.7 MB)
-  - Compressed zip archive of the standalone executable.
+  - Provided in a zip package to adhere to GitHub's 100 MB per-file tracking limit.
 
 ### Features in this Experimental Build:
 1. **Dedicated Overlay Settings Dialog**:

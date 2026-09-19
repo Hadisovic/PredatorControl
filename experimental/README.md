@@ -1,6 +1,6 @@
-# Release 1.2.5 Binaries
+# Release 1.2.2 Binaries
 
-This folder contains pre-built binaries for testing and release v1.2.5:
+This folder contains pre-built binaries for testing and release v1.2.2:
 
 - **`PredatorControl-standalone.exe`** (~50.4 MB)
   - Self-contained standalone executable with native single-file assembly compression.

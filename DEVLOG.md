@@ -321,11 +321,11 @@ The user requested a faithful, pixel-precise recreation of the 3-mode gaming ove
    - Win32 `GlobalMemoryStatusEx` provides live RAM usage and total capacity in GB.
 
 ### Hotkeys & Interactive Gestures
-- **`Ctrl + Shift + Alt + O`** (and `Ctrl + Shift + O`): Toggle overlay on/off.
-- **`Ctrl + Shift + Alt + Click`**: Cycle display mode (`Light` ➔ `Default` ➔ `Full` ➔ `Light`).
-- **`Ctrl + Shift + Alt + Drag`**: Move the overlay anywhere on the screen with coordinates persisted to Registry.
-- **`Ctrl + Shift + Alt + Mouse Wheel`**: Dynamically scale HUD from 50% to 300% in 10% steps.
-- **`Ctrl + Shift + Alt + Middle Click`**: Instantly reset HUD scale to 100%.
+- **`Ctrl + Shift + O`**: Toggle overlay on/off.
+- **`Ctrl + Shift + Click`**: Cycle display mode (`Light` ➔ `Default` ➔ `Full` ➔ `Complete` ➔ `Light`).
+- **`Ctrl + Shift + Drag`**: Move the overlay anywhere on the screen with coordinates persisted to Registry.
+- **`Ctrl + Shift + Mouse Wheel`**: Dynamically scale HUD from 50% to 300% in 10% steps.
+- **`Ctrl + Shift + Middle Click`**: Instantly reset HUD scale to 100%.
 - **Hover & Key Guard:** Mouse input is only intercepted when the cursor is positioned directly over the overlay window, ensuring zero interference with active games.
 
 ---

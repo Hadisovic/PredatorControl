@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 
 namespace PredatorControlApp;
 
@@ -110,14 +110,21 @@ public partial class Form1 : IJelliBackend
         sections.Add(new("rgb", "Keyboard light", rgb.ToArray()));
                 _jelliActions["overlay.mode"] = d => {
             string m = d.GetString() ?? "default";
-            OverlayMode mode = m.ToLowerInvariant() switch { "light" => OverlayMode.Light, "full" => OverlayMode.Full, _ => OverlayMode.Default };
+            OverlayMode mode = m.ToLowerInvariant() switch { "light" => OverlayMode.Light, "full" => OverlayMode.Full, "complete" => OverlayMode.Complete, _ => OverlayMode.Default };
             _overlayForm?.SetMode(mode);
         };
         _jelliActions["overlay.scale"] = d => {
             int s = d.GetInt32();
             _overlayForm?.SetScale(s);
         };
-        sections.Add(new("hardware", "Hardware", [Toggle("hardware.keyLock", "Lock Windows & Menu keys", _switchWinKeyLock)]));
+        _jelliActions["overlay.settings"] = _ => {
+            if (InvokeRequired) BeginInvoke(new Action(OpenOverlaySettings));
+            else OpenOverlaySettings();
+        };
+        sections.Add(new("hardware", "Hardware", [
+            Toggle("hardware.keyLock", "Lock Windows & Menu keys", _switchWinKeyLock),
+            Button("overlay.settings", "Overlay Settings ↗", _btnOverlaySettings)
+        ]));
         sections.Add(new("games", "Game Sync", [Toggle("games.enabled", "Apply profiles when games launch", _switchGameSync), Button("games.configure", "Configure game profiles ↗", _btnConfigureGames)]));
         sections.Add(new("app", "Application", [Toggle("app.startup", "Start with Windows", _switchStartWithWindows), Button("app.updates", "Check for updates", _btnCheckUpdates),
             Button("app.teal", "Teal", _btnThemeTeal), Button("app.crimson", "Crimson", _btnThemeCrimson), Button("app.oled", "OLED", _btnThemeOled)]));
@@ -210,6 +217,12 @@ public partial class Form1 : IJelliBackend
     void IJelliBackend.Action(string id, JsonElement data) => JelliAction(id, data);
     void IJelliBackend.Fallback() => JelliFallback();
     void IJelliBackend.SetJelliEnabled(bool enabled) => SetJelliEnabled(enabled);
+    void IJelliBackend.SetOverlayVisible(bool visible) => SetOverlayVisible(visible);
+    void IJelliBackend.OpenOverlaySettings()
+    {
+        if (InvokeRequired) BeginInvoke(new Action(OpenOverlaySettings));
+        else OpenOverlaySettings();
+    }
     void IJelliBackend.ConfigureOverlay(JelliSettings settings) => ApplyJelliOverlaySettings(settings);
     bool IJelliBackend.TryWriteColor(Color color) => WriteJelliColor(color);
     void IJelliBackend.RestoreColor() => RestoreJelliColor();

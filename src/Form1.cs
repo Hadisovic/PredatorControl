@@ -83,7 +83,6 @@ namespace PredatorControlApp
         private const int HOTKEY_ID_PREDATOR_F24 = 9103;
         private const int HOTKEY_ID_PREDATOR_F23 = 9104;
         private const int HOTKEY_ID_OVERLAY = 9105;
-        private const int HOTKEY_ID_OVERLAY_ALT = 9106;
 
         #endregion
 
@@ -638,7 +637,6 @@ namespace PredatorControlApp
                 RegisterHotKey(Handle, HOTKEY_ID_PREDATOR_F24, MOD_NOREPEAT, PredatorKeyHook.VK_F24);
                 RegisterHotKey(Handle, HOTKEY_ID_PREDATOR_F23, MOD_NOREPEAT, PredatorKeyHook.VK_F23);
                 RegisterHotKey(Handle, HOTKEY_ID_OVERLAY, MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, (uint)Keys.O);
-                RegisterHotKey(Handle, HOTKEY_ID_OVERLAY_ALT, MOD_CONTROL | MOD_SHIFT | MOD_ALT | MOD_NOREPEAT, (uint)Keys.O);
             }
             catch { }
         }
@@ -652,7 +650,6 @@ namespace PredatorControlApp
                 UnregisterHotKey(Handle, HOTKEY_ID_PREDATOR_F24);
                 UnregisterHotKey(Handle, HOTKEY_ID_PREDATOR_F23);
                 UnregisterHotKey(Handle, HOTKEY_ID_OVERLAY);
-                UnregisterHotKey(Handle, HOTKEY_ID_OVERLAY_ALT);
             }
             catch { }
             base.OnHandleDestroyed(e);
@@ -698,7 +695,7 @@ namespace PredatorControlApp
                     _predatorKeyHook?.TriggerModeKey();
                     return;
                 }
-                else if (id == HOTKEY_ID_OVERLAY || id == HOTKEY_ID_OVERLAY_ALT)
+                else if (id == HOTKEY_ID_OVERLAY)
                 {
                     ToggleGameOverlay();
                     return;
@@ -1654,7 +1651,7 @@ namespace PredatorControlApp
 
             // In-Game Gaming Overlay HUD
             y += S(24);
-            _lblOverlay = MakeLabel("Gaming Overlay HUD (Ctrl+Shift+Alt+O)", pad, y, FontBody, Color.FromArgb(120, 120, 135));
+            _lblOverlay = MakeLabel("Gaming Overlay HUD (Ctrl+Shift+O)", pad, y, FontBody, Color.FromArgb(120, 120, 135));
             CenterV(_lblOverlay, y, switchH);
 
             _switchOverlay = new PredatorToggle
@@ -1665,13 +1662,9 @@ namespace PredatorControlApp
             _contentPanel.Controls.Add(_switchOverlay);
             _switchOverlay.CheckedChanged += (s, e) => SetOverlayVisible(_switchOverlay.Checked);
 
-            // Overlay Display Mode (Light, Default, Full, Complete) & Settings Button
+            // Overlay Display Mode (Light, Default, Full, Complete)
             y += switchH + S(12);
             MakeLabel("DISPLAY MODE:", pad, y, FontSectionHeader, Color.FromArgb(120, 120, 135));
-            int optBtnW = S(85);
-            _btnOverlaySettings = MakeButton("⚙ Options", ClientSize.Width - pad - optBtnW, y - S(4), optBtnW, S(26));
-            _btnOverlaySettings.Click += (s, e) => OpenOverlaySettings();
-            _contentPanel.Controls.Add(_btnOverlaySettings);
 
             y += S(20);
             int modeBtnW = (contentW - gap * 3) / 4;
@@ -1690,7 +1683,13 @@ namespace PredatorControlApp
             _contentPanel.Controls.Add(_btnOverlayFull);
             _contentPanel.Controls.Add(_btnOverlayComplete);
 
-            y += btnH + S(14);
+            // Dedicated Overlay Options & Settings button in the empty space below mode buttons
+            y += btnH + S(8);
+            _btnOverlaySettings = MakeButton("⚙ Overlay Options", pad, y, contentW, S(28));
+            _btnOverlaySettings.Click += (s, e) => OpenOverlaySettings();
+            _contentPanel.Controls.Add(_btnOverlaySettings);
+
+            y += S(28) + S(14);
             UpdateOverlayUI();
 
             // Windows & Menu Key Lock
@@ -2030,12 +2029,12 @@ namespace PredatorControlApp
 
                 // Gaming Overlay controls
                 if (_switchOverlay != null) _switchOverlay.Left = ClientSize.Width - pad - S(48);
-                if (_btnOverlaySettings != null) _btnOverlaySettings.Left = ClientSize.Width - pad - _btnOverlaySettings.Width;
                 int overlayModeBtnW = (contentW - 3 * gap) / 4;
                 if (_btnOverlayLight != null) { _btnOverlayLight.Left = pad; _btnOverlayLight.Width = overlayModeBtnW; }
                 if (_btnOverlayDefault != null) { _btnOverlayDefault.Left = pad + overlayModeBtnW + gap; _btnOverlayDefault.Width = overlayModeBtnW; }
                 if (_btnOverlayFull != null) { _btnOverlayFull.Left = pad + (overlayModeBtnW + gap) * 2; _btnOverlayFull.Width = overlayModeBtnW; }
                 if (_btnOverlayComplete != null) { _btnOverlayComplete.Left = pad + (overlayModeBtnW + gap) * 3; _btnOverlayComplete.Width = overlayModeBtnW; }
+                if (_btnOverlaySettings != null) { _btnOverlaySettings.Left = pad; _btnOverlaySettings.Width = contentW; }
 
                 // Keyboard RGB controls
                 if (_rgbDropDown != null) _rgbDropDown.Width = contentW;

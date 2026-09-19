@@ -160,16 +160,17 @@ Predator Control includes an ultra-lightweight, 3-mode in-game telemetry HUD ins
 - **Light Mode (`Light`):** Compact minimal HUD (`FPS | GPU Temp & Watts | CPU Temp & Watts`).
 - **Default Mode (`Default`):** Balanced monitor (`FPS | GPU & CPU Temp + Fan RPM | 60s Sparkline Graph | Power Draw`).
 - **Full Mode (`Full`):** Complete hardware dashboard (`Default + GPU/CPU Load % Bars + VRAM & System RAM Bars`).
+- **Complete Mode (`Complete`):** Comprehensive all-in-one HUD displaying all enabled metrics simultaneously.
 
 ### ⌨️ Shortcuts & Gestures
 
 | Gesture / Shortcut | Action | Description |
 | :--- | :--- | :--- |
-| **`Ctrl + Shift + Alt + O`** (or `Ctrl + Shift + O`) | **Toggle Overlay** | Shows or hides the overlay anywhere in Windows or games. |
-| **`Ctrl + Shift + Alt + Click`** | **Cycle Display Mode** | Cycles: `Light` ➔ `Default` ➔ `Full` ➔ `Light`. |
-| **`Ctrl + Shift + Alt + Drag`** | **Move Overlay** | Repositions HUD on screen; coordinates persist across reboots. |
-| **`Ctrl + Shift + Alt + Mouse Wheel`** | **Scale HUD (50%–300%)** | Dynamically increases/decreases size in 10% steps. |
-| **`Ctrl + Shift + Alt + Middle Click`** | **Reset Scale (100%)** | Instantly resets HUD scaling back to standard 100%. |
+| **`Ctrl + Shift + O`** | **Toggle Overlay** | Shows or hides the overlay anywhere in Windows or games. |
+| **`Ctrl + Shift + Click`** | **Cycle Display Mode** | Cycles: `Light` ➔ `Default` ➔ `Full` ➔ `Complete` ➔ `Light`. |
+| **`Ctrl + Shift + Drag`** | **Move Overlay** | Repositions HUD on screen; coordinates persist across reboots. |
+| **`Ctrl + Shift + Mouse Wheel`** | **Scale HUD (50%–300%)** | Dynamically increases/decreases size in 10% steps. |
+| **`Ctrl + Shift + Middle Click`** | **Reset Scale (100%)** | Instantly resets HUD scaling back to standard 100%. |
 
 > [!TIP]
 > **Anti-Cheat Safe:** The overlay utilizes Windows ETW kernel tracing (`Microsoft-Windows-DxgKrnl` Event ID 184 / `DXGI` Event ID 42). It requires zero DLL injection and zero API hooks, making it completely safe in games with anti-cheats (Vanguard, EAC, BattlEye, Ricochet).

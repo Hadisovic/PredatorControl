@@ -309,11 +309,11 @@ namespace PredatorControlApp
             // 6. Shortcut Tips Box
             string[] tips =
             {
-                "•   Ctrl + Shift + Alt + O  -  Toggle overlay",
-                "•   Ctrl + Shift + Alt + Mouse Drag  -  Move overlay",
-                "•   Ctrl + Shift + Alt + Mouse Click  -  Switch mode",
-                "•   Ctrl + Shift + Alt + Wheel  -  Resize overlay",
-                "•   Ctrl + Shift + Alt + Wheel Click  -  Reset size"
+                "•   Ctrl + Shift + O  -  Toggle overlay",
+                "•   Ctrl + Shift + Mouse Drag  -  Move overlay",
+                "•   Ctrl + Shift + Mouse Click  -  Switch mode",
+                "•   Ctrl + Shift + Wheel  -  Resize overlay",
+                "•   Ctrl + Shift + Wheel Click  -  Reset size"
             };
 
             int tipY = y;

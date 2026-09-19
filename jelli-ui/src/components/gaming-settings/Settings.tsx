@@ -149,7 +149,15 @@ export function Settings({state: s}: {state: State}) {
         </select>
       </label>
 
-      <p className="footnote">Tip: Hold Ctrl + Shift + Alt in-game to drag and freely reposition the HUD anywhere on your screen.</p>
+      <button
+        type="button"
+        style={{ width: '100%', marginTop: '12px' }}
+        onClick={() => void request('overlay.settings', null)}
+      >
+        ⚙ Overlay Settings &amp; Customization
+      </button>
+
+      <p className="footnote">Tip: Hold Ctrl + Shift in-game to drag and freely reposition the HUD anywhere on your screen.</p>
 
       <button className="launch" onClick={() => send('overlay', true)}>
         {s.overlay ? 'Gaming mode active (Ctrl+Shift+O to close)' : 'Enter gaming mode'}

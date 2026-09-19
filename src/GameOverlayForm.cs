@@ -30,7 +30,6 @@ namespace PredatorControlApp
 
         private const int VK_CONTROL = 0x11;
         private const int VK_SHIFT = 0x10;
-        private const int VK_MENU = 0x12; // Alt key
 
         private const int WM_NCLBUTTONDOWN = 0xA1;
         private const int HT_CAPTION = 0x2;
@@ -515,12 +514,11 @@ namespace PredatorControlApp
 
         private void CheckDragModifierKeys()
         {
-            // Support Ctrl + Shift + Alt and Ctrl + Shift
+            // Support Ctrl + Shift
             bool ctrl = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
             bool shift = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
-            bool alt = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
 
-            bool interactiveRequested = (ctrl && shift && alt) || (ctrl && shift);
+            bool interactiveRequested = ctrl && shift;
 
             if (interactiveRequested && _isClickThrough)
             {

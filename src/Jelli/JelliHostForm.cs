@@ -196,6 +196,7 @@ internal sealed class JelliHostForm : Form
                     _pendingColor = Color.FromArgb(request.Data.GetProperty("r").GetInt32(), request.Data.GetProperty("g").GetInt32(), request.Data.GetProperty("b").GetInt32());
                     break;
                 case "overlay": _backend.SetOverlayVisible(request.Data.GetBoolean()); break;
+                case "overlay.settings": _backend.OpenOverlaySettings(); break;
                 case "legacy":
                     _cursor.Stop();
                     Hide();

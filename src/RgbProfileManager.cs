@@ -93,6 +93,12 @@ public static class RgbProfileManager
         profiles.RemoveAll(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase));
         if (profiles.Count == 0) profiles.AddRange(DefaultProfiles);
         SaveProfiles(profiles);
+
+        string currentActive = GetActiveProfile();
+        if (string.Equals(currentActive, name, StringComparison.OrdinalIgnoreCase))
+        {
+            SetActiveProfile(profiles[0].Name);
+        }
     }
 
     public static string GetActiveProfile()

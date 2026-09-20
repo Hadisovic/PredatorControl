@@ -116,6 +116,7 @@ public partial class Form1 : IJelliBackend
             Choices: profiles.Select((p, i) => new JelliChoice(p.Name, i)).ToArray()));
         rgb.Add(new("rgb.profile.save", "Save Zones to Profile", "button", false, true));
         rgb.Add(new("rgb.profile.new", "+ New Profile", "button", false, true));
+        rgb.Add(new("rgb.profile.delete", "Delete Profile", "button", false, profiles.Count > 1));
 
         _jelliActions["rgb.profile"] = d => {
             int idx = d.GetInt32();
@@ -146,6 +147,28 @@ public partial class Form1 : IJelliBackend
             RgbProfileManager.SetActiveProfile(name);
             if (InvokeRequired) BeginInvoke(new Action(LoadRgbProfilesIntoUi));
             else LoadRgbProfilesIntoUi();
+        };
+        _jelliActions["rgb.profile.delete"] = _ => {
+            var profList = RgbProfileManager.LoadProfiles();
+            if (profList.Count <= 1) return;
+            string activeName = RgbProfileManager.GetActiveProfile();
+            var current = profList.FirstOrDefault(p => string.Equals(p.Name, activeName, StringComparison.OrdinalIgnoreCase)) ?? profList.FirstOrDefault();
+            if (current != null)
+            {
+                RgbProfileManager.DeleteProfile(current.Name);
+                var remaining = RgbProfileManager.LoadProfiles();
+                if (InvokeRequired) BeginInvoke(new Action(() => {
+                    LoadRgbProfilesIntoUi();
+                    if (remaining.Count > 0) ApplyRgbProfile(remaining[0]);
+                    _jelli?.PublishState();
+                }));
+                else
+                {
+                    LoadRgbProfilesIntoUi();
+                    if (remaining.Count > 0) ApplyRgbProfile(remaining[0]);
+                    _jelli?.PublishState();
+                }
+            }
         };
 
         rgb.AddRange([Range("rgb.brightness", "Brightness", _brightnessSlider), Range("rgb.speed", "Effect speed", _speedSlider), Toggle("rgb.sleep", "Backlight sleeps after 30 seconds", _switchBacklight30s)]);

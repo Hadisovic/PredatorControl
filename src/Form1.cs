@@ -111,6 +111,7 @@ namespace PredatorControlApp
         private PredatorDropDown _cboRgbProfiles = null!;
         private PredatorButton _btnSaveRgbProfile = null!;
         private PredatorButton _btnNewRgbProfile = null!;
+        private PredatorButton _btnDeleteRgbProfile = null!;
         private System.Windows.Forms.Timer? _profileSaveFeedbackTimer;
         private bool _isApplyingRgbProfile;
 
@@ -1588,8 +1589,8 @@ namespace PredatorControlApp
             MakeLabel("SAVED 4-ZONE RGB PROFILES:", pad, y, FontSectionHeader, Color.FromArgb(120, 120, 135));
 
             y += S(20);
-            int profBtnW = S(85);
-            int profDropW = contentW - (profBtnW * 2 + gap * 2);
+            int profBtnW = S(68);
+            int profDropW = contentW - (profBtnW * 3 + gap * 3);
             _cboRgbProfiles = new PredatorDropDown { Location = new Point(pad, y), Size = new Size(profDropW, S(30)) };
             _cboRgbProfiles.SelectedIndexChanged += (s, e) =>
             {
@@ -1608,6 +1609,9 @@ namespace PredatorControlApp
 
             _btnNewRgbProfile = MakeButton("+ New", pad + profDropW + gap + profBtnW + gap, y, profBtnW, S(30));
             _btnNewRgbProfile.Click += (s, e) => CreateNewRgbProfile();
+
+            _btnDeleteRgbProfile = MakeButton("Delete", pad + profDropW + gap + (profBtnW + gap) * 2, y, profBtnW, S(30));
+            _btnDeleteRgbProfile.Click += (s, e) => DeleteCurrentRgbProfile();
 
             y += S(30) + S(16);
             _lblBrightHdr = MakeLabel("BRIGHTNESS: 100%", pad, y, FontSectionHeader, Color.FromArgb(120, 120, 135));
@@ -3346,6 +3350,10 @@ namespace PredatorControlApp
                 }
                 if (selIdx < 0 && profiles.Count > 0) selIdx = 0;
                 _cboRgbProfiles.SelectedIndex = selIdx;
+                if (_btnDeleteRgbProfile != null)
+                {
+                    _btnDeleteRgbProfile.Enabled = profiles.Count > 1;
+                }
             }
             finally
             {
@@ -3419,6 +3427,34 @@ namespace PredatorControlApp
                         _btnSaveRgbProfile.Text = "Save";
                 };
                 _profileSaveFeedbackTimer.Start();
+            }
+        }
+
+        private void DeleteCurrentRgbProfile()
+        {
+            var profiles = RgbProfileManager.LoadProfiles();
+            if (profiles.Count <= 1)
+            {
+                MessageBox.Show(this, "At least one profile must be kept.", "Delete Profile", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            int idx = _cboRgbProfiles.SelectedIndex;
+            if (idx >= 0 && idx < profiles.Count)
+            {
+                string targetName = profiles[idx].Name;
+                var res = MessageBox.Show(this, $"Are you sure you want to delete the RGB profile '{targetName}'?", "Delete RGB Profile", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                if (res == DialogResult.Yes)
+                {
+                    RgbProfileManager.DeleteProfile(targetName);
+                    var remaining = RgbProfileManager.LoadProfiles();
+                    LoadRgbProfilesIntoUi();
+                    if (remaining.Count > 0)
+                    {
+                        ApplyRgbProfile(remaining[0]);
+                    }
+                    _jelli?.PublishState();
+                }
             }
         }
 

@@ -361,7 +361,7 @@ c112daa 2026-09-08 Add UI preview screenshot to assets
 1.2.0   2026-09-17 Major: Jelli Desktop companion UI integration via Microsoft Edge WebView2
 1.2.1   2026-09-17 Jelli toggle true-off, RGB 4-zone synchronization, and LightingProfile.ini fixes
 1.2.2   2026-09-19 Release v1.2.2: Dedicated Overlay Settings dialog, universal chassis adaptation, Nitro/Predator profile routing, Ctrl+Shift hotkeys, embedded native WebView2Loader with zero-DLL dependency, and non-exp binaries.
-1.2.3   2026-09-20 Release v1.2.3: Custom 4-Zone RGB Profile Manager, scroll & tab state persistence, graceful Windows shutdown & logoff crash guardrails.
+1.2.3   2026-09-20 Release v1.2.3: Custom 4-Zone RGB Profile Manager (create/save/delete), scroll & tab state persistence, graceful Windows shutdown & logoff crash guardrails.
 ```
 
 ---

@@ -8,6 +8,7 @@ export function HardwareControl({control: c}: {control: Control}) {
   const [isPrompting, setIsPrompting] = useState(false)
   const [profileName, setProfileName] = useState('')
   const [savedFeedback, setSavedFeedback] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
 
   useEffect(() => setValue(c.value), [c.value])
 
@@ -122,6 +123,64 @@ export function HardwareControl({control: c}: {control: Control}) {
         }}
       >
         + New Profile
+      </button>
+    )
+  }
+
+  if (c.id === 'rgb.profile.delete') {
+    if (confirmDelete) {
+      return (
+        <div style={{display: 'flex', gap: '6px', alignItems: 'center'}}>
+          <button
+            className="mode"
+            disabled={disabled}
+            onClick={() => {
+              void commit(null)
+              setConfirmDelete(false)
+            }}
+            style={{
+              borderColor: '#ff4d4d',
+              background: '#ff4d4d22',
+              color: '#ff4d4d',
+              fontWeight: 600
+            }}
+          >
+            Confirm Delete?
+          </button>
+          <button
+            type="button"
+            onClick={() => setConfirmDelete(false)}
+            style={{
+              background: '#ffffff10',
+              color: '#a5b6bd',
+              borderRadius: '8px',
+              padding: '7px 10px',
+              border: '1px solid #ffffff14',
+              fontSize: '11px',
+              cursor: 'pointer'
+            }}
+          >
+            ✕
+          </button>
+        </div>
+      )
+    }
+
+    return (
+      <button
+        className="mode"
+        disabled={disabled}
+        onClick={() => {
+          setConfirmDelete(true)
+          setTimeout(() => setConfirmDelete(false), 4000)
+        }}
+        style={{
+          borderColor: '#ff4d4d55',
+          color: '#ff6b6b'
+        }}
+        title="Delete the currently selected profile"
+      >
+        Delete Profile
       </button>
     )
   }

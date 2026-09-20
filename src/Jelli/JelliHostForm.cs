@@ -145,24 +145,40 @@ internal sealed class JelliHostForm : Form
 
     private async void Recover()
     {
-        if (_disposed || _recovering) return;
+        if (_disposed || _recovering || Form1.IsShuttingDown || Environment.HasShutdownStarted) return;
         _recovering = true;
         _ready = false;
         _cursor.Stop();
         try {
             if (++_recoveries > 3) throw new InvalidOperationException("The Jelli renderer repeatedly stopped. Native controls are available from the tray.");
             await Task.Delay(1000);
-            if (!_disposed) _web.CoreWebView2.Reload();
+            if (!_disposed && !Form1.IsShuttingDown && !Environment.HasShutdownStarted && _web.CoreWebView2 != null)
+            {
+                _web.CoreWebView2.Reload();
+            }
         }
-        catch (Exception ex) { Hide(); _backend.Fallback(); Program.Report(ex, false); }
+        catch (Exception ex)
+        {
+            if (_disposed || Form1.IsShuttingDown || Environment.HasShutdownStarted) return;
+            Hide();
+            _backend.Fallback();
+            Program.Report(ex, false);
+        }
         finally { _recovering = false; }
     }
 
     private void Send(object message)
     {
-        if (!_ready || _disposed) return;
-        try { _web.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(message, JelliSettings.Json)); }
-        catch (InvalidOperationException) { Recover(); }
+        if (!_ready || _disposed || Form1.IsShuttingDown || Environment.HasShutdownStarted) return;
+        try
+        {
+            if (_web.CoreWebView2 != null)
+                _web.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(message, JelliSettings.Json));
+        }
+        catch (InvalidOperationException)
+        {
+            if (!_disposed && !Form1.IsShuttingDown && !Environment.HasShutdownStarted) Recover();
+        }
     }
     internal void PublishState()
     {
@@ -333,11 +349,12 @@ internal sealed class JelliHostForm : Form
     {
         if (disposing && !_disposed) {
             _disposed = true;
+            _recovering = true;
             _connected.TrySetCanceled();
             SystemEvents.DisplaySettingsChanged -= OnDisplayChanged;
             _cursor.Dispose(); _state.Dispose(); _rgb.Dispose();
             try { SavePosition(); if (_colorWritten) _backend.RestoreColor(); } catch { }
-            _web.Dispose();
+            try { _web.Dispose(); } catch { }
         }
         base.Dispose(disposing);
     }

@@ -106,6 +106,48 @@ public partial class Form1 : IJelliBackend
         };
         for (int i = 0; i < _btnPresetColors.Length; i++) rgb.Add(Button($"rgb.preset{i}", PresetColorNames[i], _btnPresetColors[i]));
         rgb.Add(new("rgb.color", "Zone color", "color", ColorTranslator.ToHtml(_currentZoneColors[Math.Max(0, _selectedZone)]), _btnCustomColor.Enabled));
+
+        var profiles = RgbProfileManager.LoadProfiles();
+        var currentProfile = RgbProfileManager.GetActiveProfile();
+        int activeProfIdx = profiles.FindIndex(p => string.Equals(p.Name, currentProfile, StringComparison.OrdinalIgnoreCase));
+        if (activeProfIdx < 0 && profiles.Count > 0) activeProfIdx = 0;
+
+        rgb.Add(new("rgb.profile", "Saved 4-Zone Profile", "select", activeProfIdx, true,
+            Choices: profiles.Select((p, i) => new JelliChoice(p.Name, i)).ToArray()));
+        rgb.Add(new("rgb.profile.save", "Save Zones to Profile", "button", false, true));
+        rgb.Add(new("rgb.profile.new", "+ New Profile", "button", false, true));
+
+        _jelliActions["rgb.profile"] = d => {
+            int idx = d.GetInt32();
+            var profList = RgbProfileManager.LoadProfiles();
+            if (idx >= 0 && idx < profList.Count)
+            {
+                if (InvokeRequired) BeginInvoke(new Action(() => ApplyRgbProfile(profList[idx])));
+                else ApplyRgbProfile(profList[idx]);
+            }
+        };
+        _jelliActions["rgb.profile.save"] = _ => {
+            var profList = RgbProfileManager.LoadProfiles();
+            string activeName = RgbProfileManager.GetActiveProfile();
+            var current = profList.FirstOrDefault(p => string.Equals(p.Name, activeName, StringComparison.OrdinalIgnoreCase)) ?? profList.FirstOrDefault();
+            string nameToSave = current?.Name ?? "Custom Profile";
+            RgbProfileManager.AddOrUpdateProfile(nameToSave, _currentZoneColors, _brightnessSlider?.Value ?? 100);
+            if (InvokeRequired) BeginInvoke(new Action(LoadRgbProfilesIntoUi));
+            else LoadRgbProfilesIntoUi();
+        };
+        _jelliActions["rgb.profile.new"] = d => {
+            string name = d.GetString()?.Trim() ?? "";
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                var profList = RgbProfileManager.LoadProfiles();
+                name = $"Custom {profList.Count + 1}";
+            }
+            RgbProfileManager.AddOrUpdateProfile(name, _currentZoneColors, _brightnessSlider?.Value ?? 100);
+            RgbProfileManager.SetActiveProfile(name);
+            if (InvokeRequired) BeginInvoke(new Action(LoadRgbProfilesIntoUi));
+            else LoadRgbProfilesIntoUi();
+        };
+
         rgb.AddRange([Range("rgb.brightness", "Brightness", _brightnessSlider), Range("rgb.speed", "Effect speed", _speedSlider), Toggle("rgb.sleep", "Backlight sleeps after 30 seconds", _switchBacklight30s)]);
         sections.Add(new("rgb", "Keyboard light", rgb.ToArray()));
                 _jelliActions["overlay.mode"] = d => {

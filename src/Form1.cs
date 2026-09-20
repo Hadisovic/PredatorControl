@@ -107,6 +107,12 @@ namespace PredatorControlApp
         private int _powerLineStableTicks;
         private bool _isResyncing;
         private bool _isClosing;
+        public static bool IsShuttingDown { get; private set; }
+        private PredatorDropDown _cboRgbProfiles = null!;
+        private PredatorButton _btnSaveRgbProfile = null!;
+        private PredatorButton _btnNewRgbProfile = null!;
+        private System.Windows.Forms.Timer? _profileSaveFeedbackTimer;
+        private bool _isApplyingRgbProfile;
 
         private string? _internalDisplayGdiName;
         private int _maxHz;
@@ -331,9 +337,11 @@ namespace PredatorControlApp
             }
 
             SystemEvents.PowerModeChanged += OnPowerModeChanged;
+            SystemEvents.SessionEnding += OnSessionEnding;
             FormClosed += (s, e) =>
             {
                 SystemEvents.PowerModeChanged -= OnPowerModeChanged;
+                SystemEvents.SessionEnding -= OnSessionEnding;
                 ThemeManager.ThemeChanged -= OnThemeChanged;
                 try { _overlayForm?.Dispose(); } catch { }
                 try { NvmlGpuMonitor.Shutdown(); } catch { }
@@ -1575,7 +1583,33 @@ namespace PredatorControlApp
                 }
             };
 
+            // Saved 4-Zone RGB Profiles
             y += btnH + S(16);
+            MakeLabel("SAVED 4-ZONE RGB PROFILES:", pad, y, FontSectionHeader, Color.FromArgb(120, 120, 135));
+
+            y += S(20);
+            int profBtnW = S(85);
+            int profDropW = contentW - (profBtnW * 2 + gap * 2);
+            _cboRgbProfiles = new PredatorDropDown { Location = new Point(pad, y), Size = new Size(profDropW, S(30)) };
+            _cboRgbProfiles.SelectedIndexChanged += (s, e) =>
+            {
+                if (_isApplyingRgbProfile) return;
+                int idx = _cboRgbProfiles.SelectedIndex;
+                var profiles = RgbProfileManager.LoadProfiles();
+                if (idx >= 0 && idx < profiles.Count)
+                {
+                    ApplyRgbProfile(profiles[idx]);
+                }
+            };
+            _contentPanel.Controls.Add(_cboRgbProfiles);
+
+            _btnSaveRgbProfile = MakeButton("Save", pad + profDropW + gap, y, profBtnW, S(30));
+            _btnSaveRgbProfile.Click += (s, e) => SaveCurrentRgbProfile();
+
+            _btnNewRgbProfile = MakeButton("+ New", pad + profDropW + gap + profBtnW + gap, y, profBtnW, S(30));
+            _btnNewRgbProfile.Click += (s, e) => CreateNewRgbProfile();
+
+            y += S(30) + S(16);
             _lblBrightHdr = MakeLabel("BRIGHTNESS: 100%", pad, y, FontSectionHeader, Color.FromArgb(120, 120, 135));
             _lblSpeedHdr = MakeLabel("EFFECT SPEED: 50%", ClientSize.Width / 2 + S(10), y, FontSectionHeader, Color.FromArgb(120, 120, 135));
 
@@ -1783,6 +1817,8 @@ namespace PredatorControlApp
 
             _btnCheckUpdates = MakeButton("⬇  Check for Updates", ClientSize.Width - pad - updBtnW, y, updBtnW, updBtnH);
             _btnCheckUpdates.Click += async (s, e) => await CheckForUpdatesAsync();
+
+                        LoadRgbProfilesIntoUi();
 
             _contentPanel.AutoScrollMinSize = new Size(0, y + updBtnH + S(50));
         }
@@ -3247,6 +3283,12 @@ namespace PredatorControlApp
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
+            if (e.CloseReason is CloseReason.WindowsShutDown or CloseReason.ApplicationExitCall or CloseReason.TaskManagerClosing)
+            {
+                IsShuttingDown = true;
+                _isClosing = true;
+            }
+
             if (!_isClosing)
             {
                 e.Cancel = true;
@@ -3254,19 +3296,201 @@ namespace PredatorControlApp
             }
             else
             {
+                IsShuttingDown = true;
+                SystemEvents.SessionEnding -= OnSessionEnding;
                 SystemEvents.PowerModeChanged -= OnPowerModeChanged;
                 ThemeManager.ThemeChanged -= OnThemeChanged;
                 _trayIcon.Visible = false;
-                _colorPicker.Dispose();
-                _telemetryService?.Dispose();
-                _predatorKeyHook?.Dispose();
-                _gameSync.Dispose();
-                _jelli?.Dispose();
-                _overlayForm?.Dispose();
-                _wmi.Dispose();
-                _ipc?.Dispose();
+                try { _colorPicker?.Dispose(); } catch { }
+                try { _telemetryService?.Dispose(); } catch { }
+                try { _predatorKeyHook?.Dispose(); } catch { }
+                try { _gameSync?.Dispose(); } catch { }
+                try { _jelli?.Dispose(); } catch { }
+                try { _overlayForm?.Dispose(); } catch { }
+                try { _wmi?.Dispose(); } catch { }
+                try { _ipc?.Dispose(); } catch { }
                 base.OnFormClosing(e);
             }
+        }
+
+        private void OnSessionEnding(object? sender, SessionEndingEventArgs e)
+        {
+            IsShuttingDown = true;
+            _isClosing = true;
+            try { _jelli?.Dispose(); } catch { }
+            try { _telemetryService?.Dispose(); } catch { }
+            try { _predatorKeyHook?.Dispose(); } catch { }
+            try { _gameSync?.Dispose(); } catch { }
+            try { _overlayForm?.Dispose(); } catch { }
+            try { NvmlGpuMonitor.Shutdown(); } catch { }
+            try { _wmi?.Dispose(); } catch { }
+            try { _ipc?.Dispose(); } catch { }
+        }
+
+        internal void LoadRgbProfilesIntoUi()
+        {
+            if (_cboRgbProfiles == null) return;
+            var profiles = RgbProfileManager.LoadProfiles();
+            string active = RgbProfileManager.GetActiveProfile();
+            bool prevApplying = _isApplyingRgbProfile;
+            _isApplyingRgbProfile = true;
+            try
+            {
+                _cboRgbProfiles.Items.Clear();
+                int selIdx = -1;
+                for (int i = 0; i < profiles.Count; i++)
+                {
+                    _cboRgbProfiles.Items.Add(profiles[i].Name);
+                    if (string.Equals(profiles[i].Name, active, StringComparison.OrdinalIgnoreCase))
+                        selIdx = i;
+                }
+                if (selIdx < 0 && profiles.Count > 0) selIdx = 0;
+                _cboRgbProfiles.SelectedIndex = selIdx;
+            }
+            finally
+            {
+                _isApplyingRgbProfile = prevApplying;
+            }
+        }
+
+        internal void ApplyRgbProfile(RgbProfile profile)
+        {
+            if (profile == null) return;
+            _isApplyingRgbProfile = true;
+            try
+            {
+                var colors = RgbProfileManager.ParseZoneColors(profile.Zones);
+                for (int i = 0; i < 4; i++)
+                {
+                    _currentZoneColors[i] = colors[i];
+                    if (_btnZones[i] != null)
+                        _btnZones[i].ColorIndicator = colors[i];
+                    SaveState($"ZoneColor_{i}", colors[i].ToArgb());
+                }
+                if (_btnAllZones != null)
+                    _btnAllZones.ColorIndicator = colors[0];
+
+                if (_selectedZone >= 0 && _selectedZone < 4)
+                {
+                    if (_colorPicker != null) _colorPicker.Color = _currentZoneColors[_selectedZone];
+                    if (_btnCustomColor != null) _btnCustomColor.ColorIndicator = _currentZoneColors[_selectedZone];
+                }
+                else
+                {
+                    if (_colorPicker != null) _colorPicker.Color = _currentZoneColors[0];
+                    if (_btnCustomColor != null) _btnCustomColor.ColorIndicator = _currentZoneColors[0];
+                }
+
+                if (_rgbDropDown != null && _rgbDropDown.SelectedIndex != 0)
+                {
+                    _rgbDropDown.SelectedIndex = 0; // Switch to Static mode
+                }
+
+                byte bright = (byte)(_brightnessSlider?.Value ?? 100);
+                byte speed = _speedSlider != null ? GetMappedSpeed() : (byte)5;
+                _wmi?.Set4ZoneColors(_currentZoneColors, 0, bright, speed);
+                RgbProfileManager.SetActiveProfile(profile.Name);
+            }
+            finally
+            {
+                _isApplyingRgbProfile = false;
+            }
+        }
+
+        internal void SaveCurrentRgbProfile()
+        {
+            string currentName = _cboRgbProfiles?.SelectedText ?? "";
+            if (string.IsNullOrWhiteSpace(currentName)) currentName = RgbProfileManager.GetActiveProfile();
+            if (string.IsNullOrWhiteSpace(currentName)) currentName = "Custom Profile";
+            if (string.IsNullOrWhiteSpace(currentName)) currentName = "Custom Profile";
+            RgbProfileManager.AddOrUpdateProfile(currentName, _currentZoneColors, _brightnessSlider?.Value ?? 100);
+            LoadRgbProfilesIntoUi();
+
+            if (_btnSaveRgbProfile != null)
+            {
+                _btnSaveRgbProfile.Text = "Saved \u2713";
+                _profileSaveFeedbackTimer?.Stop();
+                _profileSaveFeedbackTimer?.Dispose();
+                _profileSaveFeedbackTimer = new System.Windows.Forms.Timer { Interval = 1500 };
+                _profileSaveFeedbackTimer.Tick += (s, e) =>
+                {
+                    _profileSaveFeedbackTimer.Stop();
+                    if (_btnSaveRgbProfile != null && !IsDisposed)
+                        _btnSaveRgbProfile.Text = "Save";
+                };
+                _profileSaveFeedbackTimer.Start();
+            }
+        }
+
+        private void CreateNewRgbProfile()
+        {
+            var profiles = RgbProfileManager.LoadProfiles();
+            string newName = $"Custom {profiles.Count + 1}";
+            string? promptResult = ShowInputBox("New RGB Profile", "Enter profile name:", newName);
+            if (!string.IsNullOrWhiteSpace(promptResult))
+            {
+                string cleanName = promptResult.Trim();
+                RgbProfileManager.AddOrUpdateProfile(cleanName, _currentZoneColors, _brightnessSlider?.Value ?? 100);
+                RgbProfileManager.SetActiveProfile(cleanName);
+                LoadRgbProfilesIntoUi();
+                int idx = _cboRgbProfiles.Items.IndexOf(cleanName);
+                if (idx >= 0) _cboRgbProfiles.SelectedIndex = idx;
+            }
+        }
+
+        private string? ShowInputBox(string title, string prompt, string defaultValue)
+        {
+            using var promptForm = new Form
+            {
+                Width = S(320),
+                Height = S(170),
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                Text = title,
+                StartPosition = FormStartPosition.CenterParent,
+                MaximizeBox = false,
+                MinimizeBox = false,
+                BackColor = ThemeManager.Current.FormBg,
+                ForeColor = ThemeManager.Current.TextPrimary,
+                Font = FontBody
+            };
+
+            var lblPrompt = new Label
+            {
+                Left = S(20),
+                Top = S(15),
+                Width = S(280),
+                Height = S(20),
+                Text = prompt,
+                ForeColor = ThemeManager.Current.TextSecondary
+            };
+            var txtInput = new TextBox
+            {
+                Left = S(20),
+                Top = S(40),
+                Width = S(265),
+                Height = S(28),
+                Text = defaultValue,
+                BackColor = ThemeManager.Current.CardBg,
+                ForeColor = ThemeManager.Current.TextPrimary,
+                BorderStyle = BorderStyle.FixedSingle
+            };
+            var btnOk = MakeButtonIn(promptForm, "Create", S(95), S(80), S(90), S(30));
+            var btnCancel = MakeButtonIn(promptForm, "Cancel", S(195), S(80), S(90), S(30));
+
+            btnOk.Click += (s, e) => { promptForm.DialogResult = DialogResult.OK; promptForm.Close(); };
+            btnCancel.Click += (s, e) => { promptForm.DialogResult = DialogResult.Cancel; promptForm.Close(); };
+            txtInput.KeyDown += (s, e) =>
+            {
+                if (e.KeyCode == Keys.Enter) { promptForm.DialogResult = DialogResult.OK; promptForm.Close(); }
+                else if (e.KeyCode == Keys.Escape) { promptForm.DialogResult = DialogResult.Cancel; promptForm.Close(); }
+            };
+
+            promptForm.Controls.Add(lblPrompt);
+            promptForm.Controls.Add(txtInput);
+            promptForm.Controls.Add(btnOk);
+            promptForm.Controls.Add(btnCancel);
+
+            return promptForm.ShowDialog(this) == DialogResult.OK ? txtInput.Text : null;
         }
 
         #endregion

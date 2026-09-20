@@ -12,7 +12,33 @@ const tabs = ['System', 'Lighting', 'Games', 'Settings'] as const
 export function App() {
   const [state, setState] = useState<State | null>(null)
   const [layout, setLayout] = useState<Layout>({surface: 'compact', creatureX: 20, creatureY: 0, flyout: false, panelLeft: 180})
-  const [tab, setTab] = useState<typeof tabs[number]>('System')
+  const [tab, setTab] = useState<typeof tabs[number]>(() => {
+    try {
+      const saved = localStorage.getItem('jelli-active-tab')
+      if (saved && (tabs as readonly string[]).includes(saved)) return saved as typeof tabs[number]
+    } catch { }
+    return 'System'
+  })
+  const contentRef = useRef<HTMLDivElement>(null)
+  const tabScrollMap = useRef<Record<string, number>>({})
+
+  const switchTab = (t: typeof tabs[number]) => {
+    setTab(t)
+    try { localStorage.setItem('jelli-active-tab', t) } catch { }
+  }
+
+  const onContentScroll = () => {
+    if (contentRef.current) {
+      tabScrollMap.current[tab] = contentRef.current.scrollTop
+    }
+  }
+
+  useEffect(() => {
+    if (contentRef.current) {
+      const targetY = tabScrollMap.current[tab] ?? 0
+      contentRef.current.scrollTop = targetY
+    }
+  }, [tab])
   const [error, setError] = useState('')
   const [connected, setConnected] = useState(false)
   const [suspended, setSuspended] = useState(false)
@@ -69,7 +95,7 @@ export function App() {
       {(!connected || error) && <div role="alert" className="error"><span>{error || 'Backend unavailable'}</span><button onClick={retry}>Reconnect</button>{connected && <button aria-label="Dismiss error" onClick={() => setError('')}>×</button>}</div>}
       {layout.surface === 'menu' && <QuickMenu items={state?.menu ?? []}/>}
       {layout.surface === 'summary' && <div className="summary-content"><div className="metric-grid">{['cpuTemp','gpuTemp','cpuFanRpm','gpuFanRpm','gpuPowerW','batteryPercent','fps'].filter(k => ['cpuTemp','gpuTemp'].includes(k) || valueFor(state,k) !== null).map(k => <Metric key={k} state={state} name={k}/>)}</div><dl><dt>Performance</dt><dd>{state?.powerMode ?? '—'}</dd><dt>Cooling</dt><dd>{state?.fanMode ?? '—'}</dd><dt>GPU</dt><dd>{state?.gpuMode ?? '—'}</dd><dt>Power</dt><dd>{state?.telemetry?.powerLine === 1 ? 'AC connected' : 'Battery'}{state?.telemetry?.isCharging ? ' · charging' : ''}</dd></dl><button className="launch" onClick={() => send('surface', 'dashboard')}>Open full dashboard →</button></div>}
-      {layout.surface === 'dashboard' && <><nav aria-label="Dashboard sections">{tabs.map((t, i) => <button key={t} className={tab === t ? 'active' : ''} aria-current={tab === t ? 'page' : undefined} onClick={() => setTab(t)}><span className="nav-index" aria-hidden="true" data-index={`0${i + 1}`}/>{t}</button>)}</nav><div key={tab} className="dashboard-content">
+      {layout.surface === 'dashboard' && <><nav aria-label="Dashboard sections">{tabs.map((t, i) => <button key={t} className={tab === t ? 'active' : ''} aria-current={tab === t ? 'page' : undefined} onClick={() => switchTab(t)}><span className="nav-index" aria-hidden="true" data-index={`0${i + 1}`}/>{t}</button>)}</nav><div ref={contentRef} onScroll={onContentScroll} className="dashboard-content">
         {tab === 'System' && <div className="system-glance"><Metric state={state} name="cpuTemp"/><Metric state={state} name="gpuTemp"/><span className="status-pill">{state?.powerMode ?? 'Connecting'}</span></div>}
         {sections.map(s => <section key={s.id}><h2>{s.label}</h2>{s.id === 'rgb' && <div className="keyboard-preview" aria-label="Four keyboard lighting zones">{[0,1,2,3].map(z => <button aria-label={`Select zone ${z+1}`} key={z} onClick={() => send('control',{id: `rgb.zone${z}`,value:null})}>{Array.from({length:12},(_,i)=><i key={i}/>)}</button>)}</div>}<div className="controls">{s.controls.map(c => <HardwareControl key={c.id} control={c}/>)}</div>{s.id === 'gpu' && <p className="footnote">{state?.gpuNotice}</p>}{s.id === 'games' && <p className="footnote">{state?.gameSyncStatus}</p>}</section>)}
         {tab === 'Games' && <section><h2>Focus on the game</h2><p className="muted">The native, click-through HUD replaces Jelli entirely. Real ETW frame monitoring. No injection.</p><button className="launch" onClick={() => {void request('overlay',true).catch(reportError)}}>Enter gaming mode ↗</button><p className="footnote">Ctrl + Shift + O to return to Jelli.</p></section>}

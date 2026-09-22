@@ -40,3 +40,6 @@ scratch/
 node_modules/
 dist/
 *.log
+
+publish_out/
+publish_test/

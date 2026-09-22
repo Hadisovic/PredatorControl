@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Net.Http;
 using System.Reflection;
 using System.Runtime.InteropServices;
@@ -129,8 +129,26 @@ namespace PredatorControlApp
 
         #region Apply
 
+        private static readonly string[] TrustedUpdateHosts =
+        {
+            "github.com",
+            "objects.githubusercontent.com",
+            "releases.githubusercontent.com"
+        };
+
         internal static async Task ApplyAsync(UpdateInfo info)
         {
+            if (!Uri.TryCreate(info.DownloadUrl, UriKind.Absolute, out var downloadUri))
+                throw new InvalidOperationException("Update URL is not a valid absolute URI: " + info.DownloadUrl);
+
+            if (!string.Equals(downloadUri.Scheme, "https", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Update download refused: URL must use HTTPS (got '" + downloadUri.Scheme + "').");
+
+            bool trustedHost = Array.Exists(TrustedUpdateHosts,
+                h => downloadUri.Host.Equals(h, StringComparison.OrdinalIgnoreCase));
+            if (!trustedHost)
+                throw new InvalidOperationException("Update download refused: untrusted host '" + downloadUri.Host + "'.");
+
             string target = Environment.ProcessPath ?? Application.ExecutablePath;
             string staged = Path.Combine(Path.GetTempPath(), "PredatorControl-update.exe");
 

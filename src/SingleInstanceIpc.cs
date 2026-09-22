@@ -1,4 +1,4 @@
-using System.IO.Pipes;
+﻿using System.IO.Pipes;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text;
@@ -81,7 +81,7 @@ namespace PredatorControlApp
                     {
                         var pipeSecurity = new PipeSecurity();
                         pipeSecurity.AddAccessRule(new PipeAccessRule(
-                            new SecurityIdentifier(WellKnownSidType.WorldSid, null),
+                            new SecurityIdentifier(WellKnownSidType.AuthenticatedUserSid, null),
                             PipeAccessRights.ReadWrite,
                             AccessControlType.Allow));
 

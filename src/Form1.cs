@@ -10,7 +10,7 @@ namespace PredatorControlApp
     [SupportedOSPlatform("windows")]
     public partial class Form1 : Form
     {
-        #region Win32 Interop â€” DWM & Dark Mode
+        #region Win32 Interop — DWM & Dark Mode
 
         [DllImport("dwmapi.dll")]
         private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
@@ -19,7 +19,7 @@ namespace PredatorControlApp
 
         #endregion
 
-        #region Win32 Interop â€” Window Dragging
+        #region Win32 Interop — Window Dragging
 
         public const int WM_NCLBUTTONDOWN = 0xA1;
         public const int HT_CAPTION = 0x2;
@@ -41,7 +41,7 @@ namespace PredatorControlApp
 
         #endregion
 
-        #region Win32 Interop â€” Hotkeys & Foreground
+        #region Win32 Interop — Hotkeys & Foreground
 
         [DllImport("user32.dll", SetLastError = true)]
         private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
@@ -107,6 +107,13 @@ namespace PredatorControlApp
         private int _powerLineStableTicks;
         private bool _isResyncing;
         private bool _isClosing;
+        public static bool IsShuttingDown { get; private set; }
+        private PredatorDropDown _cboRgbProfiles = null!;
+        private PredatorButton _btnSaveRgbProfile = null!;
+        private PredatorButton _btnNewRgbProfile = null!;
+        private PredatorButton _btnDeleteRgbProfile = null!;
+        private System.Windows.Forms.Timer? _profileSaveFeedbackTimer;
+        private bool _isApplyingRgbProfile;
 
         private string? _internalDisplayGdiName;
         private int _maxHz;
@@ -224,6 +231,8 @@ namespace PredatorControlApp
         private Label? _lblJelliEnabled;
         private PredatorToggle? _switchJelliEnabled;
         private ToolStripMenuItem? _trayJelliToggle;
+        private Label? _lblOptimizeServices;
+        private PredatorToggle? _switchOptimizeServices;
         private Label _lblWinKeyLock = null!;
 
         private GameOverlayForm? _overlayForm;
@@ -331,9 +340,11 @@ namespace PredatorControlApp
             }
 
             SystemEvents.PowerModeChanged += OnPowerModeChanged;
+            SystemEvents.SessionEnding += OnSessionEnding;
             FormClosed += (s, e) =>
             {
                 SystemEvents.PowerModeChanged -= OnPowerModeChanged;
+                SystemEvents.SessionEnding -= OnSessionEnding;
                 ThemeManager.ThemeChanged -= OnThemeChanged;
                 try { _overlayForm?.Dispose(); } catch { }
                 try { NvmlGpuMonitor.Shutdown(); } catch { }
@@ -367,28 +378,42 @@ namespace PredatorControlApp
                 Updater.ShowPendingNotes(this);
                 if (Environment.CommandLine.Contains("-hidden")) HideApp();
                 CheckPredatorSenseConflict();
-                OptimizeAcerServices();
 
-                // Delayed settling guard: Acer services (AcerLightingService / AcerAgentService)
-                // complete their boot/logon initialization 1-4 seconds after user login.
-                // Re-assert user's saved RGB profile to prevent late-boot stomping back to Amber.
+                // H-3 / F-5: Run OEM service optimization only if enabled by user
+                if (IsServicesOptimizationEnabled())
+                    OptimizeAcerServices();
+
+                // F-7 (v1.2.5): 4-point RGB watchdog to defeat AcerLightingService's late-boot INI override.
+                // AcerLightingService re-initializes 1-8 seconds after user logon and writes its factory
+                // preset (Amber Breathing) back to LightingProfile.ini. We re-assert the user's saved
+                // profile at 1s, 3s, 6s, and 10s to guarantee we win the race regardless of service timing.
                 _ = Task.Run(async () =>
                 {
-                    await Task.Delay(2500);
-                    if (!IsDisposed)
+                    int[] delays = { 1000, 3000, 6000, 10000 };
+                    foreach (int ms in delays)
                     {
+                        await Task.Delay(ms);
+                        if (IsDisposed) break;
                         BeginInvoke(() =>
                         {
-                            try { ApplyRgbModeFromDropdown(_rgbDropDown.SelectedIndex); } catch { }
-                        });
-                    }
-
-                    await Task.Delay(2500);
-                    if (!IsDisposed)
-                    {
-                        BeginInvoke(() =>
-                        {
-                            try { ApplyRgbModeFromDropdown(_rgbDropDown.SelectedIndex); } catch { }
+                            try
+                            {
+                                if (!IsDisposed)
+                                {
+                                    string active = RgbProfileManager.GetActiveProfile();
+                                    var profiles = RgbProfileManager.LoadProfiles();
+                                    var prof = profiles.FirstOrDefault(p => string.Equals(p.Name, active, StringComparison.OrdinalIgnoreCase));
+                                    if (prof != null)
+                                    {
+                                        ApplyRgbProfile(prof);
+                                    }
+                                    else if (_rgbDropDown != null)
+                                    {
+                                        ApplyRgbModeFromDropdown(_rgbDropDown.SelectedIndex);
+                                    }
+                                }
+                            }
+                            catch { }
                         });
                     }
                 });
@@ -426,6 +451,27 @@ namespace PredatorControlApp
                         }
                     }
                 }
+            }
+            catch { }
+        }
+
+        private static bool IsServicesOptimizationEnabled()
+        {
+            try
+            {
+                using var key = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\PredatorControl");
+                if (key == null) return false;
+                return (key.GetValue("ServicesOptimized") is int v) && v == 1;
+            }
+            catch { return false; }
+        }
+
+        private static void SetServicesOptimizationEnabled(bool enabled)
+        {
+            try
+            {
+                using var key = Registry.CurrentUser.CreateSubKey(@"SOFTWARE\PredatorControl");
+                key.SetValue("ServicesOptimized", enabled ? 1 : 0);
             }
             catch { }
         }
@@ -499,6 +545,53 @@ namespace PredatorControlApp
                         {
                             using var ifeoKey = Registry.LocalMachine.CreateSubKey($@"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\{exeName}\PerfOptions");
                             ifeoKey?.SetValue("CpuPriorityClass", 3, RegistryValueKind.DWord);
+                        }
+                        catch { }
+                    }
+                }
+                catch { }
+            });
+        }
+
+        private static void RestoreAcerServices()
+        {
+            Task.Run(() =>
+            {
+                try
+                {
+                    string[] bloatServices =
+                    {
+                        "AcerCCAgentSvis",
+                        "AcerQAAgentSvis",
+                        "AcerDIAgentSvis",
+                        "ASMSvc",
+                        "AcerServiceSvc",
+                        "AcerDeviceEnablingServiceV2"
+                    };
+
+                    foreach (var svcName in bloatServices)
+                    {
+                        try
+                        {
+                            using var reg = Registry.LocalMachine.OpenSubKey($@"SYSTEM\CurrentControlSet\Services\{svcName}", true);
+                            if (reg != null)
+                            {
+                                int currentStart = (int)(reg.GetValue("Start", 2) ?? 2);
+                                if (currentStart == 4) // Disabled -> restore to Automatic
+                                {
+                                    reg.SetValue("Start", 2, RegistryValueKind.DWord);
+                                    try
+                                    {
+                                        var psi = new ProcessStartInfo("net.exe", $"start {svcName}")
+                                        {
+                                            CreateNoWindow = true,
+                                            UseShellExecute = false
+                                        };
+                                        Process.Start(psi)?.WaitForExit(3000);
+                                    }
+                                    catch { }
+                                }
+                            }
                         }
                         catch { }
                     }
@@ -717,7 +810,7 @@ namespace PredatorControlApp
 
             else if (m.Msg == WM_DISPLAYCHANGE)
             {
-                // A monitor was connected or disconnected â€” refresh external monitor section
+                // A monitor was connected or disconnected — refresh external monitor section
                 BeginInvoke(new Action(RefreshExternalMonitorSection));
             }
 
@@ -856,7 +949,7 @@ namespace PredatorControlApp
                 };
                 _pnlExternalMonitors.Controls.Add(lbl);
 
-                // Hz dropdown â€” populated from supported rates from OS driver only
+                // Hz dropdown — populated from supported rates from OS driver only
                 var cbo = new PredatorDropDown
                 {
                     Location = new Point(contentW - dropW - btnW - gap, rowY),
@@ -1164,7 +1257,7 @@ namespace PredatorControlApp
 
             var lblClose = new Label
             {
-                Text = "â—",
+                Text = "?",
                 ForeColor = Color.FromArgb(255, 95, 86),
                 Font = new Font("Arial", 12f),
                 AutoSize = true,
@@ -1175,7 +1268,7 @@ namespace PredatorControlApp
             };
             var lblMin = new Label
             {
-                Text = "â—",
+                Text = "?",
                 ForeColor = Color.FromArgb(255, 189, 46),
                 Font = new Font("Arial", 12f),
                 AutoSize = true,
@@ -1212,10 +1305,10 @@ namespace PredatorControlApp
 
             // TELEMETRY SENSORS
             MakeLabel("CPU:", pad, y, FontBody, Color.FromArgb(120, 120, 135));
-            _lblCpuTemp = MakeLabel("--Â°C", pad + S(34), y, FontBodyBold, Color.White);
+            _lblCpuTemp = MakeLabel("--°C", pad + S(34), y, FontBodyBold, Color.White);
 
             _lblGpuHdr = MakeLabel("GPU:", ClientSize.Width / 2 + S(10), y, FontBody, Color.FromArgb(120, 120, 135));
-            _lblGpuTemp = MakeLabel("--Â°C", ClientSize.Width / 2 + S(46), y, FontBodyBold, Color.White);
+            _lblGpuTemp = MakeLabel("--°C", ClientSize.Width / 2 + S(46), y, FontBodyBold, Color.White);
 
             y += S(24);
             MakeLabel("CPU FAN:", pad, y, FontBody, Color.FromArgb(120, 120, 135));
@@ -1561,7 +1654,7 @@ namespace PredatorControlApp
             }
 
             y += S(28) + S(12);
-            _btnCustomColor = MakeButton("ðŸŽ¨  Custom Color...", pad, y, contentW, btnH);
+            _btnCustomColor = MakeButton("??  Custom Color...", pad, y, contentW, btnH);
             _btnCustomColor.Click += (s, e) =>
             {
                 if (_selectedZone >= 0 && _selectedZone < 4)
@@ -1575,7 +1668,36 @@ namespace PredatorControlApp
                 }
             };
 
+            // Saved 4-Zone RGB Profiles
             y += btnH + S(16);
+            MakeLabel("SAVED 4-ZONE RGB PROFILES:", pad, y, FontSectionHeader, Color.FromArgb(120, 120, 135));
+
+            y += S(20);
+            int profBtnW = S(68);
+            int profDropW = contentW - (profBtnW * 3 + gap * 3);
+            _cboRgbProfiles = new PredatorDropDown { Location = new Point(pad, y), Size = new Size(profDropW, S(30)) };
+            _cboRgbProfiles.SelectedIndexChanged += (s, e) =>
+            {
+                if (_isApplyingRgbProfile) return;
+                int idx = _cboRgbProfiles.SelectedIndex;
+                var profiles = RgbProfileManager.LoadProfiles();
+                if (idx >= 0 && idx < profiles.Count)
+                {
+                    ApplyRgbProfile(profiles[idx]);
+                }
+            };
+            _contentPanel.Controls.Add(_cboRgbProfiles);
+
+            _btnSaveRgbProfile = MakeButton("Save", pad + profDropW + gap, y, profBtnW, S(30));
+            _btnSaveRgbProfile.Click += (s, e) => SaveCurrentRgbProfile();
+
+            _btnNewRgbProfile = MakeButton("+ New", pad + profDropW + gap + profBtnW + gap, y, profBtnW, S(30));
+            _btnNewRgbProfile.Click += (s, e) => CreateNewRgbProfile();
+
+            _btnDeleteRgbProfile = MakeButton("Delete", pad + profDropW + gap + (profBtnW + gap) * 2, y, profBtnW, S(30));
+            _btnDeleteRgbProfile.Click += (s, e) => DeleteCurrentRgbProfile();
+
+            y += S(30) + S(16);
             _lblBrightHdr = MakeLabel("BRIGHTNESS: 100%", pad, y, FontSectionHeader, Color.FromArgb(120, 120, 135));
             _lblSpeedHdr = MakeLabel("EFFECT SPEED: 50%", ClientSize.Width / 2 + S(10), y, FontSectionHeader, Color.FromArgb(120, 120, 135));
 
@@ -1688,7 +1810,7 @@ namespace PredatorControlApp
 
             // Dedicated Overlay Options & Settings button in the empty space below mode buttons
             y += btnH + S(8);
-            _btnOverlaySettings = MakeButton("âš™ Overlay Options", pad, y, contentW, S(28));
+            _btnOverlaySettings = MakeButton("? Overlay Options", pad, y, contentW, S(28));
             _btnOverlaySettings.Click += (s, e) => OpenOverlaySettings();
             _contentPanel.Controls.Add(_btnOverlaySettings);
 
@@ -1758,11 +1880,11 @@ namespace PredatorControlApp
             _switchGameSync.CheckedChanged += (s, e) =>
             {
                 _gameSync.IsEnabled = _switchGameSync.Checked;
-                _lblGameSyncStatus.Text = _switchGameSync.Checked ? "Active â€” Monitoring" : "Disabled";
+                _lblGameSyncStatus.Text = _switchGameSync.Checked ? "Active — Monitoring" : "Disabled";
             };
 
             y += syncSwitchH + S(10);
-            _btnConfigureGames = MakeButton("ðŸŽ®  Configure Executables", pad, y, contentW, btnH);
+            _btnConfigureGames = MakeButton("??  Configure Executables", pad, y, contentW, btnH);
             _btnConfigureGames.Click += (s, e) =>
             {
                 using var form = new GameSyncForm(_gameSync, _maxHz);
@@ -1781,10 +1903,46 @@ namespace PredatorControlApp
             var lblVersion = MakeLabel($"Version {Updater.CurrentText}", pad, y, FontBody, Color.FromArgb(120, 120, 135));
             CenterV(lblVersion, y, updBtnH);
 
-            _btnCheckUpdates = MakeButton("â¬‡  Check for Updates", ClientSize.Width - pad - updBtnW, y, updBtnW, updBtnH);
+            _btnCheckUpdates = MakeButton("?  Check for Updates", ClientSize.Width - pad - updBtnW, y, updBtnW, updBtnH);
             _btnCheckUpdates.Click += async (s, e) => await CheckForUpdatesAsync();
 
-            _contentPanel.AutoScrollMinSize = new Size(0, y + updBtnH + S(50));
+            // OPTIMIZE SERVICES (F-5)
+            y += updBtnH + S(24);
+            AddSeparator(y);
+
+            y += S(20);
+            MakeSectionHeader("SYSTEM OPTIMIZATION", pad, y);
+
+            y += S(24);
+            int optSwitchH = S(30);
+            _lblOptimizeServices = MakeLabel("Optimize Acer Services (Disable OEM Bloatware)", pad, y, FontBody, Color.FromArgb(120, 120, 135));
+            CenterV(_lblOptimizeServices, y, optSwitchH);
+
+            _switchOptimizeServices = new PredatorToggle
+            {
+                Location = new Point(ClientSize.Width - pad - S(48), y),
+                Size = new Size(S(48), optSwitchH),
+                Checked = IsServicesOptimizationEnabled()
+            };
+            _contentPanel.Controls.Add(_switchOptimizeServices);
+
+            _switchOptimizeServices.CheckedChanged += (s, e) =>
+            {
+                bool enabled = _switchOptimizeServices.Checked;
+                SetServicesOptimizationEnabled(enabled);
+                if (enabled)
+                {
+                    OptimizeAcerServices();
+                }
+                else
+                {
+                    RestoreAcerServices();
+                }
+            };
+
+            LoadRgbProfilesIntoUi();
+
+            _contentPanel.AutoScrollMinSize = new Size(0, y + optSwitchH + S(50));
         }
 
         private void SelectZone(int zoneIndex)
@@ -2029,6 +2187,7 @@ namespace PredatorControlApp
                 // System & Hardware Controls
                 if (_switchWinKeyLock != null) _switchWinKeyLock.Left = ClientSize.Width - pad - S(48);
                 if (_switchJelliEnabled != null) _switchJelliEnabled.Left = ClientSize.Width - pad - S(48);
+                if (_switchOptimizeServices != null) _switchOptimizeServices.Left = ClientSize.Width - pad - S(48);
 
                 // Gaming Overlay controls
                 if (_switchOverlay != null) _switchOverlay.Left = ClientSize.Width - pad - S(48);
@@ -2807,6 +2966,18 @@ namespace PredatorControlApp
                 int clampedMode = Math.Clamp(savedRgbMode, 0, 8);
                 ApplyRgbModeFromDropdown(clampedMode);
 
+                // Restore active RGB profile if in Static mode
+                if (clampedMode == 0)
+                {
+                    string activeProfName = RgbProfileManager.GetActiveProfile();
+                    var allProfiles = RgbProfileManager.LoadProfiles();
+                    var activeProf = allProfiles.FirstOrDefault(p => string.Equals(p.Name, activeProfName, StringComparison.OrdinalIgnoreCase));
+                    if (activeProf != null)
+                    {
+                        ApplyRgbProfile(activeProf);
+                    }
+                }
+
                 var activeColor = Color.FromArgb(savedR, savedG, savedB);
                 if (_btnCustomColor != null)
                     _btnCustomColor.ColorIndicator = activeColor;
@@ -3104,16 +3275,16 @@ namespace PredatorControlApp
             _cpuFanRpm = snap.CpuFanRpm;
             _gpuFanRpm = snap.GpuFanRpm;
 
-            // Audit: check .HasValue and never format as "CPU: Â°C"
-            _lblCpuTemp.Text = _cpuTemp.HasValue ? $"{_cpuTemp.Value}Â°C" : "--Â°C";
-            _lblGpuTemp.Text = _gpuTemp.HasValue ? $"{_gpuTemp.Value}Â°C" : "--Â°C";
+            // Audit: check .HasValue and never format as "CPU: °C"
+            _lblCpuTemp.Text = _cpuTemp.HasValue ? $"{_cpuTemp.Value}°C" : "--°C";
+            _lblGpuTemp.Text = _gpuTemp.HasValue ? $"{_gpuTemp.Value}°C" : "--°C";
             _lblCpuTemp.ForeColor = TempColor(_cpuTemp ?? 0);
             _lblGpuTemp.ForeColor = TempColor(_gpuTemp ?? 0);
 
             _lblCpuRpm.Text = _cpuFanRpm.HasValue ? $"{_cpuFanRpm.Value} RPM" : "-- RPM";
             _lblGpuRpm.Text = _gpuFanRpm.HasValue ? $"{_gpuFanRpm.Value} RPM" : "-- RPM";
 
-            _trayIcon.Text = $"Predator Control\nCPU: {(_cpuTemp.HasValue ? $"{_cpuTemp.Value}Â°C" : "--Â°C")}  GPU: {(_gpuTemp.HasValue ? $"{_gpuTemp.Value}Â°C" : "--Â°C")}";
+            _trayIcon.Text = $"Predator Control\nCPU: {(_cpuTemp.HasValue ? $"{_cpuTemp.Value}°C" : "--°C")}  GPU: {(_gpuTemp.HasValue ? $"{_gpuTemp.Value}°C" : "--°C")}";
 
             if (_fanCurveForm != null && !_fanCurveForm.IsDisposed)
                 _fanCurveForm.UpdateTemps(_cpuTemp ?? 0, _gpuTemp ?? 0);
@@ -3247,6 +3418,12 @@ namespace PredatorControlApp
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
+            if (e.CloseReason is CloseReason.WindowsShutDown or CloseReason.ApplicationExitCall or CloseReason.TaskManagerClosing)
+            {
+                IsShuttingDown = true;
+                _isClosing = true;
+            }
+
             if (!_isClosing)
             {
                 e.Cancel = true;
@@ -3254,19 +3431,237 @@ namespace PredatorControlApp
             }
             else
             {
+                IsShuttingDown = true;
+                SystemEvents.SessionEnding -= OnSessionEnding;
                 SystemEvents.PowerModeChanged -= OnPowerModeChanged;
                 ThemeManager.ThemeChanged -= OnThemeChanged;
                 _trayIcon.Visible = false;
-                _colorPicker.Dispose();
-                _telemetryService?.Dispose();
-                _predatorKeyHook?.Dispose();
-                _gameSync.Dispose();
-                _jelli?.Dispose();
-                _overlayForm?.Dispose();
-                _wmi.Dispose();
-                _ipc?.Dispose();
+                try { _colorPicker?.Dispose(); } catch { }
+                try { _telemetryService?.Dispose(); } catch { }
+                try { _predatorKeyHook?.Dispose(); } catch { }
+                try { _gameSync?.Dispose(); } catch { }
+                try { _jelli?.Dispose(); } catch { }
+                try { _overlayForm?.Dispose(); } catch { }
+                try { _wmi?.Dispose(); } catch { }
+                try { _ipc?.Dispose(); } catch { }
                 base.OnFormClosing(e);
             }
+        }
+
+        private void OnSessionEnding(object? sender, SessionEndingEventArgs e)
+        {
+            IsShuttingDown = true;
+            _isClosing = true;
+            try { _jelli?.Dispose(); } catch { }
+            try { _telemetryService?.Dispose(); } catch { }
+            try { _predatorKeyHook?.Dispose(); } catch { }
+            try { _gameSync?.Dispose(); } catch { }
+            try { _overlayForm?.Dispose(); } catch { }
+            try { NvmlGpuMonitor.Shutdown(); } catch { }
+            try { _wmi?.Dispose(); } catch { }
+            try { _ipc?.Dispose(); } catch { }
+        }
+
+        internal void LoadRgbProfilesIntoUi()
+        {
+            if (_cboRgbProfiles == null) return;
+            var profiles = RgbProfileManager.LoadProfiles();
+            string active = RgbProfileManager.GetActiveProfile();
+            bool prevApplying = _isApplyingRgbProfile;
+            _isApplyingRgbProfile = true;
+            try
+            {
+                _cboRgbProfiles.Items.Clear();
+                int selIdx = -1;
+                for (int i = 0; i < profiles.Count; i++)
+                {
+                    _cboRgbProfiles.Items.Add(profiles[i].Name);
+                    if (string.Equals(profiles[i].Name, active, StringComparison.OrdinalIgnoreCase))
+                        selIdx = i;
+                }
+                if (selIdx < 0 && profiles.Count > 0) selIdx = 0;
+                _cboRgbProfiles.SelectedIndex = selIdx;
+                if (_btnDeleteRgbProfile != null)
+                {
+                    _btnDeleteRgbProfile.Enabled = profiles.Count > 1;
+                }
+            }
+            finally
+            {
+                _isApplyingRgbProfile = prevApplying;
+            }
+        }
+
+        internal void ApplyRgbProfile(RgbProfile profile)
+        {
+            if (profile == null) return;
+            _isApplyingRgbProfile = true;
+            try
+            {
+                var colors = RgbProfileManager.ParseZoneColors(profile.Zones);
+                for (int i = 0; i < 4; i++)
+                {
+                    _currentZoneColors[i] = colors[i];
+                    if (_btnZones[i] != null)
+                        _btnZones[i].ColorIndicator = colors[i];
+                    SaveState($"ZoneColor_{i}", colors[i].ToArgb());
+                }
+                if (_btnAllZones != null)
+                    _btnAllZones.ColorIndicator = colors[0];
+
+                if (_selectedZone >= 0 && _selectedZone < 4)
+                {
+                    if (_colorPicker != null) _colorPicker.Color = _currentZoneColors[_selectedZone];
+                    if (_btnCustomColor != null) _btnCustomColor.ColorIndicator = _currentZoneColors[_selectedZone];
+                }
+                else
+                {
+                    if (_colorPicker != null) _colorPicker.Color = _currentZoneColors[0];
+                    if (_btnCustomColor != null) _btnCustomColor.ColorIndicator = _currentZoneColors[0];
+                }
+
+                if (_rgbDropDown != null && _rgbDropDown.SelectedIndex != 0)
+                {
+                    _rgbDropDown.SelectedIndex = 0; // Switch to Static mode
+                }
+
+                byte bright = (byte)(_brightnessSlider?.Value ?? 100);
+                byte speed = _speedSlider != null ? GetMappedSpeed() : (byte)5;
+                _wmi?.Set4ZoneColors(_currentZoneColors, 0, bright, speed);
+                RgbProfileManager.SetActiveProfile(profile.Name);
+            }
+            finally
+            {
+                _isApplyingRgbProfile = false;
+            }
+        }
+
+        internal void SaveCurrentRgbProfile()
+        {
+            string currentName = "";
+            if (_cboRgbProfiles != null && _cboRgbProfiles.SelectedIndex >= 0 && _cboRgbProfiles.SelectedIndex < _cboRgbProfiles.Items.Count)
+            {
+                currentName = _cboRgbProfiles.Items[_cboRgbProfiles.SelectedIndex]?.ToString() ?? "";
+            }
+            if (string.IsNullOrWhiteSpace(currentName)) currentName = RgbProfileManager.GetActiveProfile();
+            if (string.IsNullOrWhiteSpace(currentName)) currentName = "Custom Profile";
+            RgbProfileManager.AddOrUpdateProfile(currentName, _currentZoneColors, _brightnessSlider?.Value ?? 100);
+            RgbProfileManager.SetActiveProfile(currentName);
+            LoadRgbProfilesIntoUi();
+
+            if (_btnSaveRgbProfile != null)
+            {
+                _btnSaveRgbProfile.Text = "Saved \u2713";
+                _profileSaveFeedbackTimer?.Stop();
+                _profileSaveFeedbackTimer?.Dispose();
+                _profileSaveFeedbackTimer = new System.Windows.Forms.Timer { Interval = 1500 };
+                _profileSaveFeedbackTimer.Tick += (s, e) =>
+                {
+                    _profileSaveFeedbackTimer.Stop();
+                    if (_btnSaveRgbProfile != null && !IsDisposed)
+                        _btnSaveRgbProfile.Text = "Save";
+                };
+                _profileSaveFeedbackTimer.Start();
+            }
+        }
+
+        private void DeleteCurrentRgbProfile()
+        {
+            var profiles = RgbProfileManager.LoadProfiles();
+            if (profiles.Count <= 1)
+            {
+                MessageBox.Show(this, "At least one profile must be kept.", "Delete Profile", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            int idx = _cboRgbProfiles.SelectedIndex;
+            if (idx >= 0 && idx < profiles.Count)
+            {
+                string targetName = profiles[idx].Name;
+                var res = MessageBox.Show(this, $"Are you sure you want to delete the RGB profile '{targetName}'?", "Delete RGB Profile", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                if (res == DialogResult.Yes)
+                {
+                    RgbProfileManager.DeleteProfile(targetName);
+                    var remaining = RgbProfileManager.LoadProfiles();
+                    LoadRgbProfilesIntoUi();
+                    if (remaining.Count > 0)
+                    {
+                        ApplyRgbProfile(remaining[0]);
+                    }
+                    _jelli?.PublishState();
+                }
+            }
+        }
+
+        private void CreateNewRgbProfile()
+        {
+            var profiles = RgbProfileManager.LoadProfiles();
+            string newName = $"Custom {profiles.Count + 1}";
+            string? promptResult = ShowInputBox("New RGB Profile", "Enter profile name:", newName);
+            if (!string.IsNullOrWhiteSpace(promptResult))
+            {
+                string cleanName = promptResult.Trim();
+                RgbProfileManager.AddOrUpdateProfile(cleanName, _currentZoneColors, _brightnessSlider?.Value ?? 100);
+                RgbProfileManager.SetActiveProfile(cleanName);
+                LoadRgbProfilesIntoUi();
+                int idx = _cboRgbProfiles.Items.IndexOf(cleanName);
+                if (idx >= 0) _cboRgbProfiles.SelectedIndex = idx;
+            }
+        }
+
+        private string? ShowInputBox(string title, string prompt, string defaultValue)
+        {
+            using var promptForm = new Form
+            {
+                Width = S(320),
+                Height = S(170),
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                Text = title,
+                StartPosition = FormStartPosition.CenterParent,
+                MaximizeBox = false,
+                MinimizeBox = false,
+                BackColor = ThemeManager.Current.FormBg,
+                ForeColor = ThemeManager.Current.TextPrimary,
+                Font = FontBody
+            };
+
+            var lblPrompt = new Label
+            {
+                Left = S(20),
+                Top = S(15),
+                Width = S(280),
+                Height = S(20),
+                Text = prompt,
+                ForeColor = ThemeManager.Current.TextSecondary
+            };
+            var txtInput = new TextBox
+            {
+                Left = S(20),
+                Top = S(40),
+                Width = S(265),
+                Height = S(28),
+                Text = defaultValue,
+                BackColor = ThemeManager.Current.CardBg,
+                ForeColor = ThemeManager.Current.TextPrimary,
+                BorderStyle = BorderStyle.FixedSingle
+            };
+            var btnOk = MakeButtonIn(promptForm, "Create", S(95), S(80), S(90), S(30));
+            var btnCancel = MakeButtonIn(promptForm, "Cancel", S(195), S(80), S(90), S(30));
+
+            btnOk.Click += (s, e) => { promptForm.DialogResult = DialogResult.OK; promptForm.Close(); };
+            btnCancel.Click += (s, e) => { promptForm.DialogResult = DialogResult.Cancel; promptForm.Close(); };
+            txtInput.KeyDown += (s, e) =>
+            {
+                if (e.KeyCode == Keys.Enter) { promptForm.DialogResult = DialogResult.OK; promptForm.Close(); }
+                else if (e.KeyCode == Keys.Escape) { promptForm.DialogResult = DialogResult.Cancel; promptForm.Close(); }
+            };
+
+            promptForm.Controls.Add(lblPrompt);
+            promptForm.Controls.Add(txtInput);
+            promptForm.Controls.Add(btnOk);
+            promptForm.Controls.Add(btnCancel);
+
+            return promptForm.ShowDialog(this) == DialogResult.OK ? txtInput.Text : null;
         }
 
         #endregion
@@ -3324,21 +3719,6 @@ namespace PredatorControlApp
         private static string BuildStartupTaskXml()
         {
             string exePath = Environment.ProcessPath ?? Application.ExecutablePath;
-            if (exePath.Contains("PredatorSense", StringComparison.OrdinalIgnoreCase) ||
-                exePath.Contains("Prerequisites", StringComparison.OrdinalIgnoreCase) ||
-                exePath.Contains("NitroSense", StringComparison.OrdinalIgnoreCase))
-            {
-                string[] candidates =
-                {
-                    @"C:\Users\youse\Downloads\PredatorControl\PredatorControl-standalone.exe",
-                    @"C:\Users\youse\Downloads\PredatorControl-standalone.exe",
-                    @"C:\Users\youse\Downloads\PredatorControl-Unpacked\PredatorControlApp.exe"
-                };
-                foreach (var c in candidates)
-                {
-                    if (File.Exists(c)) { exePath = c; break; }
-                }
-            }
             string workingDir = Path.GetDirectoryName(exePath) ?? "";
             string exe = System.Security.SecurityElement.Escape(exePath);
             string dir = System.Security.SecurityElement.Escape(workingDir);
@@ -3381,7 +3761,7 @@ namespace PredatorControlApp
     <RunOnlyIfIdle>false</RunOnlyIfIdle>
     <WakeToRun>false</WakeToRun>
     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
-    <Priority>2</Priority>
+    <Priority>5</Priority>
   </Settings>
   <Actions Context=""Author"">
     <Exec>
@@ -3396,21 +3776,6 @@ namespace PredatorControlApp
         private static string BuildBootTaskXml()
         {
             string exePath = Environment.ProcessPath ?? Application.ExecutablePath;
-            if (exePath.Contains("PredatorSense", StringComparison.OrdinalIgnoreCase) ||
-                exePath.Contains("Prerequisites", StringComparison.OrdinalIgnoreCase) ||
-                exePath.Contains("NitroSense", StringComparison.OrdinalIgnoreCase))
-            {
-                string[] candidates =
-                {
-                    @"C:\Users\youse\Downloads\PredatorControl\PredatorControl-standalone.exe",
-                    @"C:\Users\youse\Downloads\PredatorControl-standalone.exe",
-                    @"C:\Users\youse\Downloads\PredatorControl-Unpacked\PredatorControlApp.exe"
-                };
-                foreach (var c in candidates)
-                {
-                    if (File.Exists(c)) { exePath = c; break; }
-                }
-            }
             string workingDir = Path.GetDirectoryName(exePath) ?? "";
             string exe = System.Security.SecurityElement.Escape(exePath);
             string dir = System.Security.SecurityElement.Escape(workingDir);
@@ -3443,7 +3808,7 @@ namespace PredatorControlApp
     <Enabled>true</Enabled>
     <Hidden>true</Hidden>
     <ExecutionTimeLimit>PT30S</ExecutionTimeLimit>
-    <Priority>1</Priority>
+    <Priority>6</Priority>
   </Settings>
   <Actions Context=""Author"">
     <Exec>
@@ -3539,7 +3904,7 @@ namespace PredatorControlApp
         private async Task PromptUpdateAsync(UpdateInfo info)
         {
             bool accepted = Updater.ShowNotes(this, "Update available",
-                $"Version {info.Version.ToString(3)} is available â€” you have v{Updater.CurrentText}",
+                $"Version {info.Version.ToString(3)} is available — you have v{Updater.CurrentText}",
                 info.Notes, confirm: true);
 
             if (!accepted) return;
@@ -3547,7 +3912,7 @@ namespace PredatorControlApp
             try
             {
                 _btnCheckUpdates.Enabled = false;
-                _btnCheckUpdates.Text = "Downloading updateâ€¦";
+                _btnCheckUpdates.Text = "Downloading update…";
                 await Updater.ApplyAsync(info);
 
                 _isClosing = true;
@@ -3556,7 +3921,7 @@ namespace PredatorControlApp
             catch (Exception ex)
             {
                 _btnCheckUpdates.Enabled = true;
-                _btnCheckUpdates.Text = $"â¬‡  Check for Updates  (v{Updater.CurrentText})";
+                _btnCheckUpdates.Text = $"?  Check for Updates  (v{Updater.CurrentText})";
                 MessageBox.Show(this, $"Update failed:\n{ex.Message}",
                     "Predator Control", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }

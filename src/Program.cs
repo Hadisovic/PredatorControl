@@ -32,6 +32,9 @@ namespace PredatorControlApp
             }
             catch { }
 
+            // Never display a modal dialog if Windows is shutting down / logging off
+            if (Form1.IsShuttingDown || Environment.HasShutdownStarted) return;
+
             if (_dialogOpen || !_reported.Add(key)) return;
 
             _dialogOpen = true;
@@ -139,6 +142,7 @@ namespace PredatorControlApp
 
             ApplicationConfiguration.Initialize();
             Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
+            JelliHostForm.EnsureWebView2Loader();
 
 #if DEBUG
             SelfCheck.Run();

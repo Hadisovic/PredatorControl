@@ -65,6 +65,14 @@ internal sealed class JelliHostForm : Form
     [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
     private static extern bool SetDllDirectory(string lpPathName);
 
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern IntPtr LoadLibrary(string lpFileName);
+
+    static JelliHostForm()
+    {
+        EnsureWebView2Loader();
+    }
+
     internal static void EnsureWebView2Loader()
     {
         try
@@ -73,11 +81,11 @@ internal sealed class JelliHostForm : Form
             Directory.CreateDirectory(targetDir);
             string targetDll = Path.Combine(targetDir, "WebView2Loader.dll");
 
-            if (!File.Exists(targetDll))
+            var asm = typeof(JelliHostForm).Assembly;
+            using var stream = asm.GetManifestResourceStream("WebView2Loader.dll");
+            if (stream != null)
             {
-                var asm = typeof(JelliHostForm).Assembly;
-                using var stream = asm.GetManifestResourceStream("WebView2Loader.dll");
-                if (stream != null)
+                if (!File.Exists(targetDll) || new FileInfo(targetDll).Length != stream.Length)
                 {
                     using var fs = new FileStream(targetDll, FileMode.Create, FileAccess.Write, FileShare.None);
                     stream.CopyTo(fs);
@@ -88,6 +96,7 @@ internal sealed class JelliHostForm : Form
             {
                 CoreWebView2Environment.SetLoaderDllFolderPath(targetDir);
                 SetDllDirectory(targetDir);
+                LoadLibrary(targetDll);
             }
         }
         catch { }
@@ -103,6 +112,8 @@ internal sealed class JelliHostForm : Form
     internal async Task InitializeAsync(bool startSuspended = false)
     {
         EnsureWebView2Loader();
+        _ = Handle;
+        _ = _web.Handle;
         _gaming = startSuspended;
         string profile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PredatorControl", _persist ? "WebView2" : "WebView2-Test");
         var options = new CoreWebView2EnvironmentOptions
@@ -145,24 +156,40 @@ internal sealed class JelliHostForm : Form
 
     private async void Recover()
     {
-        if (_disposed || _recovering) return;
+        if (_disposed || _recovering || Form1.IsShuttingDown || Environment.HasShutdownStarted) return;
         _recovering = true;
         _ready = false;
         _cursor.Stop();
         try {
             if (++_recoveries > 3) throw new InvalidOperationException("The Jelli renderer repeatedly stopped. Native controls are available from the tray.");
             await Task.Delay(1000);
-            if (!_disposed) _web.CoreWebView2.Reload();
+            if (!_disposed && !Form1.IsShuttingDown && !Environment.HasShutdownStarted && _web.CoreWebView2 != null)
+            {
+                _web.CoreWebView2.Reload();
+            }
         }
-        catch (Exception ex) { Hide(); _backend.Fallback(); Program.Report(ex, false); }
+        catch (Exception ex)
+        {
+            if (_disposed || Form1.IsShuttingDown || Environment.HasShutdownStarted) return;
+            Hide();
+            _backend.Fallback();
+            Program.Report(ex, false);
+        }
         finally { _recovering = false; }
     }
 
     private void Send(object message)
     {
-        if (!_ready || _disposed) return;
-        try { _web.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(message, JelliSettings.Json)); }
-        catch (InvalidOperationException) { Recover(); }
+        if (!_ready || _disposed || Form1.IsShuttingDown || Environment.HasShutdownStarted) return;
+        try
+        {
+            if (_web.CoreWebView2 != null)
+                _web.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(message, JelliSettings.Json));
+        }
+        catch (InvalidOperationException)
+        {
+            if (!_disposed && !Form1.IsShuttingDown && !Environment.HasShutdownStarted) Recover();
+        }
     }
     internal void PublishState()
     {
@@ -333,11 +360,12 @@ internal sealed class JelliHostForm : Form
     {
         if (disposing && !_disposed) {
             _disposed = true;
+            _recovering = true;
             _connected.TrySetCanceled();
             SystemEvents.DisplaySettingsChanged -= OnDisplayChanged;
             _cursor.Dispose(); _state.Dispose(); _rgb.Dispose();
             try { SavePosition(); if (_colorWritten) _backend.RestoreColor(); } catch { }
-            _web.Dispose();
+            try { _web.Dispose(); } catch { }
         }
         base.Dispose(disposing);
     }

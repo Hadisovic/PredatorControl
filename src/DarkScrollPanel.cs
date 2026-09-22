@@ -113,6 +113,7 @@ namespace PredatorControlApp
 
             int top = -AutoScrollPosition.Y - Math.Sign(delta) * step;
             AutoScrollPosition = new Point(-AutoScrollPosition.X, top);
+            _savedScrollY = -AutoScrollPosition.Y;
             Invalidate();
         }
 
@@ -177,12 +178,32 @@ namespace PredatorControlApp
 
             float frac = Math.Clamp((mouseY - _dragOffset) / (float)travel, 0f, 1f);
             AutoScrollPosition = new Point(-AutoScrollPosition.X, (int)(frac * (contentH - viewH)));
+            _savedScrollY = -AutoScrollPosition.Y;
             Invalidate();
+        }
+
+        private int _savedScrollY;
+
+        protected override Point ScrollToControl(Control activeControl)
+        {
+            // Prevent WinForms from auto-scrolling to (0,0) on child text/layout updates
+            return DisplayRectangle.Location;
+        }
+
+        protected override void OnLayout(LayoutEventArgs levent)
+        {
+            int beforeY = _savedScrollY;
+            base.OnLayout(levent);
+            if (-AutoScrollPosition.Y == 0 && beforeY > 0)
+            {
+                AutoScrollPosition = new Point(-AutoScrollPosition.X, beforeY);
+            }
         }
 
         protected override void OnScroll(ScrollEventArgs se)
         {
             base.OnScroll(se);
+            _savedScrollY = -AutoScrollPosition.Y;
             Invalidate();
         }
 

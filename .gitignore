@@ -43,3 +43,12 @@ dist/
 
 publish_out/
 publish_test/
+
+# Private transcripts, exports & credentials
+*_EXPORT.md
+*TRANSCRIPT*.md
+*CONVERSATION*.md
+*.secret
+*.key
+*.token
+*.env

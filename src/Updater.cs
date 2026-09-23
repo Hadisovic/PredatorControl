@@ -178,41 +178,53 @@ namespace PredatorControlApp
             if (new FileInfo(staged).Length < 100_000)
                 throw new IOException("Downloaded file looks truncated.");
 
-            if (!string.IsNullOrEmpty(info.ChecksumUrl))
+            if (string.IsNullOrEmpty(info.ChecksumUrl))
             {
-                using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(2) };
+                try { File.Delete(staged); } catch { }
+                throw new InvalidOperationException("Mandatory checksum verification failed: no checksum URL provided with update metadata. Staged file aborted.");
+            }
+
+            string checksumData;
+            using (var http = new HttpClient { Timeout = TimeSpan.FromMinutes(2) })
+            {
                 http.DefaultRequestHeaders.UserAgent.ParseAdd("PredatorControl");
-                string checksumData = await http.GetStringAsync(info.ChecksumUrl);
+                checksumData = await http.GetStringAsync(info.ChecksumUrl);
+            }
 
-                string stagedHash;
-                using (var fs = File.OpenRead(staged))
-                using (var sha = System.Security.Cryptography.SHA256.Create())
-                {
-                    stagedHash = BitConverter.ToString(sha.ComputeHash(fs)).Replace("-", "").ToLowerInvariant();
-                }
+            string stagedHash;
+            using (var fs = File.OpenRead(staged))
+            using (var sha = System.Security.Cryptography.SHA256.Create())
+            {
+                stagedHash = BitConverter.ToString(sha.ComputeHash(fs)).Replace("-", "").ToLowerInvariant();
+            }
 
-                string? expectedHash = null;
-                string targetName = info.TargetFileName ?? Path.GetFileName(new Uri(info.DownloadUrl).LocalPath);
-                foreach (var line in checksumData.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+            string? expectedHash = null;
+            string targetName = info.TargetFileName ?? Path.GetFileName(new Uri(info.DownloadUrl).LocalPath);
+            foreach (var line in checksumData.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                var parts = line.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length >= 2)
                 {
-                    var parts = line.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
-                    if (parts.Length >= 2)
+                    string lineHash = parts[0].Trim().ToLowerInvariant();
+                    string lineFile = parts[parts.Length - 1].Trim();
+                    if (lineFile.Equals(targetName, OIC))
                     {
-                        string lineHash = parts[0].Trim().ToLowerInvariant();
-                        string lineFile = parts[parts.Length - 1].Trim();
-                        if (lineFile.Equals(targetName, OIC))
-                        {
-                            expectedHash = lineHash;
-                            break;
-                        }
+                        expectedHash = lineHash;
+                        break;
                     }
                 }
+            }
 
-                if (expectedHash != null && !stagedHash.Equals(expectedHash, StringComparison.OrdinalIgnoreCase))
-                {
-                    try { File.Delete(staged); } catch { }
-                    throw new InvalidOperationException($"Checksum verification failed: expected {expectedHash}, got {stagedHash}. Staged file aborted.");
-                }
+            if (string.IsNullOrEmpty(expectedHash))
+            {
+                try { File.Delete(staged); } catch { }
+                throw new InvalidOperationException($"Mandatory checksum verification failed: no checksum found for '{targetName}' in release checksums. Staged file aborted.");
+            }
+
+            if (!stagedHash.Equals(expectedHash, StringComparison.OrdinalIgnoreCase))
+            {
+                try { File.Delete(staged); } catch { }
+                throw new InvalidOperationException($"Checksum verification failed: expected {expectedHash}, got {stagedHash}. Staged file aborted.");
             }
 
             try

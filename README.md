@@ -9,8 +9,8 @@
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-00B4CC?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/Hadisovic/PredatorControl)
 [![Framework](https://img.shields.io/badge/.NET-10.0%20Windows-512BD4?style=for-the-badge&logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/)
 [![License](https://img.shields.io/badge/license-MIT-2ED573?style=for-the-badge)](LICENSE)
-[![RAM](https://img.shields.io/badge/RAM%20Usage-%7E18--45%20MB-FF6B35?style=for-the-badge&logo=memory&logoColor=white)](https://github.com/Hadisovic/PredatorControl)
-[![Services](https://img.shields.io/badge/Acer%20Services-4%20Essential%20Only-2ED573?style=for-the-badge&logo=windows&logoColor=white)](#-the-4-essential-acer-services)
+[![RAM](https://img.shields.io/badge/RAM%20Usage-%7E18--65%20MB-FF6B35?style=for-the-badge&logo=memory&logoColor=white)](https://github.com/Hadisovic/PredatorControl)
+[![Services](https://img.shields.io/badge/Acer%20Services-2%20Essential%20Only-2ED573?style=for-the-badge&logo=windows&logoColor=white)](#core-essential-services)
 
 <br/>
 
@@ -65,14 +65,14 @@ Predator Control now ships with the full **Jelli UI** — a bioluminescent jelly
 ## ✨ Why Predator Control?
 
 Acer PredatorSense and Acer Care Center bundle **10+ background services and telemetry agents**, an Electron frontend, and consume **500 MB – 1.5 GB of RAM**.  
-Predator Control replaces all of that with direct ACPI WMI calls, using only **~40 MB RAM**, and keeps only the **4 essential hardware services** required for your laptop's fans, lighting, and GPU MUX switch!
+Predator Control replaces all of that with direct ACPI WMI calls, using only **~18–25 MB RAM** (Classic UI) / **~45–65 MB** (Jelli UI), and keeps only the **2 essential hardware services** (`AASSvc` and `AcerLightingService`) required for your laptop's fans, lighting, and GPU MUX switch!
 
 ### 🔬 Resource Comparison
 
 | Metric | 🐌 Acer PredatorSense + Care Center | 🪼 Predator Control | Improvement |
 | :--- | :---: | :---: | :--- |
 | **Idle RAM** | 500 MB – 1.5 GB | **~18–25 MB** (Classic) / **~45–65 MB** (Jelli) | 🟢 **~95% less RAM** |
-| **Background Services** | 10+ bloatware & telemetry daemons | **4 Essential Only** | 🟢 **All telemetry silenced** |
+| **Background Services** | 10+ bloatware & telemetry daemons | **2 Essential Only** | 🟢 **All telemetry silenced** |
 | **Idle CPU** | 0.8 – 3.5% | **< 0.1% / 0.0%** | 🟢 Zero micro-stutter |
 | **Window Toggle Latency** | 2.5 – 5.0 s | **< 50 ms** | 🟢 Instant launch |
 | **Mode Switch Latency** | 500 – 1200 ms | **< 30 ms** | 🟢 Direct EC write |

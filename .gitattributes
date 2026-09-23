@@ -1,0 +1,21 @@
+# Auto detect text files and perform LF normalization
+* text=auto eol=lf
+*.cs text diff=csharp
+*.md text
+*.json text
+*.xml text
+*.csproj text
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.ps1 text
+*.ico binary
+*.png binary
+*.jpg binary
+*.dll binary
+*.exe binary
+*.zip binary
+
+# Private transcripts, exports & credentials (prevent git diff/export)
+*_EXPORT.md -diff -merge
+*TRANSCRIPT*.md -diff -merge
+*CONVERSATION*.md -diff -merge

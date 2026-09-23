@@ -363,6 +363,8 @@ c112daa 2026-09-08 Add UI preview screenshot to assets
 1.2.2   2026-09-19 Release v1.2.2: Dedicated Overlay Settings dialog, universal chassis adaptation, Nitro/Predator profile routing, Ctrl+Shift hotkeys, embedded native WebView2Loader with zero-DLL dependency, and non-exp binaries.
 1.2.3   2026-09-20 Release v1.2.3: Custom 4-Zone RGB Profile Manager, scroll & tab state persistence, graceful Windows shutdown & logoff crash guardrails.
 1.2.4   2026-09-20 Release v1.2.4: Preset deletion with confirmation dialog & auto-timeout guard in WinForms and Jelli UI.
+1.2.5   2026-09-22 Release v1.2.5: Restore RGB profiles & Jelli, compress standalone to 50MB, add bloatware optimization toggle & boot RGB watchdog.
+1.2.6   2026-09-23 Release v1.2.6: Security & integrity hardening (NVML System32 qualification, WebView2Loader SHA-256 validation, IPC SID scoping, Updater checksum verification, IFEO removal, chassis warning, RAM measurement).
 ```
 
 ---

@@ -4,18 +4,18 @@
 
 # 🪼 Predator Control
 
-[![Version](https://img.shields.io/badge/version-1.2.4-00E5FF?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Hadisovic/PredatorControl/releases)
+[![Version](https://img.shields.io/badge/version-1.2.6-00E5FF?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Hadisovic/PredatorControl/releases)
 [![Jelli UI](https://img.shields.io/badge/Jelli%20UI-Live%20%F0%9F%AA%BC-FF69B4?style=for-the-badge&logo=sparkles&logoColor=white)](#-jelli-ui)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-00B4CC?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/Hadisovic/PredatorControl)
 [![Framework](https://img.shields.io/badge/.NET-10.0%20Windows-512BD4?style=for-the-badge&logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/)
 [![License](https://img.shields.io/badge/license-MIT-2ED573?style=for-the-badge)](LICENSE)
-[![RAM](https://img.shields.io/badge/RAM%20Usage-%7E40%20MB-FF6B35?style=for-the-badge&logo=memory&logoColor=white)](https://github.com/Hadisovic/PredatorControl)
+[![RAM](https://img.shields.io/badge/RAM%20Usage-%7E18--45%20MB-FF6B35?style=for-the-badge&logo=memory&logoColor=white)](https://github.com/Hadisovic/PredatorControl)
 [![Services](https://img.shields.io/badge/Acer%20Services-4%20Essential%20Only-2ED573?style=for-the-badge&logo=windows&logoColor=white)](#-the-4-essential-acer-services)
 
 <br/>
 
 **Predator Control** is a lightweight, bloat-free alternative to Acer PredatorSense for **Acer Predator & Nitro** laptops.  
-Direct ACPI WMI hardware control, **~40 MB RAM** (vs 1.5 GB+), and only **4 essential Acer services** running!
+Direct ACPI WMI hardware control, **~18–25 MB RAM** (Classic UI) / **~45–65 MB** (Jelli UI) vs 1.5 GB+, and zero unnecessary telemetry!
 
 </div>
 
@@ -71,7 +71,7 @@ Predator Control replaces all of that with direct ACPI WMI calls, using only **~
 
 | Metric | 🐌 Acer PredatorSense + Care Center | 🪼 Predator Control | Improvement |
 | :--- | :---: | :---: | :--- |
-| **Idle RAM** | 500 MB – 1.5 GB | **~40 MB** | 🟢 **~95% less RAM** |
+| **Idle RAM** | 500 MB – 1.5 GB | **~18–25 MB** (Classic) / **~45–65 MB** (Jelli) | 🟢 **~95% less RAM** |
 | **Background Services** | 10+ bloatware & telemetry daemons | **4 Essential Only** | 🟢 **All telemetry silenced** |
 | **Idle CPU** | 0.8 – 3.5% | **< 0.1% / 0.0%** | 🟢 Zero micro-stutter |
 | **Window Toggle Latency** | 2.5 – 5.0 s | **< 50 ms** | 🟢 Instant launch |
@@ -81,27 +81,27 @@ Predator Control replaces all of that with direct ACPI WMI calls, using only **~
 
 ---
 
-## 🛡️ The 4 Essential Acer Services
+## 🛡️ Acer Services & Background Optimization
 
-Predator Control replaces the heavy PredatorSense Electron frontend while smartly coexisting with Acer's hardware layer. To maintain full hardware control with **only ~40 MB RAM**, it keeps **4 essential Acer services** running:
+Predator Control replaces the heavy PredatorSense Electron frontend while communicating directly with hardware.
 
-| Service | Display Name | Why It Is Essential |
+### Core Essential Services
+The following services provide active communication channels needed for full feature fidelity:
+| Service | Display Name | Role |
 | :--- | :--- | :--- |
-| **`AASSvc`** | **Acer Agent Service** | Direct Named Pipe (`\\.\pipe\AcerAgentPipe`) for real-time fan RPM tachometers, GPU MUX switching, and fast RGB packet serialization. |
-| **`AcerLightingService`** | **Acer Lighting Service** | Controls keyboard 4-zone lighting profiles and firmware color latching (prevents annoying Amber light reset on reboot). |
-| **`AcerHardwareService`** / **`AcerServiceSvc`** | **Acer Service Component** | Handles low-level APGe hardware actions (30-second keyboard backlight idle sleep timeout, power profile TDP switches). |
-| **`AcerDeviceEnablingServiceV2`** | **Acer Device Enabling Service V2** | ACPI device driver bridge communicating directly with the Embedded Controller (EC). |
+| **`AASSvc`** | **Acer Agent Service** | Direct Named Pipe (`\\.\pipe\AcerAgentPipe`) for real-time fan tachometers and GPU MUX switching. |
+| **`AcerLightingService`** | **Acer Lighting Service** | Controls keyboard 4-zone lighting profiles and firmware color latching. |
 
-### 🧹 What Gets Disabled? (Bloatware & Telemetry Silenced)
-Predator Control automatically detects and disables **6 intrusive, duplicate background services**:
-- ❌ **`AcerCCAgentSvis`** (Acer Care Center — Telemetry, update nagware, background RAM hog)
-- ❌ **`AcerQAAgentSvis`** (Acer Quick Access — Legacy popups & slow OSD)
-- ❌ **`AcerDIAgentSvis`** (Acer Device Info — Periodic cloud telemetry uploads)
-- ❌ **`ASMSvc`** (Acer System Monitor Service — Duplicate sensor polling causing CPU wakeups)
-- ❌ Intrusive Acer startup tasks and background analytics
-
-You can run `disable_acer_bloatware.bat` anytime to apply this optimization with a single click, or `enable_acer_services.bat` to restore default settings.
-
+### Optional / Legacy Services (Disabled in Bloatware Optimization)
+The following services are disabled when the **Disable Acer Bloatware Services** toggle is enabled (or via `disable_acer_bloatware.bat`). *Note: On certain models, disabling these may affect the 30-second backlight idle sleep timeout; unverified on non-standard configurations — disable at your own risk:*
+| Service | Display Name | Status Under Optimization |
+| :--- | :--- | :--- |
+| **`AcerServiceSvc`** | **Acer Service Component** | Disabled (Handles legacy APGe actions; direct WMI used where available) |
+| **`AcerDeviceEnablingServiceV2`** | **Acer Device Enabling Service V2** | Disabled (Legacy driver bridge; direct ACPI WMI preferred) |
+| **`AcerCCAgentSvis`** | **Acer Care Center** | Disabled (Telemetry, nagware, background RAM usage) |
+| **`AcerQAAgentSvis`** | **Acer Quick Access** | Disabled (Legacy popups & slow OSD) |
+| **`AcerDIAgentSvis`** | **Acer Device Info** | Disabled (Cloud telemetry uploads) |
+| **`ASMSvc`** | **Acer System Monitor Service** | Disabled (Duplicate sensor polling causing CPU wakeups) |
 ---
 
 ## 🚀 Features Matrix
@@ -259,11 +259,11 @@ cd PredatorControl/src
 # Build Release
 dotnet build -c Release
 
-# Publish Standalone Executable (~52 MB)
+# Publish Standalone Single-File Executable (~52.8 MB - No .NET required)
 dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -o "..\publish\standalone"
 
-# Publish Unpacked Folder
-dotnet publish -c Release -r win-x64 --no-self-contained -p:PublishSingleFile=false -o "..\publish\unpacked"
+# Publish Framework-Dependent Single-File Executable (~3.68 MB - Requires .NET 10 Desktop Runtime)
+dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o "..\publish\win-x64"
 ```
 
 ---
@@ -290,9 +290,11 @@ Because utilities that manipulate laptop hardware write directly to the Embedded
 
 ## 🚀 Quick Setup & Usage
 
-1. Download the latest release from [Releases](https://github.com/Hadisovic/PredatorControl/releases).
-2. Run **`PredatorControl-standalone.exe`** as Administrator.
-3. *(Optional)* Toggle **"Start with Windows"** in the app settings to run silently in the system tray at login without any startup delay.
+1. Download the latest release from [Releases](https://github.com/Hadisovic/PredatorControl/releases):
+   - **`PredatorControl-standalone.exe`**: Ready to run anywhere; no runtime installation needed (~52.8 MB).
+   - **`PredatorControl-win-x64.exe`**: Lightweight single-file executable for systems with .NET 10 Desktop Runtime (~3.68 MB).
+2. Run the executable as Administrator.
+3. *(Optional)* Toggle **"Start with Windows"** in settings to run silently in the system tray at login without startup delay.
 
 ---
 
@@ -317,10 +319,21 @@ $pipe.Close()
 
 ## 🛡️ Safe Bloatware Optimization
 
-To silence Acer telemetry and bloatware without breaking hardware controls:
-1. Run **`disable_acer_bloatware.bat`** as Administrator.
-2. It disables the 6 telemetry daemons (`AcerCCAgentSvis`, `AcerDIAgentSvis`, `AcerQAAgentSvis`, `ASMSvc`, etc.) while safeguarding the **4 essential services** (`AASSvc`, `AcerLightingService`, etc.).
-3. To restore factory Acer services at any time, run **`enable_acer_services.bat`**.
+To silence Acer telemetry and OEM background services without breaking hardware controls:
+1. **Built-in In-App Toggle**: Under **SYSTEM OPTIMIZATION**, toggle **"Optimize Acer Services (Disable OEM Bloatware)"**.
+2. It interacts directly with the Windows Service Control Manager (SCM) to safely stop and disable the 6 telemetry daemons (`AcerCCAgentSvis`, `AcerDIAgentSvis`, `AcerQAAgentSvis`, `ASMSvc`, `AcerServiceSvc`, `AcerDeviceEnablingServiceV2`) while safeguarding essential hardware services (`AASSvc`, `AcerLightingService`).
+3. Real-time counter reflects live daemon states matching Windows Task Manager (e.g. `6 of 6 bloatware services disabled & stopped`).
+4. Standalone batch utilities **`disable_acer_bloatware.bat`** and **`enable_acer_services.bat`** remain available as headless recovery options.
+
+---
+
+## 📊 Reproducible RAM Measurements
+
+To verify RAM footprint independently on your own hardware, run:
+```powershell
+.\tools\measure_ram.ps1
+```
+This samples both working set and private bytes across steady-state execution for both Classic UI and Jelli UI modes.
 
 ---
 

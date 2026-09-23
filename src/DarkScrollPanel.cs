@@ -108,12 +108,19 @@ namespace PredatorControlApp
 
         private void ScrollByWheel(int delta)
         {
+            if (!NeedsScroll) return;
+
             int lines = SystemInformation.MouseWheelScrollLines;
             int step = lines < 0 ? ClientSize.Height : Math.Max(1, lines) * S(20);
 
-            int top = -AutoScrollPosition.Y - Math.Sign(delta) * step;
-            AutoScrollPosition = new Point(-AutoScrollPosition.X, top);
-            _savedScrollY = -AutoScrollPosition.Y;
+            int viewH = ClientSize.Height;
+            int contentH = DisplayRectangle.Height;
+            int maxScroll = Math.Max(0, contentH - viewH);
+
+            int curY = Math.Max(0, -AutoScrollPosition.Y);
+            int top = Math.Clamp(curY - Math.Sign(delta) * step, 0, maxScroll);
+            AutoScrollPosition = new Point(0, top);
+            _savedScrollY = top;
             Invalidate();
         }
 
@@ -172,13 +179,17 @@ namespace PredatorControlApp
         {
             int viewH = ClientSize.Height;
             int contentH = DisplayRectangle.Height;
-            int thumbH = ThumbRect().Height;
+            var thumb = ThumbRect();
+            if (thumb.IsEmpty) return;
+            int thumbH = thumb.Height;
             int travel = viewH - thumbH;
             if (travel <= 0 || contentH <= viewH) return;
 
             float frac = Math.Clamp((mouseY - _dragOffset) / (float)travel, 0f, 1f);
-            AutoScrollPosition = new Point(-AutoScrollPosition.X, (int)(frac * (contentH - viewH)));
-            _savedScrollY = -AutoScrollPosition.Y;
+            int maxScroll = Math.Max(0, contentH - viewH);
+            int targetY = Math.Clamp((int)(frac * maxScroll), 0, maxScroll);
+            AutoScrollPosition = new Point(0, targetY);
+            _savedScrollY = targetY;
             Invalidate();
         }
 
@@ -186,24 +197,40 @@ namespace PredatorControlApp
 
         protected override Point ScrollToControl(Control activeControl)
         {
-            // Prevent WinForms from auto-scrolling to (0,0) on child text/layout updates
-            return DisplayRectangle.Location;
+            // WinForms ScrollToControl expects non-negative scroll coordinates (0 to maxScroll).
+            // Returning negative values (like DisplayRectangle.Location) inverts WinForms layout engine
+            // and sets DisplayRectangle.Y to a positive number, pushing all child controls down!
+            int curX = Math.Max(0, -AutoScrollPosition.X);
+            int curY = Math.Max(0, -AutoScrollPosition.Y);
+            return new Point(curX, curY);
         }
 
         protected override void OnLayout(LayoutEventArgs levent)
         {
             int beforeY = _savedScrollY;
             base.OnLayout(levent);
-            if (-AutoScrollPosition.Y == 0 && beforeY > 0)
+
+            // Guard: WinForms must NEVER have positive DisplayRectangle.Y (which creates an empty margin at the top)
+            if (DisplayRectangle.Y > 0)
             {
-                AutoScrollPosition = new Point(-AutoScrollPosition.X, beforeY);
+                AutoScrollPosition = new Point(0, 0);
+                _savedScrollY = 0;
+            }
+            else if (-AutoScrollPosition.Y == 0 && beforeY > 0)
+            {
+                int maxScroll = Math.Max(0, DisplayRectangle.Height - ClientSize.Height);
+                int targetY = Math.Clamp(beforeY, 0, maxScroll);
+                if (targetY > 0)
+                {
+                    AutoScrollPosition = new Point(0, targetY);
+                }
             }
         }
 
         protected override void OnScroll(ScrollEventArgs se)
         {
             base.OnScroll(se);
-            _savedScrollY = -AutoScrollPosition.Y;
+            _savedScrollY = Math.Max(0, -AutoScrollPosition.Y);
             Invalidate();
         }
 

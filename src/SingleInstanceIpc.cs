@@ -1,4 +1,4 @@
-﻿using System.IO.Pipes;
+using System.IO.Pipes;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text;
@@ -80,10 +80,14 @@ namespace PredatorControlApp
                     try
                     {
                         var pipeSecurity = new PipeSecurity();
-                        pipeSecurity.AddAccessRule(new PipeAccessRule(
-                            new SecurityIdentifier(WellKnownSidType.AuthenticatedUserSid, null),
-                            PipeAccessRights.ReadWrite,
-                            AccessControlType.Allow));
+                        var currentUserSid = WindowsIdentity.GetCurrent().User;
+                        if (currentUserSid != null)
+                        {
+                            pipeSecurity.AddAccessRule(new PipeAccessRule(
+                                currentUserSid,
+                                PipeAccessRights.ReadWrite,
+                                AccessControlType.Allow));
+                        }
 
                         using var server = NamedPipeServerStreamAcl.Create(
                             PipeName,

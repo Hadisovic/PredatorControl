@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Net.Http;
 using System.Reflection;
 using System.Runtime.InteropServices;
@@ -10,7 +10,7 @@ using Microsoft.Win32;
 
 namespace PredatorControlApp
 {
-    internal sealed record UpdateInfo(Version Version, string Tag, string Notes, string DownloadUrl);
+    internal sealed record UpdateInfo(Version Version, string Tag, string Notes, string DownloadUrl, string? ChecksumUrl = null, string? TargetFileName = null);
 
     [SupportedOSPlatform("windows")]
     internal static class Updater
@@ -88,8 +88,8 @@ namespace PredatorControlApp
 
                 if (newest == null || v > newest.Version)
                 {
-                    if (PickAsset(rel, IsSelfContained) is string url)
-                        newest = new UpdateInfo(v, Str(rel, "tag_name"), "", url);
+                    if (PickAssetInfo(rel, IsSelfContained) is var assetInfo && assetInfo != null)
+                        newest = new UpdateInfo(v, Str(rel, "tag_name"), "", assetInfo.Value.url, assetInfo.Value.checksumUrl, assetInfo.Value.name);
                 }
             }
 
@@ -105,11 +105,22 @@ namespace PredatorControlApp
         private static bool IsSelfContained =>
             !RuntimeEnvironment.GetRuntimeDirectory().Replace('/', '\\').Contains(@"\dotnet\shared\", OIC);
 
-        internal static string? PickAsset(JsonElement rel, bool wantSelfContained)
+        internal static (string url, string name, string? checksumUrl)? PickAssetInfo(JsonElement rel, bool wantSelfContained)
         {
             if (!rel.TryGetProperty("assets", out var assets) || assets.ValueKind != JsonValueKind.Array) return null;
 
-            string? fallback = null;
+            string? checksumUrl = null;
+            foreach (var a in assets.EnumerateArray())
+            {
+                string name = Str(a, "name");
+                if (name.Equals("checksums.txt", OIC) || name.EndsWith("checksums.txt", OIC))
+                {
+                    checksumUrl = Str(a, "browser_download_url");
+                    break;
+                }
+            }
+
+            (string url, string name)? fallback = null;
             foreach (var a in assets.EnumerateArray())
             {
                 string name = Str(a, "name");
@@ -119,11 +130,15 @@ namespace PredatorControlApp
                 if (url.Length == 0) continue;
 
                 bool selfContained = name.Contains("standalone", OIC) || name.Contains("self", OIC);
-                if (selfContained == wantSelfContained) return url;
-                fallback ??= url;
+                if (selfContained == wantSelfContained) return (url, name, checksumUrl);
+                fallback ??= (url, name);
             }
-            return fallback;
+            if (fallback != null) return (fallback.Value.url, fallback.Value.name, checksumUrl);
+            return null;
         }
+
+        internal static string? PickAsset(JsonElement rel, bool wantSelfContained) =>
+            PickAssetInfo(rel, wantSelfContained)?.url;
 
         #endregion
 
@@ -162,6 +177,43 @@ namespace PredatorControlApp
 
             if (new FileInfo(staged).Length < 100_000)
                 throw new IOException("Downloaded file looks truncated.");
+
+            if (!string.IsNullOrEmpty(info.ChecksumUrl))
+            {
+                using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(2) };
+                http.DefaultRequestHeaders.UserAgent.ParseAdd("PredatorControl");
+                string checksumData = await http.GetStringAsync(info.ChecksumUrl);
+
+                string stagedHash;
+                using (var fs = File.OpenRead(staged))
+                using (var sha = System.Security.Cryptography.SHA256.Create())
+                {
+                    stagedHash = BitConverter.ToString(sha.ComputeHash(fs)).Replace("-", "").ToLowerInvariant();
+                }
+
+                string? expectedHash = null;
+                string targetName = info.TargetFileName ?? Path.GetFileName(new Uri(info.DownloadUrl).LocalPath);
+                foreach (var line in checksumData.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+                {
+                    var parts = line.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+                    if (parts.Length >= 2)
+                    {
+                        string lineHash = parts[0].Trim().ToLowerInvariant();
+                        string lineFile = parts[parts.Length - 1].Trim();
+                        if (lineFile.Equals(targetName, OIC))
+                        {
+                            expectedHash = lineHash;
+                            break;
+                        }
+                    }
+                }
+
+                if (expectedHash != null && !stagedHash.Equals(expectedHash, StringComparison.OrdinalIgnoreCase))
+                {
+                    try { File.Delete(staged); } catch { }
+                    throw new InvalidOperationException($"Checksum verification failed: expected {expectedHash}, got {stagedHash}. Staged file aborted.");
+                }
+            }
 
             try
             {

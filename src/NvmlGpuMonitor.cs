@@ -8,8 +8,10 @@ namespace PredatorControlApp
     {
         private const string NvmlDll = "nvml.dll";
 
-        [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        private static extern IntPtr LoadLibrary(string libname);
+        private const uint LOAD_LIBRARY_SEARCH_SYSTEM32 = 0x00000800;
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr LoadLibraryEx(string lpLibFileName, IntPtr hFile, uint dwFlags);
 
         [DllImport(NvmlDll, EntryPoint = "nvmlInit_v2")]
         private static extern int nvmlInit_v2();
@@ -71,18 +73,13 @@ namespace PredatorControlApp
 
                 try
                 {
-                    // Check if nvml.dll is loadable
-                    IntPtr hLib = LoadLibrary("nvml.dll");
+                    // Load nvml.dll strictly via fully-qualified System32 path with LOAD_LIBRARY_SEARCH_SYSTEM32
+                    string sys32Nvml = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "nvml.dll");
+                    IntPtr hLib = LoadLibraryEx(sys32Nvml, IntPtr.Zero, LOAD_LIBRARY_SEARCH_SYSTEM32);
                     if (hLib == IntPtr.Zero)
                     {
-                        // Fallback to System32 path
-                        string sys32Nvml = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "nvml.dll");
-                        hLib = LoadLibrary(sys32Nvml);
-                        if (hLib == IntPtr.Zero)
-                        {
-                            _initFailed = true;
-                            return;
-                        }
+                        _initFailed = true;
+                        return;
                     }
 
                     int rc = nvmlInit_v2();

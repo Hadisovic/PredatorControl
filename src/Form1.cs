@@ -4,13 +4,14 @@ using System.Runtime.Versioning;
 using System.Security.Principal;
 using System.Text;
 using Microsoft.Win32;
+using System.ServiceProcess;
 
 namespace PredatorControlApp
 {
     [SupportedOSPlatform("windows")]
     public partial class Form1 : Form
     {
-        #region Win32 Interop — DWM & Dark Mode
+        #region Win32 Interop - DWM & Dark Mode
 
         [DllImport("dwmapi.dll")]
         private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
@@ -19,7 +20,7 @@ namespace PredatorControlApp
 
         #endregion
 
-        #region Win32 Interop — Window Dragging
+        #region Win32 Interop - Window Dragging
 
         public const int WM_NCLBUTTONDOWN = 0xA1;
         public const int HT_CAPTION = 0x2;
@@ -41,7 +42,7 @@ namespace PredatorControlApp
 
         #endregion
 
-        #region Win32 Interop — Hotkeys & Foreground
+        #region Win32 Interop - Hotkeys & Foreground
 
         [DllImport("user32.dll", SetLastError = true)]
         private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
@@ -233,6 +234,7 @@ namespace PredatorControlApp
         private ToolStripMenuItem? _trayJelliToggle;
         private Label? _lblOptimizeServices;
         private PredatorToggle? _switchOptimizeServices;
+        private Label? _lblOptimizeCounter;
         private Label _lblWinKeyLock = null!;
 
         private GameOverlayForm? _overlayForm;
@@ -460,8 +462,11 @@ namespace PredatorControlApp
             try
             {
                 using var key = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\PredatorControl");
-                if (key == null) return false;
-                return (key.GetValue("ServicesOptimized") is int v) && v == 1;
+                if (key != null && key.GetValue("ServicesOptimized") is int v)
+                    return v == 1;
+
+                var (installed, disabled, running, _) = GetBloatwareCounts();
+                return installed > 0 && disabled == installed && running == 0;
             }
             catch { return false; }
         }
@@ -476,6 +481,162 @@ namespace PredatorControlApp
             catch { }
         }
 
+        private static readonly string[] BloatServices =
+        {
+            "AcerCCAgentSvis",             // Acer Care Center
+            "AcerQAAgentSvis",             // Acer Quick Access
+            "AcerDIAgentSvis",             // Acer Device Info Telemetry
+            "ASMSvc",                      // Acer System Monitor Service
+            "AcerServiceSvc",              // Acer Service Component Wrapper
+            "AcerDeviceEnablingServiceV2"  // Acer Device Enabling Service V2
+        };
+
+        private static void RunScmCommand(string exe, string args)
+        {
+            try
+            {
+                using var p = Process.Start(new ProcessStartInfo
+                {
+                    FileName = exe,
+                    Arguments = args,
+                    CreateNoWindow = true,
+                    UseShellExecute = false
+                });
+                p?.WaitForExit(3000);
+            }
+            catch { }
+        }
+
+        private static void SetServiceStartup(string serviceName, bool disable)
+        {
+            string mode = disable ? "disabled" : "auto";
+            RunScmCommand("sc.exe", $"config \"{serviceName}\" start= {mode}");
+            try
+            {
+                using var reg = Registry.LocalMachine.OpenSubKey($@"SYSTEM\CurrentControlSet\Services\{serviceName}", true);
+                reg?.SetValue("Start", disable ? 4 : 2, RegistryValueKind.DWord);
+            }
+            catch { }
+        }
+
+        private static void StopServiceSafe(string serviceName)
+        {
+            try
+            {
+                using var sc = new ServiceController(serviceName);
+                if (sc.Status != ServiceControllerStatus.Stopped && sc.Status != ServiceControllerStatus.StopPending)
+                {
+                    sc.Stop();
+                    sc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(2));
+                }
+            }
+            catch { }
+            RunScmCommand("net.exe", $"stop \"{serviceName}\" /y");
+        }
+
+        private static void StartServiceSafe(string serviceName)
+        {
+            try
+            {
+                using var sc = new ServiceController(serviceName);
+                if (sc.Status != ServiceControllerStatus.Running && sc.Status != ServiceControllerStatus.StartPending)
+                {
+                    sc.Start();
+                    sc.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(2));
+                }
+            }
+            catch { }
+            RunScmCommand("net.exe", $"start \"{serviceName}\"");
+        }
+
+        private static (int installed, int disabled, int running, int stopped) GetBloatwareCounts()
+        {
+            int installed = 0;
+            int disabled = 0;
+            int running = 0;
+            int stopped = 0;
+
+            foreach (var svcName in BloatServices)
+            {
+                try
+                {
+                    using var sc = new ServiceController(svcName);
+                    var status = sc.Status;
+                    installed++;
+
+                    bool isDisabled = false;
+                    try
+                    {
+                        isDisabled = (sc.StartType == ServiceStartMode.Disabled);
+                    }
+                    catch
+                    {
+                        using var reg = Registry.LocalMachine.OpenSubKey($@"SYSTEM\CurrentControlSet\Services\{svcName}");
+                        if (reg != null)
+                        {
+                            int s = (int)(reg.GetValue("Start", 2) ?? 2);
+                            isDisabled = (s == 4);
+                        }
+                    }
+
+                    if (isDisabled)
+                        disabled++;
+
+                    if (status == ServiceControllerStatus.Running)
+                        running++;
+                    else
+                        stopped++;
+                }
+                catch
+                {
+                    try
+                    {
+                        using var reg = Registry.LocalMachine.OpenSubKey($@"SYSTEM\CurrentControlSet\Services\{svcName}");
+                        if (reg != null)
+                        {
+                            installed++;
+                            int s = (int)(reg.GetValue("Start", 2) ?? 2);
+                            if (s == 4) disabled++;
+                            stopped++;
+                        }
+                    }
+                    catch { }
+                }
+            }
+
+            return (installed, disabled, running, stopped);
+        }
+
+        private void UpdateOptimizeCounter()
+        {
+            if (_lblOptimizeCounter == null || _lblOptimizeCounter.IsDisposed) return;
+            try
+            {
+                var (installed, disabled, running, stopped) = GetBloatwareCounts();
+                if (installed == 0)
+                {
+                    _lblOptimizeCounter.Text = "No Acer OEM services detected";
+                    _lblOptimizeCounter.ForeColor = Color.FromArgb(120, 120, 135);
+                }
+                else if (disabled == installed && running == 0)
+                {
+                    _lblOptimizeCounter.Text = $"{disabled} of {installed} bloatware services disabled & stopped";
+                    _lblOptimizeCounter.ForeColor = Color.FromArgb(0, 230, 180);
+                }
+                else if (disabled == 0 && running == installed)
+                {
+                    _lblOptimizeCounter.Text = $"0 of {installed} bloatware services disabled (all {running} running)";
+                    _lblOptimizeCounter.ForeColor = Color.FromArgb(120, 120, 135);
+                }
+                else
+                {
+                    _lblOptimizeCounter.Text = $"{disabled} of {installed} disabled ({running} running, {stopped} stopped)";
+                    _lblOptimizeCounter.ForeColor = Color.FromArgb(255, 189, 46);
+                }
+            }
+            catch { }
+        }
+
         private static void OptimizeAcerServices()
         {
             Task.Run(() =>
@@ -483,70 +644,18 @@ namespace PredatorControlApp
                 try
                 {
                     // Bloatware & telemetry services safe to disable
-                    string[] bloatServices =
+                    foreach (var svcName in BloatServices)
                     {
-                        "AcerCCAgentSvis",             // Acer Care Center
-                        "AcerQAAgentSvis",             // Acer Quick Access
-                        "AcerDIAgentSvis",             // Acer Device Info Telemetry
-                        "ASMSvc",                      // Acer System Monitor Service
-                        "AcerServiceSvc",              // Acer Service Component Wrapper
-                        "AcerDeviceEnablingServiceV2"  // Acer Device Enabling Service V2
-                    };
-
-                    foreach (var svcName in bloatServices)
-                    {
-                        try
-                        {
-                            using var reg = Registry.LocalMachine.OpenSubKey($@"SYSTEM\CurrentControlSet\Services\{svcName}", true);
-                            if (reg != null)
-                            {
-                                int currentStart = (int)(reg.GetValue("Start", 2) ?? 2);
-                                if (currentStart != 4) // 4 = Disabled
-                                {
-                                    reg.SetValue("Start", 4, RegistryValueKind.DWord);
-                                    try
-                                    {
-                                        var psi = new ProcessStartInfo("net.exe", $"stop {svcName}")
-                                        {
-                                            CreateNoWindow = true,
-                                            UseShellExecute = false
-                                        };
-                                        Process.Start(psi)?.WaitForExit(3000);
-                                    }
-                                    catch { }
-                                }
-                            }
-                        }
-                        catch { }
+                        SetServiceStartup(svcName, disable: true);
+                        StopServiceSafe(svcName);
                     }
 
-                    // Keep essential services on Automatic (2)
+                    // Keep essential services on Automatic and running
                     string[] essential = { "AASSvc", "AcerLightingService" };
                     foreach (var svc in essential)
                     {
-                        try
-                        {
-                            using var reg = Registry.LocalMachine.OpenSubKey($@"SYSTEM\CurrentControlSet\Services\{svc}", true);
-                            if (reg != null)
-                            {
-                                int currentStart = (int)(reg.GetValue("Start", 2) ?? 2);
-                                if (currentStart != 2) // 2 = Automatic
-                                    reg.SetValue("Start", 2, RegistryValueKind.DWord);
-                            }
-                        }
-                        catch { }
-                    }
-
-                    // Enforce High CPU Priority (3 = High) in Windows IFEO so the app automatically runs at High Priority
-                    string[] ifeoTargets = { "PredatorControlApp.exe", "PredatorControl-standalone.exe", "PredatorControl-win-x64.exe" };
-                    foreach (var exeName in ifeoTargets)
-                    {
-                        try
-                        {
-                            using var ifeoKey = Registry.LocalMachine.CreateSubKey($@"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\{exeName}\PerfOptions");
-                            ifeoKey?.SetValue("CpuPriorityClass", 3, RegistryValueKind.DWord);
-                        }
-                        catch { }
+                        SetServiceStartup(svc, disable: false);
+                        StartServiceSafe(svc);
                     }
                 }
                 catch { }
@@ -559,41 +668,10 @@ namespace PredatorControlApp
             {
                 try
                 {
-                    string[] bloatServices =
+                    foreach (var svcName in BloatServices)
                     {
-                        "AcerCCAgentSvis",
-                        "AcerQAAgentSvis",
-                        "AcerDIAgentSvis",
-                        "ASMSvc",
-                        "AcerServiceSvc",
-                        "AcerDeviceEnablingServiceV2"
-                    };
-
-                    foreach (var svcName in bloatServices)
-                    {
-                        try
-                        {
-                            using var reg = Registry.LocalMachine.OpenSubKey($@"SYSTEM\CurrentControlSet\Services\{svcName}", true);
-                            if (reg != null)
-                            {
-                                int currentStart = (int)(reg.GetValue("Start", 2) ?? 2);
-                                if (currentStart == 4) // Disabled -> restore to Automatic
-                                {
-                                    reg.SetValue("Start", 2, RegistryValueKind.DWord);
-                                    try
-                                    {
-                                        var psi = new ProcessStartInfo("net.exe", $"start {svcName}")
-                                        {
-                                            CreateNoWindow = true,
-                                            UseShellExecute = false
-                                        };
-                                        Process.Start(psi)?.WaitForExit(3000);
-                                    }
-                                    catch { }
-                                }
-                            }
-                        }
-                        catch { }
+                        SetServiceStartup(svcName, disable: false);
+                        StartServiceSafe(svcName);
                     }
                 }
                 catch { }
@@ -810,7 +888,7 @@ namespace PredatorControlApp
 
             else if (m.Msg == WM_DISPLAYCHANGE)
             {
-                // A monitor was connected or disconnected — refresh external monitor section
+                // A monitor was connected or disconnected - refresh external monitor section
                 BeginInvoke(new Action(RefreshExternalMonitorSection));
             }
 
@@ -837,6 +915,7 @@ namespace PredatorControlApp
             BringToFront();
             _telemetryService?.SetPollingState(true);
             _telemetryService?.SetSensorMask(true);
+            UpdateOptimizeCounter();
         }
 
         public void HideApp()
@@ -949,7 +1028,7 @@ namespace PredatorControlApp
                 };
                 _pnlExternalMonitors.Controls.Add(lbl);
 
-                // Hz dropdown — populated from supported rates from OS driver only
+                // Hz dropdown - populated from supported rates from OS driver only
                 var cbo = new PredatorDropDown
                 {
                     Location = new Point(contentW - dropW - btnW - gap, rowY),
@@ -1161,7 +1240,7 @@ namespace PredatorControlApp
             hardwareMenu.DropDownItems.AddRange([trayWinKey, trayLcdOverdrive]);
             _trayMenu.Items.Add(hardwareMenu);
 
-            _trayJelliToggle = new ToolStripMenuItem("  Jelli Desktop Companion", null, (s, e) => SetJelliEnabled(!_jelliFallback))
+            _trayJelliToggle = new ToolStripMenuItem("  Jelli Desktop Companion", null, (s, e) => SetJelliEnabled(!(_trayJelliToggle?.Checked ?? !_jelliFallback)))
             {
                 Checked = !_jelliFallback
             };
@@ -1257,7 +1336,7 @@ namespace PredatorControlApp
 
             var lblClose = new Label
             {
-                Text = "?",
+                Text = "\u25CF",
                 ForeColor = Color.FromArgb(255, 95, 86),
                 Font = new Font("Arial", 12f),
                 AutoSize = true,
@@ -1268,7 +1347,7 @@ namespace PredatorControlApp
             };
             var lblMin = new Label
             {
-                Text = "?",
+                Text = "\u25CF",
                 ForeColor = Color.FromArgb(255, 189, 46),
                 Font = new Font("Arial", 12f),
                 AutoSize = true,
@@ -1305,10 +1384,10 @@ namespace PredatorControlApp
 
             // TELEMETRY SENSORS
             MakeLabel("CPU:", pad, y, FontBody, Color.FromArgb(120, 120, 135));
-            _lblCpuTemp = MakeLabel("--°C", pad + S(34), y, FontBodyBold, Color.White);
+            _lblCpuTemp = MakeLabel("--\u00b0C", pad + S(34), y, FontBodyBold, Color.White);
 
             _lblGpuHdr = MakeLabel("GPU:", ClientSize.Width / 2 + S(10), y, FontBody, Color.FromArgb(120, 120, 135));
-            _lblGpuTemp = MakeLabel("--°C", ClientSize.Width / 2 + S(46), y, FontBodyBold, Color.White);
+            _lblGpuTemp = MakeLabel("--\u00b0C", ClientSize.Width / 2 + S(46), y, FontBodyBold, Color.White);
 
             y += S(24);
             MakeLabel("CPU FAN:", pad, y, FontBody, Color.FromArgb(120, 120, 135));
@@ -1654,7 +1733,7 @@ namespace PredatorControlApp
             }
 
             y += S(28) + S(12);
-            _btnCustomColor = MakeButton("??  Custom Color...", pad, y, contentW, btnH);
+            _btnCustomColor = MakeButton("\uD83C\uDFA8  Custom Color...", pad, y, contentW, btnH);
             _btnCustomColor.Click += (s, e) =>
             {
                 if (_selectedZone >= 0 && _selectedZone < 4)
@@ -1810,7 +1889,7 @@ namespace PredatorControlApp
 
             // Dedicated Overlay Options & Settings button in the empty space below mode buttons
             y += btnH + S(8);
-            _btnOverlaySettings = MakeButton("? Overlay Options", pad, y, contentW, S(28));
+            _btnOverlaySettings = MakeButton("\u2699 Overlay Options", pad, y, contentW, S(28));
             _btnOverlaySettings.Click += (s, e) => OpenOverlaySettings();
             _contentPanel.Controls.Add(_btnOverlaySettings);
 
@@ -1880,11 +1959,11 @@ namespace PredatorControlApp
             _switchGameSync.CheckedChanged += (s, e) =>
             {
                 _gameSync.IsEnabled = _switchGameSync.Checked;
-                _lblGameSyncStatus.Text = _switchGameSync.Checked ? "Active — Monitoring" : "Disabled";
+                _lblGameSyncStatus.Text = _switchGameSync.Checked ? "Active \u2014 Monitoring" : "Disabled";
             };
 
             y += syncSwitchH + S(10);
-            _btnConfigureGames = MakeButton("??  Configure Executables", pad, y, contentW, btnH);
+            _btnConfigureGames = MakeButton("\uD83C\uDFAE  Configure Executables", pad, y, contentW, btnH);
             _btnConfigureGames.Click += (s, e) =>
             {
                 using var form = new GameSyncForm(_gameSync, _maxHz);
@@ -1903,7 +1982,7 @@ namespace PredatorControlApp
             var lblVersion = MakeLabel($"Version {Updater.CurrentText}", pad, y, FontBody, Color.FromArgb(120, 120, 135));
             CenterV(lblVersion, y, updBtnH);
 
-            _btnCheckUpdates = MakeButton("?  Check for Updates", ClientSize.Width - pad - updBtnW, y, updBtnW, updBtnH);
+            _btnCheckUpdates = MakeButton("\u2B07  Check for Updates", ClientSize.Width - pad - updBtnW, y, updBtnW, updBtnH);
             _btnCheckUpdates.Click += async (s, e) => await CheckForUpdatesAsync();
 
             // OPTIMIZE SERVICES (F-5)
@@ -1926,6 +2005,10 @@ namespace PredatorControlApp
             };
             _contentPanel.Controls.Add(_switchOptimizeServices);
 
+            y += optSwitchH + S(2);
+            _lblOptimizeCounter = MakeLabel(string.Empty, pad, y, FontBody, Color.FromArgb(120, 120, 135));
+            UpdateOptimizeCounter();
+
             _switchOptimizeServices.CheckedChanged += (s, e) =>
             {
                 bool enabled = _switchOptimizeServices.Checked;
@@ -1938,6 +2021,11 @@ namespace PredatorControlApp
                 {
                     RestoreAcerServices();
                 }
+                UpdateOptimizeCounter();
+                Task.Delay(1500).ContinueWith(_ =>
+                {
+                    try { if (!IsDisposed) BeginInvoke(new Action(UpdateOptimizeCounter)); } catch { }
+                });
             };
 
             LoadRgbProfilesIntoUi();
@@ -2324,8 +2412,34 @@ namespace PredatorControlApp
             ApplyPowerMode(nextMode, nextBtn, showOsd);
         }
 
+
+        private static bool _warnedUntestedChassis;
+
+        private void CheckUntestedChassisWarning()
+        {
+            if (_warnedUntestedChassis) return;
+            _warnedUntestedChassis = true;
+
+            try
+            {
+                var id = WmiController.GetSystemIdentity();
+                if (!id.IsAcerGaming)
+                {
+                    Program.Report(new InvalidOperationException($"Untested chassis hardware control accessed: Manufacturer='{id.Manufacturer}', Model='{id.Model}', BIOS='{id.BiosVersion}'"), false);
+                    MessageBox.Show(
+                        this,
+                        $"Notice: This system was not identified as a supported Acer Predator or Nitro gaming laptop.\n\nModel: {id.Model}\nBIOS: {id.BiosVersion}\n\nHardware controls (power, fans, RGB) are unverified for this model. Proceed with caution.",
+                        "Predator Control Â· Compatibility Notice",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
+                }
+            }
+            catch { }
+        }
+
         private void ApplyPowerMode(byte mode, PredatorButton btn, bool showOsd = false)
         {
+            CheckUntestedChassisWarning();
             _wmi.SetPowerMode(mode);
             HighlightBtn(btn, ref _activePowerBtn);
             SaveState("Power", mode);
@@ -2358,6 +2472,7 @@ namespace PredatorControlApp
 
         private void ApplyFanMode(byte mode, PredatorButton btn)
         {
+            CheckUntestedChassisWarning();
             _wmi.SetFanBehavior(mode);
             HighlightBtn(btn, ref _activeFanBtn);
             SaveState("Fan", mode);
@@ -2543,6 +2658,7 @@ namespace PredatorControlApp
 
         private void ApplyRgbModeFromDropdown(int mode)
         {
+            CheckUntestedChassisWarning();
             UpdateRgbControlsState(mode);
 
             byte bright = (byte)_brightnessSlider.Value;
@@ -3275,16 +3391,16 @@ namespace PredatorControlApp
             _cpuFanRpm = snap.CpuFanRpm;
             _gpuFanRpm = snap.GpuFanRpm;
 
-            // Audit: check .HasValue and never format as "CPU: °C"
-            _lblCpuTemp.Text = _cpuTemp.HasValue ? $"{_cpuTemp.Value}°C" : "--°C";
-            _lblGpuTemp.Text = _gpuTemp.HasValue ? $"{_gpuTemp.Value}°C" : "--°C";
+            // Audit: check .HasValue and never format as "CPU: \u00b0C"
+            _lblCpuTemp.Text = _cpuTemp.HasValue ? $"{_cpuTemp.Value}\u00b0C" : "--\u00b0C";
+            _lblGpuTemp.Text = _gpuTemp.HasValue ? $"{_gpuTemp.Value}\u00b0C" : "--\u00b0C";
             _lblCpuTemp.ForeColor = TempColor(_cpuTemp ?? 0);
             _lblGpuTemp.ForeColor = TempColor(_gpuTemp ?? 0);
 
             _lblCpuRpm.Text = _cpuFanRpm.HasValue ? $"{_cpuFanRpm.Value} RPM" : "-- RPM";
             _lblGpuRpm.Text = _gpuFanRpm.HasValue ? $"{_gpuFanRpm.Value} RPM" : "-- RPM";
 
-            _trayIcon.Text = $"Predator Control\nCPU: {(_cpuTemp.HasValue ? $"{_cpuTemp.Value}°C" : "--°C")}  GPU: {(_gpuTemp.HasValue ? $"{_gpuTemp.Value}°C" : "--°C")}";
+            _trayIcon.Text = $"Predator Control\nCPU: {(_cpuTemp.HasValue ? $"{_cpuTemp.Value}\u00b0C" : "--\u00b0C")}  GPU: {(_gpuTemp.HasValue ? $"{_gpuTemp.Value}\u00b0C" : "--\u00b0C")}";
 
             if (_fanCurveForm != null && !_fanCurveForm.IsDisposed)
                 _fanCurveForm.UpdateTemps(_cpuTemp ?? 0, _gpuTemp ?? 0);
@@ -3904,7 +4020,7 @@ namespace PredatorControlApp
         private async Task PromptUpdateAsync(UpdateInfo info)
         {
             bool accepted = Updater.ShowNotes(this, "Update available",
-                $"Version {info.Version.ToString(3)} is available — you have v{Updater.CurrentText}",
+                $"Version {info.Version.ToString(3)} is available \u2014 you have v{Updater.CurrentText}",
                 info.Notes, confirm: true);
 
             if (!accepted) return;
@@ -3912,7 +4028,7 @@ namespace PredatorControlApp
             try
             {
                 _btnCheckUpdates.Enabled = false;
-                _btnCheckUpdates.Text = "Downloading update…";
+                _btnCheckUpdates.Text = "Downloading update\u2026";
                 await Updater.ApplyAsync(info);
 
                 _isClosing = true;
@@ -3921,7 +4037,7 @@ namespace PredatorControlApp
             catch (Exception ex)
             {
                 _btnCheckUpdates.Enabled = true;
-                _btnCheckUpdates.Text = $"?  Check for Updates  (v{Updater.CurrentText})";
+                _btnCheckUpdates.Text = $"\u2B07  Check for Updates  (v{Updater.CurrentText})";
                 MessageBox.Show(this, $"Update failed:\n{ex.Message}",
                     "Predator Control", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }

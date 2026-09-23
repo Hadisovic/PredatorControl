@@ -1,4 +1,4 @@
-﻿using Microsoft.Web.WebView2.Core;
+using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 using Microsoft.Win32;
 using System.Text.Json;
@@ -82,21 +82,59 @@ internal sealed class JelliHostForm : Form
             string targetDll = Path.Combine(targetDir, "WebView2Loader.dll");
 
             var asm = typeof(JelliHostForm).Assembly;
-            using var stream = asm.GetManifestResourceStream("WebView2Loader.dll");
-            if (stream != null)
+            byte[]? expectedHash = null;
+            byte[]? resourceBytes = null;
+
+            using (var stream = asm.GetManifestResourceStream("WebView2Loader.dll"))
             {
-                if (!File.Exists(targetDll) || new FileInfo(targetDll).Length != stream.Length)
+                if (stream != null)
                 {
-                    using var fs = new FileStream(targetDll, FileMode.Create, FileAccess.Write, FileShare.None);
-                    stream.CopyTo(fs);
+                    using var ms = new MemoryStream();
+                    stream.CopyTo(ms);
+                    resourceBytes = ms.ToArray();
+                    using var sha = System.Security.Cryptography.SHA256.Create();
+                    expectedHash = sha.ComputeHash(resourceBytes);
                 }
             }
 
-            if (File.Exists(targetDll))
+            if (expectedHash != null && resourceBytes != null)
             {
-                CoreWebView2Environment.SetLoaderDllFolderPath(targetDir);
-                SetDllDirectory(targetDir);
-                LoadLibrary(targetDll);
+                byte[]? fileHash = null;
+                if (File.Exists(targetDll))
+                {
+                    try
+                    {
+                        using var fs = File.OpenRead(targetDll);
+                        using var sha = System.Security.Cryptography.SHA256.Create();
+                        fileHash = sha.ComputeHash(fs);
+                    }
+                    catch { }
+                }
+
+                bool match = fileHash != null && fileHash.SequenceEqual(expectedHash);
+                if (!match)
+                {
+                    try
+                    {
+                        File.WriteAllBytes(targetDll, resourceBytes);
+                        using var fs = File.OpenRead(targetDll);
+                        using var sha = System.Security.Cryptography.SHA256.Create();
+                        var freshHash = sha.ComputeHash(fs);
+                        match = freshHash.SequenceEqual(expectedHash);
+                    }
+                    catch { match = false; }
+                }
+
+                if (match)
+                {
+                    CoreWebView2Environment.SetLoaderDllFolderPath(targetDir);
+                    SetDllDirectory(targetDir);
+                    LoadLibrary(targetDll);
+                }
+                else
+                {
+                    Program.Report(new InvalidOperationException("WebView2Loader.dll integrity check failed. Untrusted library was not loaded."), false);
+                }
             }
         }
         catch { }
@@ -171,6 +209,7 @@ internal sealed class JelliHostForm : Form
             // UI took too long but is likely still loading - log and continue.
             Program.Report(new InvalidOperationException("Jelli handshake timed out after 45 s. Jelli may still load in the background."), false);
         }
+        SetSurface(_surface);
         if (Environment.GetCommandLineArgs().Contains("--jelli-devtools")) core.OpenDevToolsWindow();
     }
 
@@ -231,6 +270,7 @@ internal sealed class JelliHostForm : Form
                     _ready = true;
                     _connected.TrySetResult();
                     result = _backend.State(_settings);
+                    SetSurface(_surface);
                     SendLayout();
                     if (!_gaming) { Show(); _cursor.Start(); }
                     break;

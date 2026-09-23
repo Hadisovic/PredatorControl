@@ -1,4 +1,4 @@
-using Microsoft.Web.WebView2.Core;
+﻿using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 using Microsoft.Win32;
 using System.Text.Json;
@@ -115,6 +115,14 @@ internal sealed class JelliHostForm : Form
         _ = Handle;
         _ = _web.Handle;
         _gaming = startSuspended;
+
+        // Show the form off-screen before EnsureCoreWebView2Async.
+        // WebView2 CreateCoreWebView2ControllerAsync needs a visible HWND or it
+        // throws COMException 0x80070490 (Element not found) on boot.
+        SetBounds(-32000, -32000, 1, 1);
+        if (!Visible) Show();
+        await Task.Yield(); // pump message loop so HWND is visible to the OS
+
         string profile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PredatorControl", _persist ? "WebView2" : "WebView2-Test");
         var options = new CoreWebView2EnvironmentOptions
         {
@@ -150,7 +158,19 @@ internal sealed class JelliHostForm : Form
         core.Navigate(Origin);
         _state.Start();
         _rgb.Start();
-        await _connected.Task.WaitAsync(TimeSpan.FromSeconds(15));
+                // Give the Jelli React UI up to 45 s to send its first handshake.
+        // On slow boots the Chromium renderer can take longer than 15 s to warm up.
+        // A timeout here is non-fatal: Jelli is already rendering, it just hasn't
+        // called back yet - we let it settle rather than tearing everything down.
+        try
+        {
+            await _connected.Task.WaitAsync(TimeSpan.FromSeconds(45));
+        }
+        catch (TimeoutException)
+        {
+            // UI took too long but is likely still loading - log and continue.
+            Program.Report(new InvalidOperationException("Jelli handshake timed out after 45 s. Jelli may still load in the background."), false);
+        }
         if (Environment.GetCommandLineArgs().Contains("--jelli-devtools")) core.OpenDevToolsWindow();
     }
 

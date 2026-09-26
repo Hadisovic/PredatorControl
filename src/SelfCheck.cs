@@ -35,6 +35,7 @@ namespace PredatorControlApp
             Debug.Assert(!nitroBloat.Contains("ASMSvc"), "Nitro must protect ASMSvc");
             Debug.Assert(!nitroBloat.Contains("AcerServiceSvc"), "Nitro must protect AcerServiceSvc");
             Debug.Assert(!nitroBloat.Contains("AcerDeviceEnablingServiceV2"), "Nitro must protect AcerDeviceEnablingServiceV2");
+            Debug.Assert(!nitroBloat.Contains("AcerDeviceEnablingService"), "Nitro must protect AcerDeviceEnablingService");
 
             CheckPowerLineDebounce();
             CheckPredatorKeyHook();

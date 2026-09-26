@@ -391,6 +391,31 @@ namespace PredatorControlApp
                 if (IsServicesOptimizationEnabled())
                     OptimizeAcerServices();
 
+                // On Nitro chassis, ensure hardware bridging services (battery limit / EC) are enabled & running
+                if (_wmi.ChassisFamily == AcerChassisFamily.Nitro)
+                {
+                    _ = Task.Run(() =>
+                    {
+                        string[] nitroEssential = { "ASMSvc", "AcerServiceSvc", "AcerDeviceEnablingServiceV2", "AcerDeviceEnablingService" };
+                        foreach (var svc in nitroEssential)
+                        {
+                            try
+                            {
+                                using var sc = new ServiceController(svc);
+                                if (sc.StartType == ServiceStartMode.Disabled)
+                                {
+                                    SetServiceStartup(svc, disable: false);
+                                }
+                                if (sc.Status == ServiceControllerStatus.Stopped)
+                                {
+                                    StartServiceSafe(svc);
+                                }
+                            }
+                            catch { }
+                        }
+                    });
+                }
+
                 // F-7 (v1.2.5): 4-point RGB watchdog to defeat AcerLightingService's late-boot INI override.
                 // AcerLightingService re-initializes 1-8 seconds after user logon and writes its factory
                 // preset (Amber Breathing) back to LightingProfile.ini. We re-assert the user's saved
@@ -503,8 +528,9 @@ namespace PredatorControlApp
                 list.Add("ASMSvc");
                 list.Add("AcerServiceSvc");
                 list.Add("AcerDeviceEnablingServiceV2");
+                list.Add("AcerDeviceEnablingService");
             }
-            // On Nitro laptops, ASMSvc, AcerServiceSvc, and AcerDeviceEnablingServiceV2
+            // On Nitro laptops, ASMSvc, AcerServiceSvc, AcerDeviceEnablingServiceV2, and AcerDeviceEnablingService
             // are HARDWARE-CRITICAL for the 80% battery threshold and EC sensor monitoring.
             // They are protected and preserved so battery health limit and sensors work!
 
@@ -514,7 +540,7 @@ namespace PredatorControlApp
         private static readonly string[] AllKnownAcerServices =
         {
             "AcerCCAgentSvis", "AcerQAAgentSvis", "AcerDIAgentSvis",
-            "ASMSvc", "AcerServiceSvc", "AcerDeviceEnablingServiceV2"
+            "ASMSvc", "AcerServiceSvc", "AcerDeviceEnablingServiceV2", "AcerDeviceEnablingService"
         };
 
         private static void RunScmCommand(string exe, string args)
@@ -678,7 +704,12 @@ namespace PredatorControlApp
                     }
 
                     // Keep essential services on Automatic and running
-                    string[] essential = { "AASSvc", "AcerLightingService" };
+                    var essential = new List<string> { "AASSvc", "AcerLightingService" };
+                    if (chassis == AcerChassisFamily.Nitro)
+                    {
+                        essential.AddRange(new[] { "ASMSvc", "AcerServiceSvc", "AcerDeviceEnablingServiceV2", "AcerDeviceEnablingService" });
+                    }
+
                     foreach (var svc in essential)
                     {
                         SetServiceStartup(svc, disable: false);

@@ -2,6 +2,8 @@ using System.IO.Pipes;
 using System.Management;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using System.ServiceProcess;
+using Microsoft.Win32;
 
 namespace PredatorControlApp
 {
@@ -412,42 +414,13 @@ namespace PredatorControlApp
         private HardwareCapabilities ProbeCapabilities()
         {
             var chassis = ChassisFamily;
-            var (_, model, _, _) = GetSystemIdentity();
 
-            // 1. RGB Lighting probe:
-            // Single-color red Nitro 5 series: AN515-51, AN515-52, AN515-53, AN515-54, AN517-51
-            bool isKnownMonochromeRed = model.StartsWith("AN515-51", StringComparison.OrdinalIgnoreCase) ||
-                                        model.StartsWith("AN515-52", StringComparison.OrdinalIgnoreCase) ||
-                                        model.StartsWith("AN515-53", StringComparison.OrdinalIgnoreCase) ||
-                                        model.StartsWith("AN515-54", StringComparison.OrdinalIgnoreCase) ||
-                                        model.StartsWith("AN517-51", StringComparison.OrdinalIgnoreCase);
-
-            bool rgbSupported = !isKnownMonochromeRed;
-            if (rgbSupported && chassis == AcerChassisFamily.Nitro)
-            {
-                try
-                {
-                    bool hasLightingSvc = Directory.Exists(@"C:\ProgramData\OEM\AcerLightingService") ||
-                                          Directory.Exists(@"C:\Program Files\OEM\AcerLightingService");
-                    if (!hasLightingSvc)
-                    {
-                        var obj = GetWmiObject();
-                        if (obj == null)
-                        {
-                            rgbSupported = false;
-                        }
-                        else
-                        {
-                            using var inParams = obj.GetMethodParameters("SetGamingRgbKb");
-                            if (inParams == null) rgbSupported = false;
-                        }
-                    }
-                }
-                catch
-                {
-                    rgbSupported = false;
-                }
-            }
+            // 1. RGB Lighting probe (100% generic, zero hardcoding):
+            // Predator chassis has multi-zone/per-key RGB.
+            // Nitro and generic Acer laptops have 4-zone RGB only if the RGB subsystem is installed
+            // (AcerLightingService service/files/registry or physical ITE RGB keyboard controller).
+            // Monochrome models (red/blue/white single-zone) do not have this hardware.
+            bool rgbSupported = ProbeRgbHardwareSupported(chassis);
 
             // 2. CoolBoost probe (Signature feature on Acer Nitro models)
             bool coolBoostSupported = chassis == AcerChassisFamily.Nitro;
@@ -478,21 +451,103 @@ namespace PredatorControlApp
             };
         }
 
+        private static bool ProbeRgbHardwareSupported(AcerChassisFamily chassis)
+        {
+            if (chassis == AcerChassisFamily.Predator)
+                return true;
+
+            try
+            {
+                // Check 1: Windows Service 'AcerLightingService' exists in SCM
+                try
+                {
+                    using var sc = new ServiceController("AcerLightingService");
+                    _ = sc.Status;
+                    return true;
+                }
+                catch { }
+
+                // Check 2: AcerLightingService directory structure on disk
+                if (Directory.Exists(@"C:\ProgramData\OEM\AcerLightingService") ||
+                    Directory.Exists(@"C:\Program Files\OEM\AcerLightingService") ||
+                    Directory.Exists(@"C:\Program Files (x86)\OEM\AcerLightingService"))
+                {
+                    return true;
+                }
+
+                // Check 3: OEM Registry registration for Acer Lighting
+                using (var reg = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\OEM\AcerLightingService"))
+                {
+                    if (reg != null) return true;
+                }
+                using (var reg = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\WOW6432Node\OEM\AcerLightingService"))
+                {
+                    if (reg != null) return true;
+                }
+
+                // Check 4: Physical ITE 829X / 891X RGB keyboard controller device
+                try
+                {
+                    using var searcher = new ManagementObjectSearcher(@"root\CIMV2",
+                        "SELECT DeviceID FROM Win32_PnPEntity WHERE DeviceID LIKE '%VID_048D&PID_829%' OR DeviceID LIKE '%VID_048D&PID_891%'");
+                    using var results = searcher.Get();
+                    if (results.Count > 0) return true;
+                }
+                catch { }
+            }
+            catch { }
+
+            return false;
+        }
+
         private bool _coolBoost;
         public bool CoolBoost => _coolBoost;
 
         public bool SetCoolBoost(bool enable)
         {
             _coolBoost = enable;
+
+            // 1. Dual-dispatch via AcerAgentClient (TCP 46933 & named pipes)
             _ = Task.Run(async () =>
             {
                 try { await AcerAgentClient.SetCoolBoostAsync(enable); } catch { }
             });
 
-            // ACPI WMI command on SetGamingFanBehavior (Bit 24 triggers CoolBoost ceiling in EC)
-            ulong coolBoostFlag = enable ? 0x01000000UL : 0x00000000UL;
-            var (ok, _) = SendCommand("SetGamingFanBehavior", 0x09UL | coolBoostFlag);
-            return ok;
+            // 2. Direct named pipe dispatch to NitroSense & SystemMonitoring services
+            Task.Run(() =>
+            {
+                try
+                {
+                    string[] pipeNames = { "nitrosense_hardware_service_", "systemmonitoring_hardware_service_", "predatorsense_hardware_service_" };
+                    string json = enable ? "{\"Function\":\"COOL_BOOST\",\"Parameter\":{\"status\":1}}" : "{\"Function\":\"COOL_BOOST\",\"Parameter\":{\"status\":0}}";
+                    byte[] jsonBytes = System.Text.Encoding.UTF8.GetBytes(json);
+                    byte[] packet = new byte[8 + jsonBytes.Length];
+                    System.Text.Encoding.ASCII.GetBytes("ACER").CopyTo(packet, 0);
+                    BitConverter.GetBytes((uint)100).CopyTo(packet, 4); // CMD_SET_DEVICE_DATA = 100
+                    Buffer.BlockCopy(jsonBytes, 0, packet, 8, jsonBytes.Length);
+
+                    foreach (var pipe in pipeNames)
+                    {
+                        try
+                        {
+                            using var client = new NamedPipeClientStream(".", pipe, PipeDirection.InOut);
+                            client.Connect(150);
+                            client.Write(packet, 0, packet.Length);
+                            client.Flush();
+                            break;
+                        }
+                        catch { }
+                    }
+                }
+                catch { }
+            });
+
+            // 3. Direct WMI ACPI dispatch: SetGamingFanBehavior (triggers CoolBoost ceiling in EC)
+            ulong flag1 = enable ? 0x01000000UL : 0x00000000UL;
+            ulong flag2 = enable ? 0x00000100UL : 0x00000000UL;
+            var (ok1, _) = SendCommand("SetGamingFanBehavior", 0x09UL | flag1);
+            var (ok2, _) = SendCommand("SetGamingFanBehavior", 0x09UL | flag2);
+            return ok1 || ok2;
         }
 
         public bool SetMonochromeBacklight(byte brightness)
@@ -504,6 +559,22 @@ namespace PredatorControlApp
             ulong uiInput = ((ulong)high32 << 32) | (ulong)low32;
 
             bool anySuccess = false;
+
+            // 1. Direct WMI SetGamingKBBacklight command
+            try
+            {
+                byte[] ledPayload = new byte[16];
+                ledPayload[0] = 0x04;
+                ledPayload[2] = brightness;
+                ledPayload[4] = 0x01;
+                ledPayload[5] = 0xFF; // Full Red channel
+                ledPayload[8] = 0x03;
+                ledPayload[9] = (byte)(brightness == 0 ? 0 : 1);
+                if (SendLedCommand(ledPayload)) anySuccess = true;
+            }
+            catch { }
+
+            // 2. Named pipe dispatch to hardware services
             string[] pipeNames = { "systemmonitoring_hardware_service_", "nitrosense_hardware_service_", "predatorsense_hardware_service_" };
             byte[] packet = new byte[15];
             BitConverter.GetBytes((ushort)0x1F).CopyTo(packet, 0);
@@ -525,6 +596,7 @@ namespace PredatorControlApp
                 catch { }
             }
 
+            // 3. Direct WMI SetGamingMiscSetting command
             try
             {
                 var (ok, _) = SendCommand("SetGamingMiscSetting", uiInput);
@@ -1034,44 +1106,119 @@ namespace PredatorControlApp
 
         public bool SetBatteryChargeLimit(bool enable)
         {
+            // 1. Primary: BIOS native ACPI WMI BatteryControl class (Predator & modern Nitro)
             try
             {
                 using var searcher = new ManagementObjectSearcher(@"root\WMI", "SELECT * FROM BatteryControl");
                 using var results = searcher.Get();
                 using var obj = results.Cast<ManagementObject>().FirstOrDefault();
-                if (obj == null) return false;
+                if (obj != null)
+                {
+                    using var inParams = obj.GetMethodParameters("SetBatteryHealthControl");
+                    inParams["uBatteryNo"] = (byte)1;
+                    inParams["uFunctionMask"] = (byte)1;
+                    inParams["uFunctionStatus"] = (byte)(enable ? 1 : 0);
+                    inParams["uReservedIn"] = new byte[] { 0, 0, 0, 0, 0 };
 
-                using var inParams = obj.GetMethodParameters("SetBatteryHealthControl");
-                inParams["uBatteryNo"] = (byte)1;
-                inParams["uFunctionMask"] = (byte)1;
-                inParams["uFunctionStatus"] = (byte)(enable ? 1 : 0);
-                inParams["uReservedIn"] = new byte[] { 0, 0, 0, 0, 0 };
-
-                using var outParams = obj.InvokeMethod("SetBatteryHealthControl", inParams, null);
-                if (outParams?["uReturn"] == null) return false;
-
-                ushort result = Convert.ToUInt16(outParams["uReturn"]);
-                return result == 0;
+                    using var outParams = obj.InvokeMethod("SetBatteryHealthControl", inParams, null);
+                    if (outParams?["uReturn"] != null)
+                    {
+                        ushort result = Convert.ToUInt16(outParams["uReturn"]);
+                        if (result == 0) return true;
+                    }
+                }
             }
-            catch
+            catch { }
+
+            // 2. Fallback for Nitro and Acer systems using ASMSvc / AcerCareCenter registry keys
+            try
             {
-                return false;
+                int stopCharging = enable ? 80 : 100;
+                int healthControl = enable ? 1 : 0;
+                bool regOk = false;
+
+                string[] paths = {
+                    @"SOFTWARE\OEM\AcerCareCenter\Battery",
+                    @"SOFTWARE\WOW6432Node\OEM\AcerCareCenter\Battery",
+                    @"SOFTWARE\OEM\AcerCareCenter",
+                    @"SOFTWARE\WOW6432Node\OEM\AcerCareCenter"
+                };
+
+                foreach (var path in paths)
+                {
+                    try
+                    {
+                        using var key = Registry.LocalMachine.CreateSubKey(path, true);
+                        if (key != null)
+                        {
+                            key.SetValue("StopCharging", stopCharging, RegistryValueKind.DWord);
+                            key.SetValue("HealthControl", healthControl, RegistryValueKind.DWord);
+                            key.SetValue("BatteryLimit", healthControl, RegistryValueKind.DWord);
+                            key.SetValue("LimitPercent", 80, RegistryValueKind.DWord);
+                            regOk = true;
+                        }
+                    }
+                    catch { }
+                }
+
+                // If ASMSvc, AcerServiceSvc, or AcerDeviceEnablingService exists, ensure started
+                string[] svcs = { "ASMSvc", "AcerServiceSvc", "AcerDeviceEnablingServiceV2", "AcerDeviceEnablingService" };
+                foreach (var svc in svcs)
+                {
+                    try
+                    {
+                        using var sc = new ServiceController(svc);
+                        if (sc.Status == ServiceControllerStatus.Stopped || sc.Status == ServiceControllerStatus.Paused)
+                        {
+                            sc.Start();
+                        }
+                    }
+                    catch { }
+                }
+
+                if (regOk) return true;
             }
+            catch { }
+
+            return false;
         }
 
         public bool IsBatteryControlSupported()
         {
             try
             {
-                using var searcher = new ManagementObjectSearcher(@"root\WMI", "SELECT * FROM BatteryControl");
-                using var results = searcher.Get();
-                using var obj = results.Cast<ManagementObject>().FirstOrDefault();
-                return obj != null;
+                // Check 1: BIOS native ACPI WMI BatteryControl class (Predator & modern Nitro)
+                using (var searcher = new ManagementObjectSearcher(@"root\WMI", "SELECT * FROM BatteryControl"))
+                using (var results = searcher.Get())
+                {
+                    if (results.Count > 0) return true;
+                }
+
+                // Check 2: Acer OEM battery service or registry exists (Nitro / Acer Care Center)
+                string[] svcs = { "ASMSvc", "AcerServiceSvc", "AcerDeviceEnablingServiceV2", "AcerDeviceEnablingService" };
+                foreach (var svc in svcs)
+                {
+                    try
+                    {
+                        using var sc = new ServiceController(svc);
+                        _ = sc.Status;
+                        return true;
+                    }
+                    catch { }
+                }
+
+                using (var reg = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\OEM\AcerCareCenter"))
+                {
+                    if (reg != null) return true;
+                }
+
+                // Check 3: Running on genuine Acer gaming chassis (Nitro / Predator)
+                if (ChassisFamily is AcerChassisFamily.Nitro or AcerChassisFamily.Predator)
+                    return true;
             }
-            catch
-            {
-                return false;
-            }
+            catch { }
+
+            return false;
         }
 
         #region Hardware Features (GPU MUX, LCD Overdrive, Backlight Sleep, Windows Key Lock)

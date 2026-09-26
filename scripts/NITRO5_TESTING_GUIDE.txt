@@ -1,0 +1,59 @@
+================================================================================
+PREDATOR CONTROL v1.2.7 - ACER NITRO UNIVERSAL TESTING & FIELD GUIDE
+================================================================================
+
+1. WHAT'S NEW IN THIS BUILD:
+--------------------------------------------------------------------------------
+- 100% Generic Dynamic Detection (ZERO hardcoded model strings):
+  * Works on ALL Acer Nitro models (Nitro 5, Nitro 16, Nitro 17, Nitro V)
+  * Probes hardware capabilities dynamically via OEM service inspection,
+    ACPI methods, and physical ITE RGB keyboard controller devices.
+
+- Keyboard Backlight Auto-Detection:
+  * Single-color / Monochrome backlit keyboards (e.g. Red Nitro 5):
+    - Hides 4-Zone RGB dropdown, color pickers, and dynamic speed controls.
+    - Shows dedicated "KEYBOARD BACKLIGHT" controls with 0-100% brightness
+      and instant Turn Off support via WMI + Named Pipe EC dispatches.
+  * 4-Zone RGB Nitro keyboards:
+    - Retains full 4-Zone RGB color picker, effects, and profiles.
+
+- Acer CoolBoost™ Support:
+  * Signature Nitro feature under Fan Control.
+  * Multi-channel dispatch:
+    1) Named pipe ("nitrosense_hardware_service_")
+    2) Acer Agent IPC (TCP port 46933)
+    3) Direct ACPI WMI EC call (SetGamingFanBehavior with bit-24 / bit-8 flags)
+
+- Battery Health 80% Charge Threshold:
+  * Dual-channel dispatch:
+    1) BIOS ACPI WMI BatteryControl class (Predator & modern Nitro)
+    2) Acer Care Center / ASMSvc registry keys (StopCharging = 80)
+  * Keeps the toggle enabled and active on all Nitro systems.
+
+- System Optimization Toggle Behavior:
+  * Predator Laptops:
+    - BIOS has native ACPI WMI classes (BatteryControl & AcerGamingFunction).
+    - Safely disables all 6 Acer background services with zero lost features.
+  * Nitro Laptops:
+    - Hardware bridging services (ASMSvc, AcerDeviceEnablingService, AcerServiceSvc)
+      are PROTECTED and PRESERVED so Battery Limit and CoolBoost work.
+    - Only disables pure telemetry & bloatware (AcerCCAgent, AcerQA, AcerDI).
+    - Auto-repairs and starts essential hardware services if they were disabled.
+
+2. WHAT TO DO IF HARDWARE SERVICES ARE MISSING ON NITRO:
+--------------------------------------------------------------------------------
+- If OEM services were completely uninstalled or stopped on the Nitro laptop:
+  Simply right-click "Restore-AcerNitroServices.bat" and select
+  "Run as administrator".
+  It will:
+  * Set ASMSvc and AcerDeviceEnablingService to Automatic and start them.
+  * Write the 80% charge threshold registry keys.
+  * Scan DriverStore for any unregistered Acer OEM drivers.
+
+3. FILES IN THIS FOLDER:
+--------------------------------------------------------------------------------
+- PredatorControl-standalone.exe  -> Single-file self-contained (no .NET needed)
+- PredatorControl-win-x64.exe     -> Framework-dependent (requires .NET 10 desktop)
+- Restore-AcerNitroServices.bat   -> 1-click companion restorer for Nitro services
+- checksums.txt                   -> SHA-256 integrity hashes
+================================================================================

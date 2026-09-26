@@ -204,6 +204,12 @@ namespace PredatorControlApp
         private Label _lblAcProfileHdr = null!, _lblBatteryProfileHdr = null!;
         internal static readonly byte[] AcProfileValues = { 0xFF, 0x00, 0x01, 0x04, 0x05 };
         internal static readonly byte[] BatteryProfileValues = { 0xFF, 0x00, 0x01, 0x06 };
+        internal static readonly byte[] NitroAcProfileValues = { 0xFF, 0x00, 0x01, 0x04 };
+        internal static readonly byte[] NitroBatteryProfileValues = { 0xFF, 0x00, 0x01 };
+
+        private PredatorToggle? _switchCoolBoost;
+        private Label? _lblCoolBoost;
+        private ToolStripMenuItem? _trayCoolBoost;
 
         private PredatorToggle _switchBatteryLimit = null!;
         private Label _lblBatteryStatus = null!;
@@ -457,7 +463,7 @@ namespace PredatorControlApp
             catch { }
         }
 
-        private static bool IsServicesOptimizationEnabled()
+        private bool IsServicesOptimizationEnabled()
         {
             try
             {
@@ -481,14 +487,34 @@ namespace PredatorControlApp
             catch { }
         }
 
-        private static readonly string[] BloatServices =
+        internal static string[] GetBloatServices(AcerChassisFamily chassis)
         {
-            "AcerCCAgentSvis",             // Acer Care Center
-            "AcerQAAgentSvis",             // Acer Quick Access
-            "AcerDIAgentSvis",             // Acer Device Info Telemetry
-            "ASMSvc",                      // Acer System Monitor Service
-            "AcerServiceSvc",              // Acer Service Component Wrapper
-            "AcerDeviceEnablingServiceV2"  // Acer Device Enabling Service V2
+            var list = new List<string>
+            {
+                "AcerCCAgentSvis",             // Acer Care Center
+                "AcerQAAgentSvis",             // Acer Quick Access
+                "AcerDIAgentSvis"              // Acer Device Info Telemetry
+            };
+
+            // On Predator laptops, direct ACPI WMI handles battery and hardware control directly.
+            // ASMSvc, AcerServiceSvc, and AcerDeviceEnablingServiceV2 can be safely disabled.
+            if (chassis == AcerChassisFamily.Predator)
+            {
+                list.Add("ASMSvc");
+                list.Add("AcerServiceSvc");
+                list.Add("AcerDeviceEnablingServiceV2");
+            }
+            // On Nitro laptops, ASMSvc, AcerServiceSvc, and AcerDeviceEnablingServiceV2
+            // are HARDWARE-CRITICAL for the 80% battery threshold and EC sensor monitoring.
+            // They are protected and preserved so battery health limit and sensors work!
+
+            return list.ToArray();
+        }
+
+        private static readonly string[] AllKnownAcerServices =
+        {
+            "AcerCCAgentSvis", "AcerQAAgentSvis", "AcerDIAgentSvis",
+            "ASMSvc", "AcerServiceSvc", "AcerDeviceEnablingServiceV2"
         };
 
         private static void RunScmCommand(string exe, string args)
@@ -549,14 +575,14 @@ namespace PredatorControlApp
             RunScmCommand("net.exe", $"start \"{serviceName}\"");
         }
 
-        private static (int installed, int disabled, int running, int stopped) GetBloatwareCounts()
+        private (int installed, int disabled, int running, int stopped) GetBloatwareCounts()
         {
             int installed = 0;
             int disabled = 0;
             int running = 0;
             int stopped = 0;
 
-            foreach (var svcName in BloatServices)
+            foreach (var svcName in GetBloatServices(_wmi.ChassisFamily))
             {
                 try
                 {
@@ -637,14 +663,15 @@ namespace PredatorControlApp
             catch { }
         }
 
-        private static void OptimizeAcerServices()
+        private void OptimizeAcerServices()
         {
+            var chassis = _wmi.ChassisFamily;
             Task.Run(() =>
             {
                 try
                 {
-                    // Bloatware & telemetry services safe to disable
-                    foreach (var svcName in BloatServices)
+                    // Bloatware & telemetry services safe to disable for this chassis
+                    foreach (var svcName in GetBloatServices(chassis))
                     {
                         SetServiceStartup(svcName, disable: true);
                         StopServiceSafe(svcName);
@@ -668,7 +695,7 @@ namespace PredatorControlApp
             {
                 try
                 {
-                    foreach (var svcName in BloatServices)
+                    foreach (var svcName in AllKnownAcerServices)
                     {
                         SetServiceStartup(svcName, disable: false);
                         StartServiceSafe(svcName);
@@ -1184,6 +1211,12 @@ namespace PredatorControlApp
             _trayPowerPerf = new ToolStripMenuItem("Performance", null, (s, e) => ApplyPowerMode(0x04, _btnPerform, true));
             _trayPowerTurbo = new ToolStripMenuItem("Turbo", null, (s, e) => ApplyPowerMode(0x05, _btnTurbo, true));
             _trayPowerEco = new ToolStripMenuItem("Eco", null, (s, e) => ApplyPowerMode(0x06, _btnEco, true));
+            if (_wmi.Capabilities.ChassisFamily == AcerChassisFamily.Nitro)
+            {
+                _trayPowerBal.Text = "Default";
+                _trayPowerTurbo.Visible = false;
+                _trayPowerEco.Visible = false;
+            }
             powerMenu.DropDownItems.AddRange([_trayPowerQuiet, _trayPowerBal, _trayPowerPerf, _trayPowerTurbo, _trayPowerEco]);
 
             var fanMenu = new ToolStripMenuItem("  Fan Mode");
@@ -1191,6 +1224,15 @@ namespace PredatorControlApp
             _trayFanMax = new ToolStripMenuItem("Max", null, (s, e) => ApplyFanMode(0x02, _btnMaxFan));
             _trayFanCustom = new ToolStripMenuItem("Custom", null, (s, e) => ApplyFanMode(0x03, _btnCustomFan));
             fanMenu.DropDownItems.AddRange([_trayFanAuto, _trayFanMax, _trayFanCustom]);
+            if (_wmi.Capabilities.SupportsCoolBoost)
+            {
+                _trayCoolBoost = new ToolStripMenuItem("CoolBoost", null, (s, e) => ToggleCoolBoost())
+                {
+                    CheckOnClick = true,
+                    Checked = LoadState("CoolBoostEnabled", 0) == 1
+                };
+                fanMenu.DropDownItems.Add(_trayCoolBoost);
+            }
 
             var displayMenu = new ToolStripMenuItem("  Display (Internal)");
             _trayDisplay60 = new ToolStripMenuItem("60 Hz", null, (s, e) => ApplyDisplayMode(60, _btn60Hz));
@@ -1224,9 +1266,9 @@ namespace PredatorControlApp
             _trayMenu.Items.Add(powerMenu);
             _trayMenu.Items.Add(fanMenu);
             _trayMenu.Items.Add(displayMenu);
-            _trayMenu.Items.Add(gpuMenu);
+            if (_wmi.Capabilities.SupportsGpuMux) _trayMenu.Items.Add(gpuMenu);
             _trayMenu.Items.Add(_trayBatteryMenu);
-            _trayMenu.Items.Add(rgbMenu);
+            if (_wmi.Capabilities.SupportsRgbLighting) _trayMenu.Items.Add(rgbMenu);
 
             var hardwareMenu = new ToolStripMenuItem("  Hardware Features");
             var trayWinKey = new ToolStripMenuItem("Lock Windows Key", null, (s, e) =>
@@ -1428,7 +1470,8 @@ namespace PredatorControlApp
             MakeSectionHeader("POWER MODE", pad, y);
 
             y += S(24);
-            int btnW = (contentW - 4 * gap) / 5;
+            bool isNitro = _wmi.Capabilities.ChassisFamily == AcerChassisFamily.Nitro;
+            int btnW = isNitro ? (contentW - 2 * gap) / 3 : (contentW - 4 * gap) / 5;
             string balancedText = _wmi.ChassisFamily == AcerChassisFamily.Nitro ? "Default" : "Balanced";
             _btnQuiet = MakeButton("Quiet", pad, y, btnW, btnH);
             _btnBalanced = MakeButton(balancedText, pad + (btnW + gap), y, btnW, btnH);
@@ -1441,6 +1484,11 @@ namespace PredatorControlApp
             _btnPerform.Click += (s, e) => ApplyPowerMode(0x04, _btnPerform);
             _btnTurbo.Click += (s, e) => ApplyPowerMode(0x05, _btnTurbo);
             _btnEco.Click += (s, e) => ApplyPowerMode(0x06, _btnEco);
+            if (isNitro)
+            {
+                _btnTurbo.Visible = false;
+                _btnEco.Visible = false;
+            }
 
             y += btnH + S(14);
             int profileDropW = (contentW - gap) / 2;
@@ -1449,12 +1497,18 @@ namespace PredatorControlApp
 
             y += S(20);
             _cboAcProfile = new PredatorDropDown { Location = new Point(pad, y), Size = new Size(profileDropW, S(30)) };
-            _cboAcProfile.Items.AddRange(["Don't Change", "Quiet", "Balanced", "Perf", "Turbo"]);
+            if (isNitro)
+                _cboAcProfile.Items.AddRange(["Don't Change", "Quiet", "Default", "Perf"]);
+            else
+                _cboAcProfile.Items.AddRange(["Don't Change", "Quiet", "Balanced", "Perf", "Turbo"]);
             _cboAcProfile.SelectedIndex = 0;
             _contentPanel.Controls.Add(_cboAcProfile);
 
             _cboBatteryProfile = new PredatorDropDown { Location = new Point(pad + profileDropW + gap, y), Size = new Size(profileDropW, S(30)) };
-            _cboBatteryProfile.Items.AddRange(["Don't Change", "Quiet", "Balanced", "Eco"]);
+            if (isNitro)
+                _cboBatteryProfile.Items.AddRange(["Don't Change", "Quiet", "Default"]);
+            else
+                _cboBatteryProfile.Items.AddRange(["Don't Change", "Quiet", "Balanced", "Eco"]);
             _cboBatteryProfile.SelectedIndex = 0;
             _contentPanel.Controls.Add(_cboBatteryProfile);
 
@@ -1555,6 +1609,34 @@ namespace PredatorControlApp
                 OpenFanCurveEditor();
             };
 
+            if (_wmi.Capabilities.SupportsCoolBoost)
+            {
+                y += btnH + S(12);
+                int coolH = S(30);
+                _lblCoolBoost = MakeLabel("Acer CoolBoost", pad, y, FontBody, Color.FromArgb(120, 120, 135));
+                CenterV(_lblCoolBoost, y, coolH);
+
+                _switchCoolBoost = new PredatorToggle
+                {
+                    Location = new Point(ClientSize.Width - pad - S(48), y),
+                    Size = new Size(S(48), coolH),
+                    Checked = LoadState("CoolBoostEnabled", 0) == 1
+                };
+                _contentPanel.Controls.Add(_switchCoolBoost);
+
+                _switchCoolBoost.CheckedChanged += (s, e) =>
+                {
+                    bool enable = _switchCoolBoost.Checked;
+                    SaveState("CoolBoostEnabled", enable ? 1 : 0);
+                    if (_trayCoolBoost != null) _trayCoolBoost.Checked = enable;
+                    Task.Run(() =>
+                    {
+                        try { _wmi.SetCoolBoost(enable); } catch { }
+                    });
+                };
+                y += coolH;
+            }
+
             // DISPLAY REFRESH RATE
             y += btnH + S(20);
             string displayTitle = "NOTEBOOK DISPLAY REFRESH RATE";
@@ -1594,8 +1676,10 @@ namespace PredatorControlApp
             AddSeparator(y);
 
             // GPU WORKING MODE (MUX SWITCH)
-            y += S(18);
-            _lblGpuModeHdr = MakeLabel("GPU WORKING MODE (MUX SWITCH)", pad, y, FontSectionHeader, Color.FromArgb(120, 120, 135));
+            // MUX
+            if (_wmi.Capabilities.SupportsGpuMux)
+            {
+                _lblGpuModeHdr = MakeLabel("GPU WORKING MODE (MUX SWITCH)", pad, y, FontSectionHeader, Color.FromArgb(120, 120, 135));
 
             y += S(24);
             int gpuBtnW = (contentW - 2 * gap) / 3;
@@ -1615,7 +1699,8 @@ namespace PredatorControlApp
             _lblGpuRestartNotice = MakeLabel("Requires system restart to take effect in firmware", pad, y, FontBody, Color.FromArgb(120, 120, 135));
 
             y += S(22);
-            AddSeparator(y);
+                AddSeparator(y);
+            }
 
             // EXTERNAL DISPLAY(S)
             y += S(18);
@@ -1689,7 +1774,41 @@ namespace PredatorControlApp
 
             // KEYBOARD RGB LIGHTING (3-ZONE / 4-ZONE & MODES)
             y += switchH + S(28);
-            MakeSectionHeader("KEYBOARD RGB LIGHTING", pad, y);
+            if (!_wmi.Capabilities.SupportsRgbLighting)
+            {
+                MakeSectionHeader("KEYBOARD BACKLIGHT", pad, y);
+                y += S(24);
+                MakeLabel("Monochrome Red Backlight Detected (Single-Color)", pad, y, FontBody, Color.FromArgb(140, 140, 155));
+                y += S(24);
+
+                _lblBrightHdr = MakeLabel("KEYBOARD BRIGHTNESS: 100%", pad, y, FontSectionHeader, Color.FromArgb(120, 120, 135));
+                y += S(24);
+                _brightnessSlider = new PredatorSlider { Location = new Point(pad, y), Size = new Size(contentW, S(28)), Minimum = 0, Maximum = 100, Value = 100 };
+                _contentPanel.Controls.Add(_brightnessSlider);
+
+                _brightnessSlider.ValueChanged += (s, e) =>
+                {
+                    _lblBrightHdr.Text = $"KEYBOARD BRIGHTNESS: {_brightnessSlider.Value}%";
+                    DebounceHelper.Debounce("BacklightBrightnessLive", () =>
+                    {
+                        _wmi.SetBrightness((byte)_brightnessSlider.Value);
+                    }, 40);
+                };
+                _brightnessSlider.ValueCommitted += (s, e) =>
+                {
+                    _wmi.SetBrightness((byte)_brightnessSlider.Value);
+                    SaveState("Brightness", _brightnessSlider.Value);
+                };
+
+                _rgbDropDown = new PredatorDropDown();
+                foreach (var name in RgbModeNames) _rgbDropDown.Items.Add(name);
+                _rgbDropDown.SelectedIndex = 0;
+                _cboRgbProfiles = new PredatorDropDown();
+                _speedSlider = new PredatorSlider();
+            }
+            else
+            {
+                MakeSectionHeader("KEYBOARD RGB LIGHTING", pad, y);
 
             y += S(24);
             int dropH = S(34);
@@ -1823,7 +1942,8 @@ namespace PredatorControlApp
                 ApplyRgbModeFromDropdown(mode);
             };
 
-            UpdateRgbControlsState(_rgbDropDown.SelectedIndex);
+                UpdateRgbControlsState(_rgbDropDown.SelectedIndex);
+            }
 
             y += S(28) + S(12);
             _lblBacklight30s = MakeLabel("Backlight 30-Sec Idle Sleep", pad, y, FontBody, Color.FromArgb(120, 120, 135));
@@ -2223,12 +2343,13 @@ namespace PredatorControlApp
                 if (_btnThemeOled != null) { _btnThemeOled.Left = pad + (themeBtnW + gap) * 2; _btnThemeOled.Width = themeBtnW; }
 
                 // Power mode buttons
-                int btnW = (contentW - 4 * gap) / 5;
+                bool isNitro = _wmi.Capabilities.ChassisFamily == AcerChassisFamily.Nitro;
+                int btnW = isNitro ? (contentW - 2 * gap) / 3 : (contentW - 4 * gap) / 5;
                 if (_btnQuiet != null) _btnQuiet.Width = btnW;
                 if (_btnBalanced != null) { _btnBalanced.Left = pad + (btnW + gap); _btnBalanced.Width = btnW; }
                 if (_btnPerform != null) { _btnPerform.Left = pad + (btnW + gap) * 2; _btnPerform.Width = btnW; }
-                if (_btnTurbo != null) { _btnTurbo.Left = pad + (btnW + gap) * 3; _btnTurbo.Width = btnW; }
-                if (_btnEco != null) { _btnEco.Left = pad + (btnW + gap) * 4; _btnEco.Width = btnW; }
+                if (_btnTurbo != null) { _btnTurbo.Left = pad + (btnW + gap) * 3; _btnTurbo.Width = btnW; _btnTurbo.Visible = !isNitro; }
+                if (_btnEco != null) { _btnEco.Left = pad + (btnW + gap) * 4; _btnEco.Width = btnW; _btnEco.Visible = !isNitro; }
 
                 // AC / Battery Profile dropdowns
                 int profileDropW = (contentW - gap) / 2;
@@ -2266,6 +2387,7 @@ namespace PredatorControlApp
 
                 // LCD Overdrive & Backlight 30s Switches
                 if (_switchLcdOverdrive != null) _switchLcdOverdrive.Left = ClientSize.Width - pad - S(48);
+                if (_switchCoolBoost != null) _switchCoolBoost.Left = ClientSize.Width - pad - S(48);
                 if (_switchBacklight30s != null) _switchBacklight30s.Left = ClientSize.Width - pad - S(48);
 
                 // Battery Limit & Startup Switches
@@ -2317,7 +2439,7 @@ namespace PredatorControlApp
 
                 if (_btnCustomColor != null) _btnCustomColor.Width = contentW;
 
-                int sliderW = (contentW - gap * 4) / 2;
+                int sliderW = _wmi.Capabilities.SupportsRgbLighting ? (contentW - gap * 4) / 2 : contentW;
                 if (_brightnessSlider != null) _brightnessSlider.Width = sliderW;
                 if (_lblSpeedHdr != null) _lblSpeedHdr.Left = midX + S(10);
                 if (_speedSlider != null) { _speedSlider.Left = midX + S(10); _speedSlider.Width = sliderW; }
@@ -2362,6 +2484,23 @@ namespace PredatorControlApp
 
             byte nextMode;
             PredatorButton nextBtn;
+
+            if (_wmi.Capabilities.ChassisFamily == AcerChassisFamily.Nitro)
+            {
+                if (!isPlugged)
+                {
+                    if (currentMode == 0x00) { nextMode = 0x01; nextBtn = _btnBalanced; }
+                    else { nextMode = 0x00; nextBtn = _btnQuiet; }
+                }
+                else
+                {
+                    if (currentMode == 0x00) { nextMode = 0x01; nextBtn = _btnBalanced; }
+                    else if (currentMode == 0x01) { nextMode = 0x04; nextBtn = _btnPerform; }
+                    else { nextMode = 0x00; nextBtn = _btnQuiet; }
+                }
+                ApplyPowerMode(nextMode, nextBtn, showOsd);
+                return;
+            }
 
             if (!isPlugged)
             {
@@ -2467,6 +2606,21 @@ namespace PredatorControlApp
             {
                 bool isPlugged = _isPluggedIn.GetValueOrDefault(SystemInformation.PowerStatus.PowerLineStatus == PowerLineStatus.Online);
                 OSDOverlayForm.ShowMode(mode, !isPlugged);
+            }
+        }
+
+        private void ToggleCoolBoost()
+        {
+            if (_switchCoolBoost != null)
+            {
+                _switchCoolBoost.Checked = !_switchCoolBoost.Checked;
+            }
+            else
+            {
+                bool newState = !(_trayCoolBoost?.Checked ?? false);
+                if (_trayCoolBoost != null) _trayCoolBoost.Checked = newState;
+                SaveState("CoolBoostEnabled", newState ? 1 : 0);
+                Task.Run(() => { try { _wmi.SetCoolBoost(newState); } catch { } });
             }
         }
 
@@ -2954,7 +3108,7 @@ namespace PredatorControlApp
                 catch { }
 
                 // Mirror hardware states to HKLM so boot-time task can enforce them before user logon
-                if (name is "BatteryLimit" or "Power" or "Fan" or "RGB_Mode" or "RGB_R" or "RGB_G" or "RGB_B" or "Brightness" or "RGB_Speed"
+                if (name is "BatteryLimit" or "Power" or "Fan" or "CoolBoostEnabled" or "RGB_Mode" or "RGB_R" or "RGB_G" or "RGB_B" or "Brightness" or "RGB_Speed"
                     || name.StartsWith("ZoneColor_"))
                 {
                     try
@@ -2980,12 +3134,30 @@ namespace PredatorControlApp
             return Math.Clamp(v, min, max);
         }
 
+        private static int LoadState(string name, int fallback = 0)
+        {
+            try
+            {
+                using var key = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\PredatorControl");
+                if (key != null)
+                {
+                    object? raw = key.GetValue(name);
+                    if (raw is int i) return i;
+                    if (raw != null && int.TryParse(raw.ToString(), out int p)) return p;
+                }
+            }
+            catch { }
+            return fallback;
+        }
+
         private void LoadMemory()
         {
             try
             {
                 using var key = Registry.CurrentUser.CreateSubKey(@"SOFTWARE\PredatorControl");
                 int savedPower = GetInt(key, "Power", 0x01, 0x00, 0xFF);
+                if (_wmi.Capabilities.ChassisFamily == AcerChassisFamily.Nitro && (savedPower == 0x05 || savedPower == 0x06))
+                    savedPower = 0x01;
                 int savedFan = GetInt(key, "Fan", 0x01, 0x00, 0xFF);
                 int savedRgbMode = GetInt(key, "RGB_Mode", 0, 0, 8);
                 int savedBrightness = GetInt(key, "Brightness", 100, 0, 100);
@@ -3034,6 +3206,8 @@ namespace PredatorControlApp
                     _fanCurveEnabled = true;
 
                 ApplyFanMode(fanMode, fanBtn);
+                if (_wmi.Capabilities.SupportsCoolBoost && GetInt(key, "CoolBoostEnabled", 0, 0, 1) == 1)
+                    Task.Run(() => { try { _wmi.SetCoolBoost(true); } catch { } });
 
                 if (fanMode == 0x03)
                 {
@@ -3460,6 +3634,38 @@ namespace PredatorControlApp
 
         private void ApplyPowerRules(bool pluggedIn)
         {
+            if (_wmi.Capabilities.ChassisFamily == AcerChassisFamily.Nitro)
+            {
+                if (pluggedIn)
+                {
+                    _btnPerform.Enabled = true;
+                    _trayPowerPerf.Enabled = true;
+
+                    int acIdx = _cboAcProfile.SelectedIndex;
+                    if (acIdx > 0 && acIdx < NitroAcProfileValues.Length)
+                    {
+                        byte mode = NitroAcProfileValues[acIdx];
+                        ApplyPowerMode(mode, PowerByteToBtn(mode));
+                    }
+                }
+                else
+                {
+                    _btnPerform.Enabled = false;
+                    _trayPowerPerf.Enabled = false;
+
+                    int batIdx = _cboBatteryProfile.SelectedIndex;
+                    if (batIdx > 0 && batIdx < NitroBatteryProfileValues.Length)
+                    {
+                        byte mode = NitroBatteryProfileValues[batIdx];
+                        ApplyPowerMode(mode, PowerByteToBtn(mode));
+                    }
+                    else if (_activePowerBtn == _btnPerform)
+                    {
+                        ApplyPowerMode(0x01, _btnBalanced);
+                    }
+                }
+                return;
+            }
             if (pluggedIn)
             {
                 _btnPerform.Enabled = true;

@@ -62,21 +62,42 @@ public partial class Form1 : IJelliBackend
             };
             return new(id, label, "range", b.Value, b.Enabled, Min: b.Minimum, Max: b.Maximum);
         }
-        sections.Add(new("power", "Performance", [
+        var powerControls = new List<JelliControl>
+        {
+            Button("power.quiet", "Quiet", _btnQuiet),
+            Button("power.balanced", _wmi.Capabilities.ChassisFamily == AcerChassisFamily.Nitro ? "Default" : "Balanced", _btnBalanced),
+            Button("power.performance", "Performance", _btnPerform)
+        };
+        if (_wmi.Capabilities.ChassisFamily != AcerChassisFamily.Nitro)
+        {
+            powerControls.Add(Button("power.turbo", "Turbo", _btnTurbo));
+            powerControls.Add(Button("power.eco", "Eco", _btnEco));
+        }
+        powerControls.Add(Select("power.ac", "When plugged in", _cboAcProfile));
+        powerControls.Add(Select("power.battery", "On battery", _cboBatteryProfile));
+        sections.Add(new("power", "Performance", powerControls.ToArray()));
+        /*
             Button("power.quiet", "Quiet", _btnQuiet), Button("power.balanced", "Balanced", _btnBalanced),
             Button("power.performance", "Performance", _btnPerform), Button("power.turbo", "Turbo", _btnTurbo),
             Button("power.eco", "Eco", _btnEco), Select("power.ac", "When plugged in", _cboAcProfile),
-            Select("power.battery", "On battery", _cboBatteryProfile)]));
+        */
         var fans = new List<JelliControl> { Button("fans.auto", "Auto", _btnAutoFan), Button("fans.max", "Maximum", _btnMaxFan), Button("fans.custom", "Custom", _btnCustomFan) };
+        if (_wmi.Capabilities.SupportsCoolBoost && _switchCoolBoost != null)
+        {
+            fans.Add(Toggle("fans.coolboost", "Acer CoolBoost", _switchCoolBoost));
+        }
         if (GetCurrentFanByte() == 3) fans.AddRange([
             Button("fans.fixed", "Fixed speed", _btnFixedSpeed), Button("fans.curve", "Edit fan curve ↗", _btnFanCurve),
             Range("fans.cpu", "CPU fan", _cpuFanSlider), Range("fans.gpu", "GPU fan", _gpuFanSlider)]);
         sections.Add(new("fans", "Cooling", fans.ToArray()));
-        var gpu = new List<JelliControl>();
+        if (_wmi.Capabilities.SupportsGpuMux)
+        {
+            var gpu = new List<JelliControl>();
         if ((_gpuCapability & 1) != 0) gpu.Add(Button("gpu.hybrid", "Hybrid", _btnGpuOptimus));
         if ((_gpuCapability & 2) != 0) gpu.Add(Button("gpu.discrete", "Discrete", _btnGpuDiscrete));
         if ((_gpuCapability & 4) != 0) gpu.Add(Button("gpu.auto", "Automatic", _btnGpuAuto));
-        sections.Add(new("gpu", "GPU · restart required", gpu.ToArray()));
+            if (gpu.Count > 0) sections.Add(new("gpu", "GPU · restart required", gpu.ToArray()));
+        }
         var display = new List<JelliControl>();
         if (_internalDisplayGdiName != null) display.AddRange([Button("display.60", "60 Hz", _btn60Hz), Button("display.max", $"{_maxHz} Hz", _btnMaxHz)]);
         foreach (var monitor in _externalMonitors) {
@@ -95,7 +116,16 @@ public partial class Form1 : IJelliBackend
             if (_switchBatteryLimit.Checked != wanted) throw new InvalidOperationException("The backend could not apply the battery charge limit.");
         };
         sections.Add(new("battery", "Battery care", [new("battery.limit", "Stop charging at 80%", "toggle", _switchBatteryLimit.Checked)]));
-        var rgb = new List<JelliControl> { Select("rgb.mode", "Lighting effect", _rgbDropDown) };
+        if (!_wmi.Capabilities.SupportsRgbLighting)
+        {
+            var mono = new List<JelliControl>();
+            if (_brightnessSlider != null) mono.Add(Range("rgb.brightness", "Brightness", _brightnessSlider));
+            if (_switchBacklight30s != null) mono.Add(Toggle("rgb.sleep", "Backlight sleeps after 30 seconds", _switchBacklight30s));
+            sections.Add(new("rgb", "Keyboard backlight (Red)", mono.ToArray()));
+        }
+        else
+        {
+            var rgb = new List<JelliControl> { Select("rgb.mode", "Lighting effect", _rgbDropDown) };
         rgb.Add(Button("rgb.all", "All zones", _btnAllZones));
         for (int i = 0; i < 4; i++) rgb.Add(Button($"rgb.zone{i}", $"Zone {i + 1}", _btnZones[i]));
         _jelliActions["rgb.color"] = d => {
@@ -172,7 +202,8 @@ public partial class Form1 : IJelliBackend
         };
 
         rgb.AddRange([Range("rgb.brightness", "Brightness", _brightnessSlider), Range("rgb.speed", "Effect speed", _speedSlider), Toggle("rgb.sleep", "Backlight sleeps after 30 seconds", _switchBacklight30s)]);
-        sections.Add(new("rgb", "Keyboard light", rgb.ToArray()));
+            sections.Add(new("rgb", "Keyboard light", rgb.ToArray()));
+        }
                 _jelliActions["overlay.mode"] = d => {
             string m = d.GetString() ?? "default";
             OverlayMode mode = m.ToLowerInvariant() switch { "light" => OverlayMode.Light, "full" => OverlayMode.Full, "complete" => OverlayMode.Complete, _ => OverlayMode.Default };

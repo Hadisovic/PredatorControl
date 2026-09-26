@@ -28,7 +28,14 @@ namespace PredatorControlApp
     {
         private const string Host = "127.0.0.1";
         private const int TcpPort = 46933;
-        private const string PipeName = "predatorsense_agent_service_";
+        private static readonly string[] PipeCandidates =
+        {
+            "nitrosense_hardware_service_",
+            "nitrosense_agent_service_",
+            "predatorsense_agent_service_",
+            "predatorsense_hardware_service_",
+            "systemmonitoring_hardware_service_"
+        };
         private static readonly byte[] MagicBytes = Encoding.ASCII.GetBytes("ACER");
 
         public const uint CMD_INITIALIZATION = 0;
@@ -44,7 +51,7 @@ namespace PredatorControlApp
         private static readonly SemaphoreSlim _sendLock = new(1, 1);
 
         /// <summary>
-        /// Sends a command to AcerAgentService and returns the parsed response (if any).
+        /// Sends a command to Acer OEM Services (AcerAgentService / NitroSenseService) and returns response.
         /// Resilient: gracefully handles disconnected service without exceptions.
         /// </summary>
         public static async Task<string?> SendCommandAsync(uint packetId, string jsonPayload, int timeoutMs = 1500)
@@ -94,45 +101,48 @@ namespace PredatorControlApp
                 }
                 catch
                 {
-                    // Fall back to Named Pipe if TCP is unavailable or busy
+                    // Fall back to Named Pipes if TCP is unavailable or busy
                 }
 
-                // Attempt 2: Named Pipe \\.\pipe\predatorsense_agent_service_
-                try
+                // Attempt 2: Named Pipes (NitroSense and PredatorSense candidates)
+                foreach (var pipeName in PipeCandidates)
                 {
-                    using var ctsPipe = new CancellationTokenSource(timeoutMs);
-                    using var pipe = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
-                    
-                    var connectTask = pipe.ConnectAsync(ctsPipe.Token);
-                    var delayTask = Task.Delay(timeoutMs, ctsPipe.Token);
-                    if (await Task.WhenAny(connectTask, delayTask) == connectTask && pipe.IsConnected)
+                    try
                     {
-                        byte[] idBytes = BitConverter.GetBytes(packetId);
-                        byte[] payloadBytes = Encoding.UTF8.GetBytes(jsonPayload);
-
-                        byte[] fullPacket = new byte[MagicBytes.Length + idBytes.Length + payloadBytes.Length];
-                        Buffer.BlockCopy(MagicBytes, 0, fullPacket, 0, MagicBytes.Length);
-                        Buffer.BlockCopy(idBytes, 0, fullPacket, MagicBytes.Length, idBytes.Length);
-                        Buffer.BlockCopy(payloadBytes, 0, fullPacket, MagicBytes.Length + idBytes.Length, payloadBytes.Length);
-
-                        await pipe.WriteAsync(fullPacket, ctsPipe.Token);
-                        await pipe.FlushAsync(ctsPipe.Token);
-
-                        byte[] buffer = new byte[8192];
-                        int bytesRead = await pipe.ReadAsync(buffer, ctsPipe.Token);
-                        if (bytesRead > 0)
+                        using var ctsPipe = new CancellationTokenSource(timeoutMs);
+                        using var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+                        
+                        var connectTask = pipe.ConnectAsync(ctsPipe.Token);
+                        var delayTask = Task.Delay(timeoutMs, ctsPipe.Token);
+                        if (await Task.WhenAny(connectTask, delayTask) == connectTask && pipe.IsConnected)
                         {
-                            if (bytesRead > 8 && buffer[0] == 'A' && buffer[1] == 'C' && buffer[2] == 'E' && buffer[3] == 'R')
+                            byte[] idBytes = BitConverter.GetBytes(packetId);
+                            byte[] payloadBytes = Encoding.UTF8.GetBytes(jsonPayload);
+
+                            byte[] fullPacket = new byte[MagicBytes.Length + idBytes.Length + payloadBytes.Length];
+                            Buffer.BlockCopy(MagicBytes, 0, fullPacket, 0, MagicBytes.Length);
+                            Buffer.BlockCopy(idBytes, 0, fullPacket, MagicBytes.Length, idBytes.Length);
+                            Buffer.BlockCopy(payloadBytes, 0, fullPacket, MagicBytes.Length + idBytes.Length, payloadBytes.Length);
+
+                            await pipe.WriteAsync(fullPacket, ctsPipe.Token);
+                            await pipe.FlushAsync(ctsPipe.Token);
+
+                            byte[] buffer = new byte[8192];
+                            int bytesRead = await pipe.ReadAsync(buffer, ctsPipe.Token);
+                            if (bytesRead > 0)
                             {
-                                return Encoding.UTF8.GetString(buffer, 8, bytesRead - 8);
+                                if (bytesRead > 8 && buffer[0] == 'A' && buffer[1] == 'C' && buffer[2] == 'E' && buffer[3] == 'R')
+                                {
+                                    return Encoding.UTF8.GetString(buffer, 8, bytesRead - 8);
+                                }
+                                return Encoding.UTF8.GetString(buffer, 0, bytesRead);
                             }
-                            return Encoding.UTF8.GetString(buffer, 0, bytesRead);
                         }
                     }
-                }
-                catch
-                {
-                    // Named pipe also unreachable
+                    catch
+                    {
+                        // Try next pipe candidate
+                    }
                 }
             }
             finally
@@ -200,7 +210,7 @@ namespace PredatorControlApp
                 }
             }
             catch { }
-            return 7; // Default to 7 (Optimus, Discrete, Auto) for Predator Neo
+            return 0; // Default to 0 (No hardware MUX capability) when service is unavailable or unsupported
         }
 
         /// <summary>
@@ -474,6 +484,28 @@ namespace PredatorControlApp
         public static async Task<bool> SetCoolBoostAsync(bool enable)
         {
             return await SetDeviceDataAsync("COOL_BOOST", new { status = enable ? 1 : 0 });
+        }
+
+        /// <summary>
+        /// Queries CoolBoost™ status from OEM service.
+        /// </summary>
+        public static async Task<bool?> GetCoolBoostAsync()
+        {
+            try
+            {
+                string? resp = await GetDeviceDataAsync("COOL_BOOST");
+                if (!string.IsNullOrEmpty(resp))
+                {
+                    using var doc = JsonDocument.Parse(resp);
+                    if (doc.RootElement.TryGetProperty("data", out var dataProp) &&
+                        dataProp.TryGetProperty("status", out var statProp))
+                    {
+                        return statProp.GetInt32() == 1;
+                    }
+                }
+            }
+            catch { }
+            return null;
         }
 
         /// <summary>

@@ -28,6 +28,13 @@ namespace PredatorControlApp
             Debug.Assert(Form1.BatteryProfileValues[3] == 0x06, "battery Eco must map to 0x06");
             Debug.Assert(Form1.AcProfileValues.Length == 5, "AC table size");
             Debug.Assert(Form1.AcProfileValues[4] == 0x05, "AC Turbo must map to 0x05");
+            Debug.Assert(Form1.NitroBatteryProfileValues.Length == 3, "Nitro battery table size");
+            Debug.Assert(Form1.NitroAcProfileValues.Length == 4, "Nitro AC table size");
+            Debug.Assert(Form1.NitroAcProfileValues[3] == 0x04, "Nitro AC Perf must map to 0x04");
+            var nitroBloat = Form1.GetBloatServices(AcerChassisFamily.Nitro);
+            Debug.Assert(!nitroBloat.Contains("ASMSvc"), "Nitro must protect ASMSvc");
+            Debug.Assert(!nitroBloat.Contains("AcerServiceSvc"), "Nitro must protect AcerServiceSvc");
+            Debug.Assert(!nitroBloat.Contains("AcerDeviceEnablingServiceV2"), "Nitro must protect AcerDeviceEnablingServiceV2");
 
             CheckPowerLineDebounce();
             CheckPredatorKeyHook();

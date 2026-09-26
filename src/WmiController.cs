@@ -12,6 +12,19 @@ namespace PredatorControlApp
         GenericAcer
     }
 
+    public record HardwareCapabilities
+    {
+        public AcerChassisFamily ChassisFamily { get; init; }
+        public bool SupportsRgbLighting { get; init; }
+        public bool SupportsCoolBoost { get; init; }
+        public bool SupportsBatteryControl { get; init; }
+        public bool SupportsGpuMux { get; init; }
+        public bool SupportsLcdOverdrive { get; init; }
+        public int PowerModeCount { get; init; }
+        public string[] PowerModeLabels { get; init; } = Array.Empty<string>();
+        public byte[] PowerModeValues { get; init; } = Array.Empty<byte>();
+    }
+
     [SupportedOSPlatform("windows")]
     public class WmiController : IDisposable
     {
@@ -393,6 +406,135 @@ namespace PredatorControlApp
             }
         }
 
+        private HardwareCapabilities? _cachedCapabilities;
+        public HardwareCapabilities Capabilities => _cachedCapabilities ??= ProbeCapabilities();
+
+        private HardwareCapabilities ProbeCapabilities()
+        {
+            var chassis = ChassisFamily;
+            var (_, model, _, _) = GetSystemIdentity();
+
+            // 1. RGB Lighting probe:
+            // Single-color red Nitro 5 series: AN515-51, AN515-52, AN515-53, AN515-54, AN517-51
+            bool isKnownMonochromeRed = model.StartsWith("AN515-51", StringComparison.OrdinalIgnoreCase) ||
+                                        model.StartsWith("AN515-52", StringComparison.OrdinalIgnoreCase) ||
+                                        model.StartsWith("AN515-53", StringComparison.OrdinalIgnoreCase) ||
+                                        model.StartsWith("AN515-54", StringComparison.OrdinalIgnoreCase) ||
+                                        model.StartsWith("AN517-51", StringComparison.OrdinalIgnoreCase);
+
+            bool rgbSupported = !isKnownMonochromeRed;
+            if (rgbSupported && chassis == AcerChassisFamily.Nitro)
+            {
+                try
+                {
+                    bool hasLightingSvc = Directory.Exists(@"C:\ProgramData\OEM\AcerLightingService") ||
+                                          Directory.Exists(@"C:\Program Files\OEM\AcerLightingService");
+                    if (!hasLightingSvc)
+                    {
+                        var obj = GetWmiObject();
+                        if (obj == null)
+                        {
+                            rgbSupported = false;
+                        }
+                        else
+                        {
+                            using var inParams = obj.GetMethodParameters("SetGamingRgbKb");
+                            if (inParams == null) rgbSupported = false;
+                        }
+                    }
+                }
+                catch
+                {
+                    rgbSupported = false;
+                }
+            }
+
+            // 2. CoolBoost probe (Signature feature on Acer Nitro models)
+            bool coolBoostSupported = chassis == AcerChassisFamily.Nitro;
+
+            // 3. Battery Control probe
+            bool batterySupported = IsBatteryControlSupported();
+
+            // 4. Power Modes definition
+            int modeCount = chassis == AcerChassisFamily.Nitro ? 3 : 5;
+            string[] modeLabels = chassis == AcerChassisFamily.Nitro
+                ? new[] { "Quiet", "Default", "Performance" }
+                : new[] { "Quiet", "Balanced", "Perf", "Turbo", "Eco" };
+            byte[] modeValues = chassis == AcerChassisFamily.Nitro
+                ? new byte[] { 0x00, 0x01, 0x04 }
+                : new byte[] { 0x00, 0x01, 0x04, 0x05, 0x06 };
+
+            return new HardwareCapabilities
+            {
+                ChassisFamily = chassis,
+                SupportsRgbLighting = rgbSupported,
+                SupportsCoolBoost = coolBoostSupported,
+                SupportsBatteryControl = batterySupported,
+                SupportsGpuMux = false,
+                SupportsLcdOverdrive = chassis == AcerChassisFamily.Predator,
+                PowerModeCount = modeCount,
+                PowerModeLabels = modeLabels,
+                PowerModeValues = modeValues
+            };
+        }
+
+        private bool _coolBoost;
+        public bool CoolBoost => _coolBoost;
+
+        public bool SetCoolBoost(bool enable)
+        {
+            _coolBoost = enable;
+            _ = Task.Run(async () =>
+            {
+                try { await AcerAgentClient.SetCoolBoostAsync(enable); } catch { }
+            });
+
+            // ACPI WMI command on SetGamingFanBehavior (Bit 24 triggers CoolBoost ceiling in EC)
+            ulong coolBoostFlag = enable ? 0x01000000UL : 0x00000000UL;
+            var (ok, _) = SendCommand("SetGamingFanBehavior", 0x09UL | coolBoostFlag);
+            return ok;
+        }
+
+        public bool SetMonochromeBacklight(byte brightness)
+        {
+            _brightness = brightness;
+            uint hotkeyNum = GetBkHotkeyNumber();
+            uint low32 = 0x80002 | (hotkeyNum << 8);
+            uint high32 = (_backlight30s ? 0x1E00U : 0x0000U) | brightness;
+            ulong uiInput = ((ulong)high32 << 32) | (ulong)low32;
+
+            bool anySuccess = false;
+            string[] pipeNames = { "systemmonitoring_hardware_service_", "nitrosense_hardware_service_", "predatorsense_hardware_service_" };
+            byte[] packet = new byte[15];
+            BitConverter.GetBytes((ushort)0x1F).CopyTo(packet, 0);
+            packet[2] = 1;
+            BitConverter.GetBytes((uint)8).CopyTo(packet, 3);
+            BitConverter.GetBytes(uiInput).CopyTo(packet, 7);
+
+            foreach (var pipeName in pipeNames)
+            {
+                try
+                {
+                    using var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut);
+                    pipe.Connect(100);
+                    pipe.Write(packet, 0, packet.Length);
+                    pipe.Flush();
+                    anySuccess = true;
+                    break;
+                }
+                catch { }
+            }
+
+            try
+            {
+                var (ok, _) = SendCommand("SetGamingMiscSetting", uiInput);
+                if (ok) anySuccess = true;
+            }
+            catch { }
+
+            return anySuccess;
+        }
+
         public void SetPowerMode(byte mode)
         {
             // 1. Dual-dispatch to Acer OEM Agent Service (TCP socket & named pipe)
@@ -642,6 +784,12 @@ namespace PredatorControlApp
         public void SetBrightness(byte brightness)
         {
             _brightness = brightness;
+            if (!Capabilities.SupportsRgbLighting)
+            {
+                SetMonochromeBacklight(brightness);
+                return;
+            }
+
             QueueLightingTask(() =>
             {
                 if (_lastMode == 0)
@@ -723,7 +871,14 @@ namespace PredatorControlApp
         {
             _brightness = 0;
             _lastMode = 8;
-            QueueLightingTask(() => ApplyLightingModeCore(8));
+            if (!Capabilities.SupportsRgbLighting)
+            {
+                SetMonochromeBacklight(0);
+            }
+            else
+            {
+                QueueLightingTask(() => ApplyLightingModeCore(8));
+            }
         }
 
         public void ApplyLightingSynchronous(Color[] zones, int mode = 0, byte brightness = 100, byte speed = 5)
@@ -1270,6 +1425,9 @@ namespace PredatorControlApp
             int? gpuRpm = GpuFanRpm;
             int? auxRpm = AuxFanRpm;
             sb.AppendLine($"  \"ChassisFamily\": \"{ChassisFamily}\",");
+            sb.AppendLine($"  \"SupportsRgbLighting\": {Capabilities.SupportsRgbLighting.ToString().ToLowerInvariant()},");
+            sb.AppendLine($"  \"SupportsCoolBoost\": {Capabilities.SupportsCoolBoost.ToString().ToLowerInvariant()},");
+            sb.AppendLine($"  \"SupportsBatteryControl\": {Capabilities.SupportsBatteryControl.ToString().ToLowerInvariant()},");
             sb.AppendLine($"  \"CpuFanRpm\": {(cpuRpm.HasValue ? cpuRpm.Value.ToString() : "null")},");
             sb.AppendLine($"  \"GpuFanRpm\": {(gpuRpm.HasValue ? gpuRpm.Value.ToString() : "null")},");
             sb.AppendLine($"  \"HasAuxFan\": {HasAuxFan.ToString().ToLowerInvariant()},");

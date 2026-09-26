@@ -37,30 +37,30 @@ public partial class Form1 : IJelliBackend
     {
         _jelliActions.Clear();
         var sections = new List<JelliSection>();
-        JelliControl Button(string id, string label, PredatorButton b) {
-            _jelliActions[id] = _ => { if (!b.Enabled) throw new InvalidOperationException("This action is currently unavailable."); b.InvokeAction(); };
-            return new(id, label, "button", b.IsActive, b.Enabled, Accent: b.ColorIndicator is Color color ? ColorTranslator.ToHtml(color) : null);
+        JelliControl Button(string id, string label, PredatorButton? b) {
+            _jelliActions[id] = _ => { if (b == null || !b.Enabled) throw new InvalidOperationException("This action is currently unavailable."); b.InvokeAction(); };
+            return new(id, label, "button", b?.IsActive ?? false, b?.Enabled ?? false, Accent: b?.ColorIndicator is Color color ? ColorTranslator.ToHtml(color) : null);
         }
-        JelliControl Toggle(string id, string label, PredatorToggle b) {
-            _jelliActions[id] = d => { if (!b.Enabled) throw new InvalidOperationException("This feature is unavailable."); b.Checked = d.GetBoolean(); };
-            return new(id, label, "toggle", b.Checked, b.Enabled);
+        JelliControl Toggle(string id, string label, PredatorToggle? b) {
+            _jelliActions[id] = d => { if (b == null || !b.Enabled) throw new InvalidOperationException("This feature is unavailable."); b.Checked = d.GetBoolean(); };
+            return new(id, label, "toggle", b?.Checked ?? false, b?.Enabled ?? false);
         }
-        JelliControl Select(string id, string label, PredatorDropDown b) {
+        JelliControl Select(string id, string label, PredatorDropDown? b) {
             _jelliActions[id] = d => {
                 int i = d.GetInt32();
-                if (!b.Enabled || i < 0 || i >= b.Items.Count) throw new ArgumentException("Unavailable selection.");
+                if (b == null || !b.Enabled || i < 0 || i >= b.Items.Count) throw new ArgumentException("Unavailable selection.");
                 b.SelectedIndex = i;
             };
-            return new(id, label, "select", b.SelectedIndex, b.Enabled,
-                b.Items.Select((v, i) => new JelliChoice(v.ToString() ?? "", i)).ToArray());
+            return new(id, label, "select", b?.SelectedIndex ?? 0, b?.Enabled ?? false,
+                b?.Items.Cast<object>().Select((v, i) => new JelliChoice(v.ToString() ?? "", i)).ToArray() ?? Array.Empty<JelliChoice>());
         }
-        JelliControl Range(string id, string label, PredatorSlider b) {
+        JelliControl Range(string id, string label, PredatorSlider? b) {
             _jelliActions[id] = d => {
                 int v = d.GetInt32();
-                if (!b.Enabled || v < b.Minimum || v > b.Maximum) throw new ArgumentException("Value outside the available range.");
+                if (b == null || !b.Enabled || v < b.Minimum || v > b.Maximum) throw new ArgumentException("Value outside the available range.");
                 b.CommitValue(v);
             };
-            return new(id, label, "range", b.Value, b.Enabled, Min: b.Minimum, Max: b.Maximum);
+            return new(id, label, "range", b?.Value ?? 0, b?.Enabled ?? false, Min: b?.Minimum ?? 0, Max: b?.Maximum ?? 100);
         }
         var powerControls = new List<JelliControl>
         {
@@ -70,8 +70,8 @@ public partial class Form1 : IJelliBackend
         };
         if (_wmi.Capabilities.ChassisFamily != AcerChassisFamily.Nitro)
         {
-            powerControls.Add(Button("power.turbo", "Turbo", _btnTurbo));
-            powerControls.Add(Button("power.eco", "Eco", _btnEco));
+            if (_btnTurbo != null) powerControls.Add(Button("power.turbo", "Turbo", _btnTurbo));
+            if (_btnEco != null) powerControls.Add(Button("power.eco", "Eco", _btnEco));
         }
         powerControls.Add(Select("power.ac", "When plugged in", _cboAcProfile));
         powerControls.Add(Select("power.battery", "On battery", _cboBatteryProfile));
@@ -99,7 +99,11 @@ public partial class Form1 : IJelliBackend
             if (gpu.Count > 0) sections.Add(new("gpu", "GPU · restart required", gpu.ToArray()));
         }
         var display = new List<JelliControl>();
-        if (_internalDisplayGdiName != null) display.AddRange([Button("display.60", "60 Hz", _btn60Hz), Button("display.max", $"{_maxHz} Hz", _btnMaxHz)]);
+        if (_internalDisplayGdiName != null)
+        {
+            if (_btn60Hz != null) display.Add(Button("display.60", "60 Hz", _btn60Hz));
+            if (_maxHz > 60 && _btnMaxHz != null) display.Add(Button("display.max", $"{_maxHz} Hz", _btnMaxHz));
+        }
         foreach (var monitor in _externalMonitors) {
             string id = "display.external." + monitor.GdiName;
             _jelliActions[id] = d => {
@@ -109,7 +113,10 @@ public partial class Form1 : IJelliBackend
             };
             display.Add(new(id, monitor.FriendlyName, "select", monitor.CurrentHz, Choices: monitor.SupportedHz.Select(hz => new JelliChoice($"{hz} Hz", hz)).ToArray()));
         }
-        display.Add(Toggle("display.overdrive", "LCD overdrive", _switchLcdOverdrive));
+        if (_wmi.Capabilities.SupportsLcdOverdrive && _switchLcdOverdrive != null)
+        {
+            display.Add(Toggle("display.overdrive", "LCD overdrive", _switchLcdOverdrive));
+        }
         sections.Add(new("display", "Displays", display.ToArray()));
         _jelliActions["battery.limit"] = d => {
             bool wanted = d.GetBoolean(); ApplyBatteryLimit(wanted);
@@ -231,13 +238,20 @@ public partial class Form1 : IJelliBackend
             return new JelliMenu(id, item.Text?.Trim() ?? "", item.Enabled, item.Checked, Menu(item.DropDownItems, id + "."));
         }).ToArray();
         return new {
-            telemetry = _jelliTelemetry, powerMode = _lblPowerStatus.Text, fanMode = _lblFanStatus.Text,
-            gpuMode = _activeGpuModeBtn?.Text, gpuNotice = _lblGpuRestartNotice.Text,
+            telemetry = _jelliTelemetry,
+            powerMode = _lblPowerStatus?.Text ?? "",
+            fanMode = _lblFanStatus?.Text ?? "",
+            gpuMode = _activeGpuModeBtn?.Text,
+            gpuNotice = _lblGpuRestartNotice?.Text,
             fps = _overlayForm?.Visible == true ? _overlayForm.CurrentFps : null,
-            overlay = _overlayForm?.Visible == true, sections, menu = Menu(_trayMenu.Items, "menu."), settings = settings with { JelliEnabled = !_jelliFallback },
+            overlay = _overlayForm?.Visible == true,
+            sections,
+            menu = _trayMenu != null ? Menu(_trayMenu.Items, "menu.") : Array.Empty<JelliMenu>(),
+            settings = settings with { JelliEnabled = !_jelliFallback },
             monitors = Screen.AllScreens.Select(s => new { id = s.DeviceName, label = s.DeviceName + (s.Primary ? " (primary)" : "") }),
-            version = Updater.CurrentText, doubleClickMs = SystemInformation.DoubleClickTime,
-            gameSyncStatus = _lblGameSyncStatus.Text,
+            version = Updater.CurrentText,
+            doubleClickMs = SystemInformation.DoubleClickTime,
+            gameSyncStatus = _lblGameSyncStatus?.Text ?? "",
         };
     }
 

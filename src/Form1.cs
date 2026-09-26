@@ -141,7 +141,12 @@ namespace PredatorControlApp
         private PredatorButton _btnAutoFan = null!, _btnMaxFan = null!, _btnCustomFan = null!;
         private PredatorButton _btnFixedSpeed = null!, _btnFanCurve = null!;
         private PredatorButton? _activeCustomSubBtn;
-        private PredatorButton _btn60Hz = null!, _btnMaxHz = null!;
+        private Panel? _pnlCustomFan;
+        private bool _isCustomFanExpanded;
+        private int _customFanShiftHeight;
+        private PredatorButton _btn60Hz = null!;
+        private PredatorButton? _btnMaxHz;
+        private ToolStripMenuItem? _trayDisplayMax;
 
         // GPU Working Mode (MUX Switch)
         private Label _lblGpuModeHdr = null!;
@@ -149,7 +154,7 @@ namespace PredatorControlApp
         private PredatorButton _btnGpuDiscrete = null!;
         private PredatorButton _btnGpuAuto = null!;
         private PredatorButton? _activeGpuModeBtn;
-        private Label _lblGpuRestartNotice = null!;
+        private Label? _lblGpuRestartNotice;
         private int? _currentGpuMode;
         private int _gpuCapability = 7;
 
@@ -228,8 +233,8 @@ namespace PredatorControlApp
         private bool _updateCheckRunning;
 
         // Hardware Feature Controls
-        private PredatorToggle _switchLcdOverdrive = null!;
-        private Label _lblLcdOverdrive = null!;
+        private PredatorToggle? _switchLcdOverdrive;
+        private Label? _lblLcdOverdrive;
 
         private PredatorToggle _switchBacklight30s = null!;
         private Label _lblBacklight30s = null!;
@@ -258,7 +263,7 @@ namespace PredatorControlApp
         private ToolStripMenuItem _trayPowerQuiet = null!, _trayPowerBal = null!, _trayPowerPerf = null!,
                                   _trayPowerTurbo = null!, _trayPowerEco = null!;
         private ToolStripMenuItem _trayFanAuto = null!, _trayFanMax = null!, _trayFanCustom = null!;
-        private ToolStripMenuItem _trayDisplay60 = null!, _trayDisplayMax = null!;
+        private ToolStripMenuItem _trayDisplay60 = null!;
         private ToolStripMenuItem _trayGpuOptimus = null!, _trayGpuDiscrete = null!, _trayGpuAuto = null!;
         private ToolStripMenuItem _trayBatteryLimit80 = null!, _trayBatteryLimit100 = null!;
         private ToolStripMenuItem _trayBatteryMenu = null!;
@@ -300,7 +305,7 @@ namespace PredatorControlApp
 
             // Setup display refresh rate highlight based on internal display
             int currentHz = DisplayCcdController.GetCurrentRefreshRate(_internalDisplayGdiName);
-            if (currentHz <= 60)
+            if (currentHz <= 60 || _btnMaxHz == null || _trayDisplayMax == null)
             {
                 HighlightBtn(_btn60Hz, ref _activeDisplayBtn);
                 CheckTrayItem(_trayDisplay60, _trayDisplay60, _trayDisplayMax);
@@ -1140,12 +1145,14 @@ namespace PredatorControlApp
 
         #region Display Control
 
-        private void ApplyDisplayMode(int hz, PredatorButton btn)
+        private void ApplyDisplayMode(int hz, PredatorButton? btn)
         {
             if (!DisplayCcdController.SetRefreshRate(hz, _internalDisplayGdiName)) return;
 
+            if (btn == null) btn = _btn60Hz;
             HighlightBtn(btn, ref _activeDisplayBtn);
-            CheckTrayItem(hz <= 60 ? _trayDisplay60 : _trayDisplayMax, _trayDisplay60, _trayDisplayMax);
+            var targetTray = (hz <= 60 || _trayDisplayMax == null) ? _trayDisplay60 : _trayDisplayMax;
+            CheckTrayItem(targetTray, _trayDisplay60, _trayDisplayMax);
             SaveState("DisplayHz", hz);
         }
 
@@ -1267,8 +1274,17 @@ namespace PredatorControlApp
 
             var displayMenu = new ToolStripMenuItem("  Display (Internal)");
             _trayDisplay60 = new ToolStripMenuItem("60 Hz", null, (s, e) => ApplyDisplayMode(60, _btn60Hz));
-            _trayDisplayMax = new ToolStripMenuItem($"{_maxHz} Hz", null, (s, e) => ApplyDisplayMode(_maxHz, _btnMaxHz));
-            displayMenu.DropDownItems.AddRange([_trayDisplay60, _trayDisplayMax]);
+            if (_maxHz > 60)
+            {
+                _trayDisplayMax = new ToolStripMenuItem($"{_maxHz} Hz", null, (s, e) => ApplyDisplayMode(_maxHz, _btnMaxHz));
+                displayMenu.DropDownItems.AddRange([_trayDisplay60, _trayDisplayMax]);
+            }
+            else
+            {
+                _trayDisplayMax = null;
+                displayMenu.DropDownItems.Add(_trayDisplay60);
+            }
+
 
             var gpuMenu = new ToolStripMenuItem("  GPU Mode (MUX)");
             _trayGpuOptimus = new ToolStripMenuItem("Optimus (Hybrid)", null, (s, e) => ApplyGpuMode(AcerAgentClient.GPU_MODE_OPTIMUS, _btnGpuOptimus, "Optimus (Hybrid)"));
@@ -1569,29 +1585,39 @@ namespace PredatorControlApp
             _btnCustomFan.Click += (s, e) => ApplyFanMode(0x03, _btnCustomFan);
 
             y += btnH + S(12);
-            int fanSliderW = (contentW - gap) / 2;
-            _lblCpuFanSpeedHdr = MakeLabel("CPU FAN: 50%", pad, y, FontSectionHeader, Color.FromArgb(120, 120, 135));
-            _lblGpuFanSpeedHdr = MakeLabel("GPU FAN: 50%", pad + fanSliderW + gap, y, FontSectionHeader, Color.FromArgb(120, 120, 135));
-            _lblCpuFanSpeedHdr.Visible = false;
-            _lblGpuFanSpeedHdr.Visible = false;
 
-            y += S(24);
-            _cpuFanSlider = new PredatorSlider
+            // Custom fan controls grouped inside collapsible _pnlCustomFan
+            int fanSliderW = (contentW - gap) / 2;
+            int subBtnW = (contentW - gap) / 2;
+            int customH = S(22) + S(28) + S(8) + btnH;
+            _customFanShiftHeight = customH + S(12);
+
+            _pnlCustomFan = new Panel
             {
                 Location = new Point(pad, y),
+                Size = new Size(contentW, customH),
+                Visible = false,
+                BackColor = Color.Transparent
+            };
+            _contentPanel.Controls.Add(_pnlCustomFan);
+
+            _lblCpuFanSpeedHdr = MakeLabelIn(_pnlCustomFan, "CPU FAN: 50%", 0, 0, FontSectionHeader, Color.FromArgb(120, 120, 135));
+            _lblGpuFanSpeedHdr = MakeLabelIn(_pnlCustomFan, "GPU FAN: 50%", fanSliderW + gap, 0, FontSectionHeader, Color.FromArgb(120, 120, 135));
+
+            _cpuFanSlider = new PredatorSlider
+            {
+                Location = new Point(0, S(22)),
                 Size = new Size(fanSliderW, S(28)),
                 Minimum = 10, Maximum = 100, Value = 50,
-                Visible = false
             };
             _gpuFanSlider = new PredatorSlider
             {
-                Location = new Point(pad + fanSliderW + gap, y),
+                Location = new Point(fanSliderW + gap, S(22)),
                 Size = new Size(fanSliderW, S(28)),
                 Minimum = 10, Maximum = 100, Value = 50,
-                Visible = false
             };
-            _contentPanel.Controls.Add(_cpuFanSlider);
-            _contentPanel.Controls.Add(_gpuFanSlider);
+            _pnlCustomFan.Controls.Add(_cpuFanSlider);
+            _pnlCustomFan.Controls.Add(_gpuFanSlider);
 
             _cpuFanSlider.ValueChanged += (s, e) => _lblCpuFanSpeedHdr.Text = $"CPU FAN: {_cpuFanSlider.Value}%";
             _gpuFanSlider.ValueChanged += (s, e) => _lblGpuFanSpeedHdr.Text = $"GPU FAN: {_gpuFanSlider.Value}%";
@@ -1607,12 +1633,9 @@ namespace PredatorControlApp
                 SaveState("FanSpeedGpu", _gpuFanSlider.Value);
             };
 
-            y += S(28) + S(8);
-            int subBtnW = (contentW - gap) / 2;
-            _btnFixedSpeed = MakeButton("Fixed Speed", pad, y, subBtnW, btnH);
-            _btnFanCurve = MakeButton("Curve", pad + subBtnW + gap, y, subBtnW, btnH);
-            _btnFixedSpeed.Visible = false;
-            _btnFanCurve.Visible = false;
+            int subBtnY = S(22) + S(28) + S(8);
+            _btnFixedSpeed = MakeButtonIn(_pnlCustomFan, "Fixed Speed", 0, subBtnY, subBtnW, btnH);
+            _btnFanCurve = MakeButtonIn(_pnlCustomFan, "Curve", subBtnW + gap, subBtnY, subBtnW, btnH);
 
             _btnFixedSpeed.Click += (s, e) =>
             {
@@ -1640,9 +1663,9 @@ namespace PredatorControlApp
                 OpenFanCurveEditor();
             };
 
+            // Acer CoolBoost: placed directly under fan buttons (shifts down when Custom is expanded)
             if (_wmi.Capabilities.SupportsCoolBoost)
             {
-                y += btnH + S(12);
                 int coolH = S(30);
                 _lblCoolBoost = MakeLabel("Acer CoolBoost", pad, y, FontBody, Color.FromArgb(120, 120, 135));
                 CenterV(_lblCoolBoost, y, coolH);
@@ -1665,45 +1688,61 @@ namespace PredatorControlApp
                         try { _wmi.SetCoolBoost(enable); } catch { }
                     });
                 };
-                y += coolH;
+                y += coolH + S(14);
             }
 
-            // DISPLAY REFRESH RATE
-            y += btnH + S(20);
+            // NOTEBOOK DISPLAY REFRESH RATE
+            y += S(6);
             string displayTitle = "NOTEBOOK DISPLAY REFRESH RATE";
             _lblDisplayHdr = MakeLabel(displayTitle, pad, y, FontSectionHeader, Color.FromArgb(120, 120, 135));
 
             y += S(24);
-            int dispBtnW = (contentW - gap) / 2;
-            _btn60Hz = MakeButton("60 Hz", pad, y, dispBtnW, btnH);
-            _btnMaxHz = MakeButton($"{_maxHz} Hz (Max)", pad + dispBtnW + gap, y, dispBtnW, btnH);
+            if (_maxHz <= 60)
+            {
+                _btn60Hz = MakeButton("60 Hz", pad, y, contentW, btnH);
+                _btnMaxHz = null;
+                _btn60Hz.Click += (s, e) => ApplyDisplayMode(60, _btn60Hz);
+            }
+            else
+            {
+                int dispBtnW = (contentW - gap) / 2;
+                _btn60Hz = MakeButton("60 Hz", pad, y, dispBtnW, btnH);
+                _btnMaxHz = MakeButton($"{_maxHz} Hz (Max)", pad + dispBtnW + gap, y, dispBtnW, btnH);
 
-            _btn60Hz.Click += (s, e) => ApplyDisplayMode(60, _btn60Hz);
-            _btnMaxHz.Click += (s, e) => ApplyDisplayMode(_maxHz, _btnMaxHz);
+                _btn60Hz.Click += (s, e) => ApplyDisplayMode(60, _btn60Hz);
+                _btnMaxHz.Click += (s, e) => ApplyDisplayMode(_maxHz, _btnMaxHz);
+            }
 
             y += btnH + S(12);
             int switchH = S(30);
-            _lblLcdOverdrive = MakeLabel("LCD Overdrive (3ms Response Boost)", pad, y, FontBody, Color.FromArgb(120, 120, 135));
-            CenterV(_lblLcdOverdrive, y, switchH);
-
-            _switchLcdOverdrive = new PredatorToggle
+            if (_wmi.Capabilities.SupportsLcdOverdrive)
             {
-                Location = new Point(ClientSize.Width - pad - S(48), y),
-                Size = new Size(S(48), switchH)
-            };
-            _contentPanel.Controls.Add(_switchLcdOverdrive);
+                _lblLcdOverdrive = MakeLabel("LCD Overdrive (3ms Response Boost)", pad, y, FontBody, Color.FromArgb(120, 120, 135));
+                CenterV(_lblLcdOverdrive, y, switchH);
 
-            _switchLcdOverdrive.CheckedChanged += (s, e) =>
-            {
-                bool enable = _switchLcdOverdrive.Checked;
-                SaveState("LcdOverdrive", enable ? 1 : 0);
-                Task.Run(() =>
+                _switchLcdOverdrive = new PredatorToggle
                 {
-                    try { _wmi.SetLcdOverdrive(enable); } catch { }
-                });
-            };
+                    Location = new Point(ClientSize.Width - pad - S(48), y),
+                    Size = new Size(S(48), switchH)
+                };
+                _contentPanel.Controls.Add(_switchLcdOverdrive);
 
-            y += switchH + S(16);
+                _switchLcdOverdrive.CheckedChanged += (s, e) =>
+                {
+                    bool enable = _switchLcdOverdrive.Checked;
+                    SaveState("LcdOverdrive", enable ? 1 : 0);
+                    Task.Run(() =>
+                    {
+                        try { _wmi.SetLcdOverdrive(enable); } catch { }
+                    });
+                };
+                y += switchH + S(16);
+            }
+            else
+            {
+                y += S(10);
+            }
+
             AddSeparator(y);
 
             // GPU WORKING MODE (MUX SWITCH)
@@ -2394,21 +2433,33 @@ namespace PredatorControlApp
                 if (_btnMaxFan != null) { _btnMaxFan.Left = pad + (fanBtnW + gap); _btnMaxFan.Width = fanBtnW; }
                 if (_btnCustomFan != null) { _btnCustomFan.Left = pad + (fanBtnW + gap) * 2; _btnCustomFan.Width = fanBtnW; }
 
-                // Fan sliders
+                // Fan sliders & sub buttons inside _pnlCustomFan
+                if (_pnlCustomFan != null) _pnlCustomFan.Width = contentW;
                 int fanSliderW = (contentW - gap) / 2;
-                if (_lblGpuFanSpeedHdr != null) _lblGpuFanSpeedHdr.Left = pad + fanSliderW + gap;
+                if (_lblGpuFanSpeedHdr != null) _lblGpuFanSpeedHdr.Left = fanSliderW + gap;
                 if (_cpuFanSlider != null) _cpuFanSlider.Width = fanSliderW;
-                if (_gpuFanSlider != null) { _gpuFanSlider.Left = pad + fanSliderW + gap; _gpuFanSlider.Width = fanSliderW; }
+                if (_gpuFanSlider != null) { _gpuFanSlider.Left = fanSliderW + gap; _gpuFanSlider.Width = fanSliderW; }
 
                 // Custom fan sub buttons
                 int subBtnW = (contentW - gap) / 2;
                 if (_btnFixedSpeed != null) _btnFixedSpeed.Width = subBtnW;
-                if (_btnFanCurve != null) { _btnFanCurve.Left = pad + subBtnW + gap; _btnFanCurve.Width = subBtnW; }
+                if (_btnFanCurve != null) { _btnFanCurve.Left = subBtnW + gap; _btnFanCurve.Width = subBtnW; }
 
                 // Display refresh rate buttons
-                int dispBtnW = (contentW - gap) / 2;
-                if (_btn60Hz != null) _btn60Hz.Width = dispBtnW;
-                if (_btnMaxHz != null) { _btnMaxHz.Left = pad + dispBtnW + gap; _btnMaxHz.Width = dispBtnW; }
+                if (_maxHz <= 60 || _btnMaxHz == null)
+                {
+                    if (_btn60Hz != null)
+                    {
+                        _btn60Hz.Left = pad;
+                        _btn60Hz.Width = contentW;
+                    }
+                }
+                else
+                {
+                    int dispBtnW = (contentW - gap) / 2;
+                    if (_btn60Hz != null) { _btn60Hz.Left = pad; _btn60Hz.Width = dispBtnW; }
+                    if (_btnMaxHz != null) { _btnMaxHz.Left = pad + dispBtnW + gap; _btnMaxHz.Width = dispBtnW; }
+                }
 
                 // GPU Working Mode (MUX Switch) buttons
                 int gpuBtnW = (contentW - 2 * gap) / 3;
@@ -2655,6 +2706,33 @@ namespace PredatorControlApp
             }
         }
 
+        private void UpdateCustomFanLayout(bool isCustom)
+        {
+            if (_isCustomFanExpanded == isCustom || _pnlCustomFan == null) return;
+            _isCustomFanExpanded = isCustom;
+
+            int delta = isCustom ? _customFanShiftHeight : -_customFanShiftHeight;
+            int threshold = _pnlCustomFan.Top;
+
+            _contentPanel.SuspendLayout();
+            try
+            {
+                _pnlCustomFan.Visible = isCustom;
+                foreach (Control c in _contentPanel.Controls)
+                {
+                    if (c != _pnlCustomFan && c.Top >= threshold)
+                    {
+                        c.Top += delta;
+                    }
+                }
+                _contentPanel.AutoScrollMinSize = new Size(0, _contentPanel.AutoScrollMinSize.Height + delta);
+            }
+            finally
+            {
+                _contentPanel.ResumeLayout(true);
+            }
+        }
+
         private void ApplyFanMode(byte mode, PredatorButton btn)
         {
             CheckUntestedChassisWarning();
@@ -2678,25 +2756,7 @@ namespace PredatorControlApp
             CheckTrayItem(trayFan, _trayFanAuto, _trayFanMax, _trayFanCustom);
 
             bool isCustom = mode == 0x03;
-            if (isCustom && _btnCustomFan != null)
-            {
-                int fanTop = _btnCustomFan.Bottom + S(12);
-                if (_lblCpuFanSpeedHdr != null) _lblCpuFanSpeedHdr.Top = fanTop;
-                if (_lblGpuFanSpeedHdr != null) _lblGpuFanSpeedHdr.Top = fanTop;
-                int sliderTop = fanTop + S(24);
-                if (_cpuFanSlider != null) _cpuFanSlider.Top = sliderTop;
-                if (_gpuFanSlider != null) _gpuFanSlider.Top = sliderTop;
-                int subBtnTop = sliderTop + S(28) + S(8);
-                if (_btnFixedSpeed != null) _btnFixedSpeed.Top = subBtnTop;
-                if (_btnFanCurve != null) _btnFanCurve.Top = subBtnTop;
-            }
-
-            if (_lblCpuFanSpeedHdr != null) _lblCpuFanSpeedHdr.Visible = isCustom;
-            if (_lblGpuFanSpeedHdr != null) _lblGpuFanSpeedHdr.Visible = isCustom;
-            if (_cpuFanSlider != null) _cpuFanSlider.Visible = isCustom;
-            if (_gpuFanSlider != null) _gpuFanSlider.Visible = isCustom;
-            if (_btnFixedSpeed != null) _btnFixedSpeed.Visible = isCustom;
-            if (_btnFanCurve != null) _btnFanCurve.Visible = isCustom;
+            UpdateCustomFanLayout(isCustom);
 
             if (isCustom)
             {
@@ -2997,7 +3057,7 @@ namespace PredatorControlApp
             }
 
             if (profile.RefreshRate > 0)
-                ApplyDisplayMode(profile.RefreshRate, profile.RefreshRate <= 60 ? _btn60Hz : _btnMaxHz);
+                ApplyDisplayMode(profile.RefreshRate, (profile.RefreshRate <= 60 || _btnMaxHz == null) ? _btn60Hz : _btnMaxHz);
 
             if (profile.BatteryLimit >= 0)
                 ApplyBatteryLimit(profile.BatteryLimit == 1);
@@ -3084,7 +3144,7 @@ namespace PredatorControlApp
             }
 
             if (snap.RefreshRate > 0)
-                ApplyDisplayMode(snap.RefreshRate, snap.RefreshRate <= 60 ? _btn60Hz : _btnMaxHz);
+                ApplyDisplayMode(snap.RefreshRate, (snap.RefreshRate <= 60 || _btnMaxHz == null) ? _btn60Hz : _btnMaxHz);
 
             ApplyBatteryLimit(snap.BatteryLimit == 1);
 

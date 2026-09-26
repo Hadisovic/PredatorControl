@@ -18,11 +18,19 @@ PREDATOR CONTROL v1.2.7 - ACER NITRO UNIVERSAL TESTING & FIELD GUIDE
     - Retains full 4-Zone RGB color picker, effects, and profiles.
 
 - Acer CoolBoost™ Support:
-  * Signature Nitro feature under Fan Control.
+  * Repositioned directly below fan buttons, immediately above display refresh rate.
+  * Zero dead space when Custom fan is collapsed.
   * Multi-channel dispatch:
     1) Named pipe ("nitrosense_hardware_service_")
     2) Acer Agent IPC (TCP port 46933)
     3) Direct ACPI WMI EC call (SetGamingFanBehavior with bit-24 / bit-8 flags)
+
+- Single Refresh Rate Selector for 60Hz Panels:
+  * If the notebook panel only supports 60Hz, it now renders a single [60 Hz]
+    button instead of two redundant buttons.
+
+- Jelli UI Fix:
+  * Fixed NullReferenceException on non-MUX chassis (GTX 1650 / Nitro 5).
 
 - Battery Health 80% Charge Threshold:
   * Dual-channel dispatch:
@@ -40,20 +48,24 @@ PREDATOR CONTROL v1.2.7 - ACER NITRO UNIVERSAL TESTING & FIELD GUIDE
     - Only disables pure telemetry & bloatware (AcerCCAgent, AcerQA, AcerDI).
     - Auto-repairs and starts essential hardware services if they were disabled.
 
-2. WHAT TO DO IF HARDWARE SERVICES ARE MISSING ON NITRO:
+2. OUT-OF-THE-BOX OEM SERVICE SETUP (NO ACER CARE CENTER / NITROSENSE NEEDED):
 --------------------------------------------------------------------------------
-- If OEM services were completely uninstalled or stopped on the Nitro laptop:
-  Simply right-click "Restore-AcerNitroServices.bat" and select
-  "Run as administrator".
-  It will:
-  * Set ASMSvc and AcerDeviceEnablingService to Automatic and start them.
-  * Write the 80% charge threshold registry keys.
-  * Scan DriverStore for any unregistered Acer OEM drivers.
+- You DO NOT need to download or install Acer Care Center or NitroSense!
+- Simply double-click "Install-AcerNitroServices.bat" (or "Restore-AcerNitroServices.bat").
+  It will automatically:
+  * Request Administrator privileges (self-elevating UAC).
+  * Install the required signed OEM driver packages from Windows DriverStore or
+    the included "oem_drivers" folder.
+  * Register and start ASMSvc (Battery 80% Limit) and AcerDeviceEnablingServiceV2 (Bridge).
+  * Configure the 80% charge threshold registry keys.
+  * Print a live status diagnostic confirmation showing each service RUNNING.
 
 3. FILES IN THIS FOLDER:
 --------------------------------------------------------------------------------
 - PredatorControl-standalone.exe  -> Single-file self-contained (no .NET needed)
 - PredatorControl-win-x64.exe     -> Framework-dependent (requires .NET 10 desktop)
-- Restore-AcerNitroServices.bat   -> 1-click companion restorer for Nitro services
+- Install-AcerNitroServices.bat   -> 1-click self-elevating installer for Nitro services
+- Restore-AcerNitroServices.bat   -> Identical alias for convenience
+- oem_drivers/                    -> Bundled clean signed OEM driver packages
 - checksums.txt                   -> SHA-256 integrity hashes
 ================================================================================

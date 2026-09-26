@@ -77,7 +77,9 @@ namespace PredatorControlApp
             var theme = ThemeManager.Current;
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.Clear(Parent?.BackColor ?? theme.FormBg);
+            Color bg = Parent?.BackColor ?? theme.FormBg;
+            if (bg == Color.Transparent || bg.A < 255) bg = theme.FormBg;
+            g.Clear(bg);
 
             int cy = Height / 2;
             int trackY = cy - TrackHeight / 2;

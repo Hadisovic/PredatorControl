@@ -1005,6 +1005,7 @@ namespace PredatorControlApp
             BackColor = theme.FormBg;
             _pnlTitle.BackColor = theme.TitleBarBg;
             _contentPanel.BackColor = theme.FormBg;
+            if (_pnlCustomFan != null) _pnlCustomFan.BackColor = theme.FormBg;
 
             // Highlight current theme button
             var activeThemeBtn = theme.Mode switch
@@ -1597,7 +1598,7 @@ namespace PredatorControlApp
                 Location = new Point(pad, y),
                 Size = new Size(contentW, customH),
                 Visible = false,
-                BackColor = Color.Transparent
+                BackColor = ThemeManager.Current.FormBg
             };
             _contentPanel.Controls.Add(_pnlCustomFan);
 

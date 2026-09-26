@@ -75,7 +75,9 @@ namespace PredatorControlApp
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
-            g.Clear(Parent?.BackColor ?? theme.FormBg);
+            Color parentBg = Parent?.BackColor ?? theme.FormBg;
+            if (parentBg == Color.Transparent || parentBg.A < 255) parentBg = theme.FormBg;
+            g.Clear(parentBg);
 
             var rect = new Rectangle(1, 1, Width - 3, Height - 3);
             using var path = RoundedRect(rect, 6);

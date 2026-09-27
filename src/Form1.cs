@@ -1882,7 +1882,13 @@ namespace PredatorControlApp
                 }
             });
 
-            y += S(14);
+            y += S(22);
+            int batBtnW = S(210), batBtnH = S(28);
+            var btnBatteryReport = MakeButton("📊  View Full Battery Report", pad, y, batBtnW, batBtnH);
+            btnBatteryReport.Click += (s, e) => BatteryHealthMonitor.OpenBatteryReport();
+            _contentPanel.Controls.Add(btnBatteryReport);
+
+            y += batBtnH + S(6);
             _lblStartupStatus = MakeLabel("Start with Windows", pad, y, FontBody, Color.FromArgb(120, 120, 135));
             CenterV(_lblStartupStatus, y, switchH);
 

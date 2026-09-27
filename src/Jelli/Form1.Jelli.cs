@@ -128,7 +128,25 @@ public partial class Form1 : IJelliBackend
             bool wanted = d.GetBoolean(); ApplyBatteryLimit(wanted);
             if (_switchBatteryLimit.Checked != wanted) throw new InvalidOperationException("The backend could not apply the battery charge limit.");
         };
-        sections.Add(new("battery", "Battery care", [new("battery.limit", "Stop charging at 80%", "toggle", _switchBatteryLimit.Checked)]));
+        _jelliActions["battery.report"] = _ => BatteryHealthMonitor.OpenBatteryReport();
+        _jelliActions["battery.health"] = _ => BatteryHealthMonitor.OpenBatteryReport();
+
+        var batteryControls = new List<JelliControl>
+        {
+            new("battery.limit", "Stop charging at 80%", "toggle", _switchBatteryLimit.Checked)
+        };
+
+        var batInfo = BatteryHealthMonitor.GetBatteryHealth();
+        if (batInfo != null)
+        {
+            double healthPct = Math.Max(0.0, Math.Round(100.0 - batInfo.WearLevelPercent, 1));
+            string healthLabel = $"Health: {healthPct:0.#}% ({batInfo.HealthStatus}) · {batInfo.FullChargeCapacityMWh / 1000.0:0.0} Wh / {batInfo.DesignCapacityMWh / 1000.0:0.0} Wh";
+            batteryControls.Add(new("battery.health", healthLabel, "button", false, Enabled: true));
+        }
+
+        batteryControls.Add(new("battery.report", "📊 View Full Battery Report ↗", "button", false, Enabled: true));
+
+        sections.Add(new("battery", "Battery care", batteryControls.ToArray()));
         if (!_wmi.Capabilities.SupportsRgbLighting)
         {
             var mono = new List<JelliControl>();
@@ -278,7 +296,17 @@ public partial class Form1 : IJelliBackend
             version = Updater.CurrentText,
             doubleClickMs = SystemInformation.DoubleClickTime,
             gameSyncStatus = _lblGameSyncStatus?.Text ?? "",
+            batteryNotice = GetBatteryNotice(),
         };
+    }
+
+    private static string GetBatteryNotice()
+    {
+        var info = BatteryHealthMonitor.GetBatteryHealth();
+        if (info == null) return string.Empty;
+        string cycleText = info.CycleCount > 0 ? $" • {info.CycleCount} cycles" : "";
+        double healthPct = Math.Max(0.0, Math.Round(100.0 - info.WearLevelPercent, 1));
+        return $"Health: {healthPct:0.#}% ({info.HealthStatus}) • Full: {info.FullChargeCapacityMWh:N0} mWh / Design: {info.DesignCapacityMWh:N0} mWh{cycleText} • Wear: {info.WearLevelPercent:0.#}%";
     }
 
     internal void JelliAction(string id, JsonElement data)

@@ -19,7 +19,8 @@ namespace PredatorControlApp
         float? VramUsedGb = null,
         float? VramTotalGb = null,
         float? RamUsedGb = null,
-        float? RamTotalGb = null
+        float? RamTotalGb = null,
+        int? AuxFanRpm = null
     );
 
     [SupportedOSPlatform("windows")]
@@ -236,7 +237,7 @@ namespace PredatorControlApp
                         float batPercent = (float)Math.Round(power.BatteryLifePercent * 100f);
                         bool isCharging = (power.BatteryChargeStatus & BatteryChargeStatus.Charging) != 0;
 
-                        var (cpuTemp, gpuTemp, cpuRpm, gpuRpm, gpuPower) = _wmi.GetAllSensors(isPluggedIn, _includeGpu);
+                        var (cpuTemp, gpuTemp, cpuRpm, gpuRpm, auxRpm, gpuPower) = _wmi.GetAllSensors(isPluggedIn, _includeGpu);
 
                         int? cpuUsage = CalculateCpuUsage();
 
@@ -303,7 +304,8 @@ namespace PredatorControlApp
                             vramUsedGb,
                             vramTotalGb,
                             ramUsedGb,
-                            ramTotalGb
+                            ramTotalGb,
+                            auxRpm
                         );
 
                         try

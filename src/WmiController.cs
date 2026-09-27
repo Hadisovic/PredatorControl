@@ -14,14 +14,32 @@ namespace PredatorControlApp
         GenericAcer
     }
 
+    [Flags]
+    public enum AcerFeature : uint
+    {
+        None           = 0,
+        CoolBoost      = 1 << 0,
+        RgbLighting    = 1 << 1,
+        LcdOverdrive   = 1 << 2,
+        BootSound      = 1 << 3,
+        UsbCharging    = 1 << 4,
+        BatteryLimit   = 1 << 5,
+        AuxFan         = 1 << 6,
+        GpuMux         = 1 << 7
+    }
+
     public record HardwareCapabilities
     {
         public AcerChassisFamily ChassisFamily { get; init; }
-        public bool SupportsRgbLighting { get; init; }
-        public bool SupportsCoolBoost { get; init; }
-        public bool SupportsBatteryControl { get; init; }
-        public bool SupportsGpuMux { get; init; }
-        public bool SupportsLcdOverdrive { get; init; }
+        public AcerFeature Features { get; init; }
+        public bool SupportsRgbLighting => (Features & AcerFeature.RgbLighting) != 0;
+        public bool SupportsCoolBoost => (Features & AcerFeature.CoolBoost) != 0;
+        public bool SupportsBatteryControl => (Features & AcerFeature.BatteryLimit) != 0;
+        public bool SupportsGpuMux => (Features & AcerFeature.GpuMux) != 0;
+        public bool SupportsLcdOverdrive => (Features & AcerFeature.LcdOverdrive) != 0;
+        public bool SupportsBootSound => (Features & AcerFeature.BootSound) != 0;
+        public bool SupportsUsbCharging => (Features & AcerFeature.UsbCharging) != 0;
+        public bool HasAuxFan => (Features & AcerFeature.AuxFan) != 0;
         public int PowerModeCount { get; init; }
         public string[] PowerModeLabels { get; init; } = Array.Empty<string>();
         public byte[] PowerModeValues { get; init; } = Array.Empty<byte>();
@@ -361,15 +379,16 @@ namespace PredatorControlApp
             }
         }
 
-        public (int? cpuTemp, int? gpuTemp, int? cpuFanRpm, int? gpuFanRpm, int? gpuPowerW) GetAllSensors(bool isPluggedIn, bool includeGpu = true)
+        public (int? cpuTemp, int? gpuTemp, int? cpuFanRpm, int? gpuFanRpm, int? auxFanRpm, int? gpuPowerW) GetAllSensors(bool isPluggedIn, bool includeGpu = true)
         {
             int? cpuTemp = CpuTemp;
             int? cpuRpm = CpuFanRpm;
+            int? auxRpm = HasAuxFan ? AuxFanRpm : null;
             int? gpuTemp = (isPluggedIn && includeGpu) ? GpuTemp : null;
             int? gpuRpm = (isPluggedIn && includeGpu) ? GpuFanRpm : null;
             int? gpuPower = (isPluggedIn && includeGpu) ? GpuPowerW : null;
 
-            return (cpuTemp, gpuTemp, cpuRpm, gpuRpm, gpuPower);
+            return (cpuTemp, gpuTemp, cpuRpm, gpuRpm, auxRpm, gpuPower);
         }
 
         public int? CpuTemp => GetSensorReading(0x01);
@@ -377,7 +396,7 @@ namespace PredatorControlApp
         public int? CpuFanRpm => GetSensorReading(0x02);
         public int? GpuFanRpm => GetSensorReading(0x06);
         public int? AuxFanRpm => GetSensorReading(0x07) ?? GetSensorReading(0x0B);
-        public bool HasAuxFan => AuxFanRpm.HasValue && AuxFanRpm.Value > 0;
+        public bool HasAuxFan => Supports(AcerFeature.AuxFan) || (AuxFanRpm.HasValue && AuxFanRpm.Value > 0);
         public int? GpuPowerW => GetSensorReading(0x0D);
 
         private static AcerChassisFamily? _detectedChassisFamily;
@@ -408,27 +427,52 @@ namespace PredatorControlApp
 
         public AcerChassisFamily ChassisFamily => DetectChassisFamily();
 
+        private AcerFeature? _supportedFeatures;
+        public AcerFeature SupportedFeatures => _supportedFeatures ??= ProbeSupportedFeatures();
+        public bool Supports(AcerFeature feature) => (SupportedFeatures & feature) == feature;
+
+        private AcerFeature ProbeSupportedFeatures()
+        {
+            var chassis = ChassisFamily;
+            AcerFeature f = AcerFeature.None;
+
+            if (ProbeRgbHardwareSupported(chassis))
+                f |= AcerFeature.RgbLighting;
+
+            if (chassis == AcerChassisFamily.Nitro)
+                f |= AcerFeature.CoolBoost;
+
+            if (IsBatteryControlSupported())
+                f |= AcerFeature.BatteryLimit;
+
+            // LCD Overdrive: Predator models, or Nitro models with display refresh rate > 60Hz
+            if (chassis == AcerChassisFamily.Predator ||
+                (chassis == AcerChassisFamily.Nitro && DisplayCcdController.GetMaxRefreshRate() > 60))
+            {
+                f |= AcerFeature.LcdOverdrive;
+            }
+
+            // Boot Sound: Predator chassis has BIOS boot animation chime
+            if (chassis == AcerChassisFamily.Predator)
+                f |= AcerFeature.BootSound;
+
+            // USB Charging when powered off: supported on Predator and Nitro models
+            f |= AcerFeature.UsbCharging;
+
+            if (HasAuxFan)
+                f |= AcerFeature.AuxFan;
+
+            return f;
+        }
+
         private HardwareCapabilities? _cachedCapabilities;
         public HardwareCapabilities Capabilities => _cachedCapabilities ??= ProbeCapabilities();
 
         private HardwareCapabilities ProbeCapabilities()
         {
             var chassis = ChassisFamily;
+            var features = SupportedFeatures;
 
-            // 1. RGB Lighting probe (100% generic, zero hardcoding):
-            // Predator chassis has multi-zone/per-key RGB.
-            // Nitro and generic Acer laptops have 4-zone RGB only if the RGB subsystem is installed
-            // (AcerLightingService service/files/registry or physical ITE RGB keyboard controller).
-            // Monochrome models (red/blue/white single-zone) do not have this hardware.
-            bool rgbSupported = ProbeRgbHardwareSupported(chassis);
-
-            // 2. CoolBoost probe (Signature feature on Acer Nitro models)
-            bool coolBoostSupported = chassis == AcerChassisFamily.Nitro;
-
-            // 3. Battery Control probe
-            bool batterySupported = IsBatteryControlSupported();
-
-            // 4. Power Modes definition
             bool isPredator = chassis == AcerChassisFamily.Predator;
             int modeCount = isPredator ? 5 : 3;
             string[] modeLabels = isPredator
@@ -441,11 +485,7 @@ namespace PredatorControlApp
             return new HardwareCapabilities
             {
                 ChassisFamily = chassis,
-                SupportsRgbLighting = rgbSupported,
-                SupportsCoolBoost = coolBoostSupported,
-                SupportsBatteryControl = batterySupported,
-                SupportsGpuMux = false,
-                SupportsLcdOverdrive = chassis == AcerChassisFamily.Predator,
+                Features = features,
                 PowerModeCount = modeCount,
                 PowerModeLabels = modeLabels,
                 PowerModeValues = modeValues
@@ -705,6 +745,14 @@ namespace PredatorControlApp
             });
             var (ok, _) = SendCommand("SetGamingFanSpeed", 0x04UL | ((ulong)speed << 8));
             return ok;
+        }
+
+        public bool SetAuxFanSpeed(byte speed)
+        {
+            // Fan Index 3 (Auxiliary Fan on Helios 18 / Triton 17)
+            var (ok1, _) = SendCommand("SetGamingFanSpeed", 0x02UL | ((ulong)speed << 8));
+            var (ok2, _) = SendCommand("SetGamingFanSpeed", 0x06UL | ((ulong)speed << 8));
+            return ok1 || ok2;
         }
 
         #region Non-blocking Asynchronous RGB Lighting
@@ -1276,6 +1324,70 @@ namespace PredatorControlApp
             ulong payload = ((enable ? 1UL : 0UL) << 32) | 0x10UL;
             var (ok, _) = SendCommand("SetGamingMiscSetting", payload);
             return ok;
+        }
+
+        public bool SetBootSound(bool enable)
+        {
+            // Feature ID 0x0E (Boot Animation Sound): bits [31:0] = 0x0E, bits [63:32] = 1 (enable) or 0 (disable)
+            ulong payload = ((enable ? 1UL : 0UL) << 32) | 0x0EUL;
+            var (ok, _) = SendCommand("SetGamingMiscSetting", payload);
+
+            _ = Task.Run(async () =>
+            {
+                try { await AcerAgentClient.SetBootSoundAsync(enable); } catch { }
+            });
+
+            try
+            {
+                using var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(@"SOFTWARE\PredatorControl");
+                key?.SetValue("BootSound", enable ? 1 : 0);
+            }
+            catch { }
+
+            return ok;
+        }
+
+        public bool GetBootSound()
+        {
+            try
+            {
+                using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"SOFTWARE\PredatorControl");
+                if (key?.GetValue("BootSound") is int val) return val == 1;
+            }
+            catch { }
+            return true;
+        }
+
+        public bool SetUsbCharging(bool enable, int cutoffPercent = 10)
+        {
+            // Feature ID 0x0C (Power-off USB Charging Enable/Disable)
+            ulong payloadState = ((enable ? 1UL : 0UL) << 32) | 0x0CUL;
+            var (ok1, _) = SendCommand("SetGamingMiscSetting", payloadState);
+
+            // Feature ID 0x0D (Battery cutoff threshold percentage: 10, 20, 30%)
+            ulong payloadCutoff = (((ulong)cutoffPercent) << 32) | 0x0DUL;
+            SendCommand("SetGamingMiscSetting", payloadCutoff);
+
+            try
+            {
+                using var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(@"SOFTWARE\PredatorControl");
+                key?.SetValue("UsbCharging", enable ? 1 : 0);
+                key?.SetValue("UsbChargingCutoff", cutoffPercent);
+            }
+            catch { }
+
+            return ok1;
+        }
+
+        public bool GetUsbCharging()
+        {
+            try
+            {
+                using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"SOFTWARE\PredatorControl");
+                if (key?.GetValue("UsbCharging") is int val) return val == 1;
+            }
+            catch { }
+            return true;
         }
 
         private static uint GetBkHotkeyNumber()

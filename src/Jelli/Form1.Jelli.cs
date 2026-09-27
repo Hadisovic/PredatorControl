@@ -86,9 +86,15 @@ public partial class Form1 : IJelliBackend
         {
             fans.Add(Toggle("fans.coolboost", "Acer CoolBoost", _switchCoolBoost));
         }
-        if (GetCurrentFanByte() == 3) fans.AddRange([
-            Button("fans.fixed", "Fixed speed", _btnFixedSpeed), Button("fans.curve", "Edit fan curve ↗", _btnFanCurve),
-            Range("fans.cpu", "CPU fan", _cpuFanSlider), Range("fans.gpu", "GPU fan", _gpuFanSlider)]);
+        if (GetCurrentFanByte() == 3)
+        {
+            fans.Add(Button("fans.fixed", "Fixed speed", _btnFixedSpeed));
+            fans.Add(Button("fans.curve", "Edit fan curve ↗", _btnFanCurve));
+            fans.Add(Range("fans.cpu", "CPU fan", _cpuFanSlider));
+            fans.Add(Range("fans.gpu", "GPU fan", _gpuFanSlider));
+            if (_wmi.HasAuxFan && _auxFanSlider != null)
+                fans.Add(Range("fans.aux", "Aux fan", _auxFanSlider));
+        }
         sections.Add(new("fans", "Cooling", fans.ToArray()));
         if (_wmi.Capabilities.SupportsGpuMux)
         {
@@ -224,10 +230,18 @@ public partial class Form1 : IJelliBackend
             if (InvokeRequired) BeginInvoke(new Action(OpenOverlaySettings));
             else OpenOverlaySettings();
         };
-        sections.Add(new("hardware", "Hardware", [
-            Toggle("hardware.keyLock", "Lock Windows & Menu keys", _switchWinKeyLock),
-            Button("overlay.settings", "Overlay Settings ↗", _btnOverlaySettings)
-        ]));
+        var hwControls = new List<JelliControl>
+        {
+            Toggle("hardware.keyLock", "Lock Windows & Menu keys", _switchWinKeyLock)
+        };
+        if (_switchBootSound != null)
+            hwControls.Add(Toggle("hardware.bootsound", "Acer startup sound", _switchBootSound));
+        if (_switchUsbCharging != null)
+            hwControls.Add(Toggle("hardware.usbcharging", "Power-off USB charging", _switchUsbCharging));
+        if (_switchAutoCoolBoost != null)
+            hwControls.Add(Toggle("hardware.autocoolboost", "Auto-CoolBoost on Perf / Turbo", _switchAutoCoolBoost));
+        hwControls.Add(Button("overlay.settings", "Overlay Settings ↗", _btnOverlaySettings));
+        sections.Add(new("hardware", "Hardware", hwControls.ToArray()));
         sections.Add(new("games", "Game Sync", [Toggle("games.enabled", "Apply profiles when games launch", _switchGameSync), Button("games.configure", "Configure game profiles ↗", _btnConfigureGames)]));
         sections.Add(new("app", "Application", [Toggle("app.startup", "Start with Windows", _switchStartWithWindows), Button("app.updates", "Check for updates", _btnCheckUpdates),
             Button("app.teal", "Teal", _btnThemeTeal), Button("app.crimson", "Crimson", _btnThemeCrimson), Button("app.oled", "OLED", _btnThemeOled)]));

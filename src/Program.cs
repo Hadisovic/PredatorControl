@@ -132,6 +132,20 @@ namespace PredatorControlApp
                 }
                 byte mappedEarlySpeed = (byte)Math.Clamp(Math.Round(rgbSpeed * 9.0 / 100.0), 1, 9);
                 wmiEarly.ApplyLightingSynchronous(zones, rgbMode, (byte)Math.Clamp(brightness, 0, 100), mappedEarlySpeed);
+
+                // Early boot Boot Sound and USB Power-off Charging enforcement
+                try
+                {
+                    using var bootKey = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"SOFTWARE\PredatorControl");
+                    if (bootKey != null)
+                    {
+                        if (bootKey.GetValue("BootSound") is int bs)
+                            wmiEarly.SetBootSound(bs == 1);
+                        if (bootKey.GetValue("UsbCharging") is int uc)
+                            wmiEarly.SetUsbCharging(uc == 1);
+                    }
+                }
+                catch { }
             }
             catch { }
 

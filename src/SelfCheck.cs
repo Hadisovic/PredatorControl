@@ -39,11 +39,31 @@ namespace PredatorControlApp
             Debug.Assert(Array.Exists(OemServiceManager.NitroEssentialServices, s => s == "ASMSvc"), "OemServiceManager must include ASMSvc for Nitro");
             Debug.Assert(Array.Exists(OemServiceManager.PredatorEssentialServices, s => s == "AcerLightingService"), "OemServiceManager must include AcerLightingService for Predator");
 
+            CheckBitmaskEngine();
             CheckPowerLineDebounce();
             CheckPredatorKeyHook();
             CheckDisplayCcdTechnology();
             CheckThemes();
             CheckDebounceHelper();
+        }
+
+        private static void CheckBitmaskEngine()
+        {
+            AcerFeature f = AcerFeature.CoolBoost | AcerFeature.LcdOverdrive | AcerFeature.BootSound;
+            Debug.Assert((f & AcerFeature.CoolBoost) != 0, "CoolBoost must be set in bitmask");
+            Debug.Assert((f & AcerFeature.LcdOverdrive) != 0, "LcdOverdrive must be set in bitmask");
+            Debug.Assert((f & AcerFeature.BootSound) != 0, "BootSound must be set in bitmask");
+            Debug.Assert((f & AcerFeature.RgbLighting) == 0, "RgbLighting must not be set");
+
+            var caps = new HardwareCapabilities
+            {
+                ChassisFamily = AcerChassisFamily.Predator,
+                Features = f
+            };
+            Debug.Assert(caps.SupportsCoolBoost, "HardwareCapabilities.SupportsCoolBoost must be true");
+            Debug.Assert(caps.SupportsLcdOverdrive, "HardwareCapabilities.SupportsLcdOverdrive must be true");
+            Debug.Assert(caps.SupportsBootSound, "HardwareCapabilities.SupportsBootSound must be true");
+            Debug.Assert(!caps.SupportsRgbLighting, "HardwareCapabilities.SupportsRgbLighting must be false");
         }
 
         private static void CheckPredatorKeyHook()

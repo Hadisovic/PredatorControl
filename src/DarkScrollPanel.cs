@@ -197,12 +197,11 @@ namespace PredatorControlApp
 
         protected override Point ScrollToControl(Control activeControl)
         {
-            // WinForms ScrollToControl expects non-negative scroll coordinates (0 to maxScroll).
-            // Returning negative values (like DisplayRectangle.Location) inverts WinForms layout engine
-            // and sets DisplayRectangle.Y to a positive number, pushing all child controls down!
-            int curX = Math.Max(0, -AutoScrollPosition.X);
-            int curY = Math.Max(0, -AutoScrollPosition.Y);
-            return new Point(curX, curY);
+            // Returning DisplayRectangle.Location tells WinForms that the display rectangle
+            // is already at the desired position (p.X == displayRect.X && p.Y == displayRect.Y).
+            // This completely eliminates auto-scrolling to focused controls on window activation / blur,
+            // preventing the display rectangle from bouncing to the top and back.
+            return DisplayRectangle.Location;
         }
 
         protected override void OnLayout(LayoutEventArgs levent)
@@ -210,16 +209,17 @@ namespace PredatorControlApp
             int beforeY = _savedScrollY;
             base.OnLayout(levent);
 
+            int maxScroll = Math.Max(0, DisplayRectangle.Height - ClientSize.Height);
+            int targetY = Math.Clamp(beforeY, 0, maxScroll);
+
             // Guard: WinForms must NEVER have positive DisplayRectangle.Y (which creates an empty margin at the top)
             if (DisplayRectangle.Y > 0)
             {
-                AutoScrollPosition = new Point(0, 0);
-                _savedScrollY = 0;
+                AutoScrollPosition = new Point(0, targetY);
+                _savedScrollY = targetY;
             }
             else if (-AutoScrollPosition.Y == 0 && beforeY > 0)
             {
-                int maxScroll = Math.Max(0, DisplayRectangle.Height - ClientSize.Height);
-                int targetY = Math.Clamp(beforeY, 0, maxScroll);
                 if (targetY > 0)
                 {
                     AutoScrollPosition = new Point(0, targetY);

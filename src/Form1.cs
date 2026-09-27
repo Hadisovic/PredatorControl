@@ -106,6 +106,7 @@ namespace PredatorControlApp
         private bool? _isPluggedIn;
         private bool? _pendingPluggedIn;
         private int _powerLineStableTicks;
+        private int _telemetryTickCount;
         private bool _isResyncing;
         private bool _isClosing;
         public static bool IsShuttingDown { get; private set; }
@@ -416,6 +417,7 @@ namespace PredatorControlApp
                 Updater.ShowPendingNotes(this);
                 if (Environment.CommandLine.Contains("-hidden")) HideApp();
                 CheckPredatorSenseConflict();
+                UpdateBatteryHealthUI();
 
                 // H-3 / F-5: Run OEM service optimization only if enabled by user
                 if (IsServicesOptimizationEnabled())
@@ -1859,33 +1861,17 @@ namespace PredatorControlApp
             _lblBatteryHealth.AutoSize = true;
             _contentPanel.Controls.Add(_lblBatteryHealth);
 
-            // Load battery health diagnostics asynchronously without blocking UI startup
-            Task.Run(async () =>
-            {
-                var info = await BatteryHealthMonitor.GetBatteryHealthAsync();
-                if (!IsDisposed && _lblBatteryHealth != null)
-                {
-                    BeginInvoke(() =>
-                    {
-                        if (info != null)
-                        {
-                            string cyclesText = info.CycleCount > 0 ? $" • {info.CycleCount} Cycles" : "";
-                            double healthPct = Math.Max(0.0, Math.Round(100.0 - info.WearLevelPercent, 1));
-                            _lblBatteryHealth.Text = $"Health: {healthPct:0.#}% (Wear: {info.WearLevelPercent:0.#}%) • {info.FullChargeCapacityMWh:N0} / {info.DesignCapacityMWh:N0} mWh{cyclesText}";
-                            _lblBatteryHealth.ForeColor = healthPct >= 80 ? Color.FromArgb(0, 204, 150) : (healthPct >= 60 ? Color.FromArgb(255, 189, 46) : Color.FromArgb(255, 85, 85));
-                        }
-                        else
-                        {
-                            _lblBatteryHealth.Text = "Battery diagnostics: AC power only / report unavailable";
-                        }
-                    });
-                }
-            });
+            // Populate battery health diagnostics immediately if available, or asynchronously on startup
+            UpdateBatteryHealthUI();
 
             y += S(22);
             int batBtnW = S(210), batBtnH = S(28);
             var btnBatteryReport = MakeButton("📊  View Full Battery Report", pad, y, batBtnW, batBtnH);
-            btnBatteryReport.Click += (s, e) => BatteryHealthMonitor.OpenBatteryReport();
+            btnBatteryReport.Click += (s, e) =>
+            {
+                BatteryHealthMonitor.OpenBatteryReport();
+                UpdateBatteryHealthUI(forceRefresh: true);
+            };
             _contentPanel.Controls.Add(btnBatteryReport);
 
             y += batBtnH + S(6);
@@ -2439,6 +2425,7 @@ namespace PredatorControlApp
             LoadRgbProfilesIntoUi();
 
             _contentPanel.AutoScrollMinSize = new Size(0, y + repairBtnH + S(50));
+            UpdateScrollMinSize();
         }
 
         private void SelectZone(int zoneIndex)
@@ -2771,6 +2758,7 @@ namespace PredatorControlApp
                 if (_btnConfigureGames != null) _btnConfigureGames.Width = contentW;
                 if (_btnCheckUpdates != null) _btnCheckUpdates.Left = ClientSize.Width - pad - _btnCheckUpdates.Width;
 
+                UpdateScrollMinSize();
                 _contentPanel.Invalidate(true);
             }
 
@@ -2781,6 +2769,71 @@ namespace PredatorControlApp
             else if (WindowState == FormWindowState.Normal)
             {
                 _telemetryService?.SetPollingState(true);
+            }
+        }
+
+        protected override void OnDpiChanged(DpiChangedEventArgs e)
+        {
+            base.OnDpiChanged(e);
+            _dpiScale = e.DeviceDpiNew / 96f;
+            _contentPanel?.SetDpiScale(_dpiScale);
+            FitFormToCurrentScreen();
+            UpdateScrollMinSize();
+            _contentPanel?.Invalidate(true);
+        }
+
+        protected override void OnLocationChanged(EventArgs e)
+        {
+            base.OnLocationChanged(e);
+            float currentDpiScale = DeviceDpi / 96f;
+            if (Math.Abs(currentDpiScale - _dpiScale) > 0.01f)
+            {
+                _dpiScale = currentDpiScale;
+                _contentPanel?.SetDpiScale(_dpiScale);
+                FitFormToCurrentScreen();
+                UpdateScrollMinSize();
+                _contentPanel?.Invalidate(true);
+            }
+        }
+
+        protected override void OnResizeEnd(EventArgs e)
+        {
+            base.OnResizeEnd(e);
+            FitFormToCurrentScreen();
+            UpdateScrollMinSize();
+        }
+
+        private void FitFormToCurrentScreen()
+        {
+            try
+            {
+                var screen = Screen.FromControl(this);
+                if (screen != null && Height > screen.WorkingArea.Height)
+                {
+                    Height = Math.Max(S(500), screen.WorkingArea.Height - 40);
+                    if (Top < screen.WorkingArea.Top) Top = screen.WorkingArea.Top;
+                }
+            }
+            catch { }
+        }
+
+        private void UpdateScrollMinSize()
+        {
+            if (_contentPanel == null || _contentPanel.IsDisposed) return;
+            int maxBottom = 0;
+            int dispY = _contentPanel.DisplayRectangle.Y;
+            foreach (Control c in _contentPanel.Controls)
+            {
+                if (c.Visible)
+                {
+                    int unscrolledBottom = (c.Top - dispY) + c.Height;
+                    if (unscrolledBottom > maxBottom)
+                        maxBottom = unscrolledBottom;
+                }
+            }
+            if (maxBottom > 0)
+            {
+                _contentPanel.AutoScrollMinSize = new Size(0, maxBottom + S(40));
             }
         }
 
@@ -3231,6 +3284,79 @@ namespace PredatorControlApp
             finally
             {
                 _isUpdatingBattery = false;
+            }
+        }
+
+        private void UpdateBatteryHealthUI(bool forceRefresh = false)
+        {
+            if (_lblBatteryHealth == null || _lblBatteryHealth.IsDisposed) return;
+
+            // 1. If cached info is available, apply immediately on UI thread without waiting
+            var cached = BatteryHealthMonitor.CachedInfo;
+            if (cached != null && !forceRefresh)
+            {
+                ApplyBatteryHealthToLabel(cached);
+                return;
+            }
+
+            // 2. Fetch asynchronously in background, then marshal safely to UI thread
+            Task.Run(async () =>
+            {
+                try
+                {
+                    var info = await BatteryHealthMonitor.GetBatteryHealthAsync(forceRefresh);
+                    SafeInvoke(() =>
+                    {
+                        if (info != null)
+                        {
+                            ApplyBatteryHealthToLabel(info);
+                        }
+                        else if (_lblBatteryHealth != null && !_lblBatteryHealth.IsDisposed)
+                        {
+                            _lblBatteryHealth.Text = "Battery diagnostics: AC power only / report unavailable";
+                            _lblBatteryHealth.ForeColor = Color.FromArgb(120, 120, 135);
+                        }
+                    });
+                }
+                catch (Exception ex)
+                {
+                    Program.Report(ex, false);
+                }
+            });
+        }
+
+        private void ApplyBatteryHealthToLabel(BatteryHealthInfo info)
+        {
+            if (_lblBatteryHealth == null || _lblBatteryHealth.IsDisposed) return;
+            string cyclesText = info.CycleCount > 0 ? $" • {info.CycleCount} Cycles" : "";
+            double healthPct = Math.Max(0.0, Math.Round(100.0 - info.WearLevelPercent, 1));
+            _lblBatteryHealth.Text = $"Health: {healthPct:0.#}% (Wear: {info.WearLevelPercent:0.#}%) • {info.FullChargeCapacityMWh:N0} / {info.DesignCapacityMWh:N0} mWh{cyclesText}";
+            _lblBatteryHealth.ForeColor = healthPct >= 80 ? Color.FromArgb(0, 204, 150) : (healthPct >= 60 ? Color.FromArgb(255, 189, 46) : Color.FromArgb(255, 85, 85));
+        }
+
+        private void SafeInvoke(Action action)
+        {
+            if (IsDisposed) return;
+            if (InvokeRequired)
+            {
+                if (IsHandleCreated)
+                {
+                    try { BeginInvoke(action); } catch { }
+                }
+                else
+                {
+                    EventHandler? handler = null;
+                    handler = (s, e) =>
+                    {
+                        HandleCreated -= handler;
+                        try { BeginInvoke(action); } catch { }
+                    };
+                    HandleCreated += handler;
+                }
+            }
+            else
+            {
+                action();
             }
         }
 
@@ -4046,6 +4172,10 @@ namespace PredatorControlApp
 
             if (_overlayForm != null && !_overlayForm.IsDisposed && _overlayForm.Visible)
                 _overlayForm.UpdateSnapshot(snap);
+
+            _telemetryTickCount++;
+            if (_telemetryTickCount % 30 == 0)
+                UpdateBatteryHealthUI(forceRefresh: false);
 
             ApplyFanCurve();
         }

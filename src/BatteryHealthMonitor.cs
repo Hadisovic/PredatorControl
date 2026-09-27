@@ -23,6 +23,8 @@ namespace PredatorControlApp
         private static BatteryHealthInfo? _cachedInfo;
         private static long _lastQueryTick = 0;
 
+        public static BatteryHealthInfo? CachedInfo => _cachedInfo;
+
         public static Task<BatteryHealthInfo?> GetBatteryHealthAsync(bool forceRefresh = false)
             => Task.Run(() => GetBatteryHealth(forceRefresh));
 

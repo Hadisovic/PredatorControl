@@ -2774,6 +2774,10 @@ namespace PredatorControlApp
 
         protected override void OnDpiChanged(DpiChangedEventArgs e)
         {
+            if (_contentPanel != null)
+            {
+                _contentPanel.AutoScrollPosition = new Point(0, 0);
+            }
             base.OnDpiChanged(e);
             _dpiScale = e.DeviceDpiNew / 96f;
             _contentPanel?.SetDpiScale(_dpiScale);
@@ -2790,7 +2794,6 @@ namespace PredatorControlApp
             {
                 _dpiScale = currentDpiScale;
                 _contentPanel?.SetDpiScale(_dpiScale);
-                FitFormToCurrentScreen();
                 UpdateScrollMinSize();
                 _contentPanel?.Invalidate(true);
             }

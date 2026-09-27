@@ -206,24 +206,13 @@ namespace PredatorControlApp
 
         protected override void OnLayout(LayoutEventArgs levent)
         {
-            int beforeY = _savedScrollY;
             base.OnLayout(levent);
-
-            int maxScroll = Math.Max(0, DisplayRectangle.Height - ClientSize.Height);
-            int targetY = Math.Clamp(beforeY, 0, maxScroll);
 
             // Guard: WinForms must NEVER have positive DisplayRectangle.Y (which creates an empty margin at the top)
             if (DisplayRectangle.Y > 0)
             {
-                AutoScrollPosition = new Point(0, targetY);
-                _savedScrollY = targetY;
-            }
-            else if (-AutoScrollPosition.Y == 0 && beforeY > 0)
-            {
-                if (targetY > 0)
-                {
-                    AutoScrollPosition = new Point(0, targetY);
-                }
+                AutoScrollPosition = new Point(0, 0);
+                _savedScrollY = 0;
             }
         }
 

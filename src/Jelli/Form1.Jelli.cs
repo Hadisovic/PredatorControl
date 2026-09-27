@@ -240,7 +240,19 @@ public partial class Form1 : IJelliBackend
             hwControls.Add(Toggle("hardware.usbcharging", "Power-off USB charging", _switchUsbCharging));
         if (_switchAutoCoolBoost != null)
             hwControls.Add(Toggle("hardware.autocoolboost", "Auto-CoolBoost on Perf / Turbo", _switchAutoCoolBoost));
-        hwControls.Add(Button("overlay.settings", "Overlay Settings ↗", _btnOverlaySettings));
+
+        // Hardware Key Actions (Image 2)
+        if (_cboTurboAction != null)
+            hwControls.Add(Select("hardware.turbokey", "Turbo / Mode Key", _cboTurboAction));
+        if (_cboPredatorAction != null)
+            hwControls.Add(Select("hardware.predatorkey", _wmi.ChassisFamily == AcerChassisFamily.Nitro ? "Nitro 'N' Key" : "Predator Key", _cboPredatorAction));
+
+        // System Optimization (Image 3)
+        if (_switchOptimizeServices != null)
+            hwControls.Add(Toggle("hardware.optimizeServices", "Optimize Acer Services (Disable OEM Bloatware)", _switchOptimizeServices));
+        if (_btnAutoRepair != null)
+            hwControls.Add(Button("hardware.autoRepairServices", "\uD83D\uDEE0 Auto-Repair OEM Services", _btnAutoRepair));
+
         sections.Add(new("hardware", "Hardware", hwControls.ToArray()));
         sections.Add(new("games", "Game Sync", [Toggle("games.enabled", "Apply profiles when games launch", _switchGameSync), Button("games.configure", "Configure game profiles ↗", _btnConfigureGames)]));
         sections.Add(new("app", "Application", [Toggle("app.startup", "Start with Windows", _switchStartWithWindows), Button("app.updates", "Check for updates", _btnCheckUpdates),

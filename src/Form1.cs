@@ -257,6 +257,7 @@ namespace PredatorControlApp
         private Label? _lblOptimizeServices;
         private PredatorToggle? _switchOptimizeServices;
         private Label? _lblOptimizeCounter;
+        private PredatorButton? _btnAutoRepair;
         private Label _lblWinKeyLock = null!;
 
         private PredatorToggle? _switchBootSound;
@@ -2374,11 +2375,11 @@ namespace PredatorControlApp
 
             y += S(24);
             int repairBtnW = S(240), repairBtnH = S(30);
-            var btnAutoRepair = MakeButton("\uD83D\uDEE0  Auto-Repair OEM Services", pad, y, repairBtnW, repairBtnH);
-            btnAutoRepair.Click += async (s, e) =>
+            _btnAutoRepair = MakeButton("\uD83D\uDEE0  Auto-Repair OEM Services", pad, y, repairBtnW, repairBtnH);
+            _btnAutoRepair.Click += async (s, e) =>
             {
-                btnAutoRepair.Enabled = false;
-                btnAutoRepair.Text = "\u23F3  Repairing...";
+                _btnAutoRepair.Enabled = false;
+                _btnAutoRepair.Text = "\u23F3  Repairing...";
                 if (_lblOptimizeCounter != null)
                 {
                     _lblOptimizeCounter.Text = "Scanning DriverStore and repairing OEM services...";
@@ -2404,8 +2405,8 @@ namespace PredatorControlApp
 
                 if (!IsDisposed)
                 {
-                    btnAutoRepair.Enabled = true;
-                    btnAutoRepair.Text = "\uD83D\uDEE0  Auto-Repair OEM Services";
+                    _btnAutoRepair.Enabled = true;
+                    _btnAutoRepair.Text = "\uD83D\uDEE0  Auto-Repair OEM Services";
                     UpdateOptimizeCounter();
                 }
             };

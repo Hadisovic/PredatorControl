@@ -129,6 +129,7 @@ namespace PredatorControlApp
 
         private readonly List<Panel> _separators = new();
         private Label _lblTitle = null!, _lblCpuTemp = null!, _lblGpuTemp = null!;
+        private Label _lblCpuHdr = null!, _lblCpuFanHdr = null!, _lblFanHdr = null!;
         private Label _lblGpuHdr = null!, _lblGpuFanHdr = null!, _lblPowerHdr = null!;
         private Label _lblCpuRpm = null!, _lblGpuRpm = null!;
         private Label? _lblAuxFanHdr, _lblAuxRpm;
@@ -1386,14 +1387,14 @@ namespace PredatorControlApp
             BackColor = theme.FormBg;
             ForeColor = Color.White;
 
-            int initialW = S(460);
+            int initialW = S(470);
             int workH = Screen.PrimaryScreen?.WorkingArea.Height ?? S(1000);
             ClientSize = new Size(initialW, Math.Max(S(500), Math.Min(S(980), workH - 40)));
 
             FormBorderStyle = FormBorderStyle.Sizable;
             ControlBox = false;
             Text = string.Empty;
-            MinimumSize = new Size(S(420), S(520));
+            MinimumSize = new Size(S(460), S(520));
             MaximumSize = new Size(S(700), S(1200));
             StartPosition = FormStartPosition.CenterScreen;
             try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
@@ -1485,32 +1486,57 @@ namespace PredatorControlApp
             y = S(16);
 
             // TELEMETRY SENSORS
-            MakeLabel("CPU:", pad, y, FontBody, Color.FromArgb(120, 120, 135));
-            _lblCpuTemp = MakeLabel("--\u00b0C", pad + S(34), y, FontBodyBold, Color.White);
+            _lblCpuHdr = MakeLabel("CPU:", pad, y, FontBody, Color.FromArgb(120, 120, 135));
+            _lblCpuHdr.AutoSize = true;
+            _lblCpuTemp = MakeLabel("--\u00b0C", _lblCpuHdr.Right + S(6), y, FontBodyBold, Color.White);
+            _lblCpuTemp.AutoSize = true;
 
-            _lblGpuHdr = MakeLabel("GPU:", ClientSize.Width / 2 + S(10), y, FontBody, Color.FromArgb(120, 120, 135));
-            _lblGpuTemp = MakeLabel("--\u00b0C", ClientSize.Width / 2 + S(46), y, FontBodyBold, Color.White);
+            int midX = ClientSize.Width / 2;
+            _lblGpuHdr = MakeLabel("GPU:", midX + S(10), y, FontBody, Color.FromArgb(120, 120, 135));
+            _lblGpuHdr.AutoSize = true;
+            _lblGpuTemp = MakeLabel("--\u00b0C", _lblGpuHdr.Right + S(6), y, FontBodyBold, Color.White);
+            _lblGpuTemp.AutoSize = true;
 
             y += S(24);
-            MakeLabel("CPU FAN:", pad, y, FontBody, Color.FromArgb(120, 120, 135));
-            _lblCpuRpm = MakeLabel("-- RPM", pad + S(64), y, FontBodyBold, Color.White);
+            _lblCpuFanHdr = MakeLabel("CPU FAN:", pad, y, FontBody, Color.FromArgb(120, 120, 135));
+            _lblCpuFanHdr.AutoSize = true;
+            _lblCpuRpm = MakeLabel("-- RPM", _lblCpuFanHdr.Right + S(6), y, FontBodyBold, Color.White);
+            _lblCpuRpm.AutoSize = true;
 
-            _lblGpuFanHdr = MakeLabel("GPU FAN:", ClientSize.Width / 2 + S(10), y, FontBody, Color.FromArgb(120, 120, 135));
-            _lblGpuRpm = MakeLabel("-- RPM", ClientSize.Width / 2 + S(74), y, FontBodyBold, Color.White);
+            _lblGpuFanHdr = MakeLabel("GPU FAN:", midX + S(10), y, FontBody, Color.FromArgb(120, 120, 135));
+            _lblGpuFanHdr.AutoSize = true;
+            _lblGpuRpm = MakeLabel("-- RPM", _lblGpuFanHdr.Right + S(6), y, FontBodyBold, Color.White);
+            _lblGpuRpm.AutoSize = true;
 
             if (_wmi.HasAuxFan)
             {
                 y += S(20);
                 _lblAuxFanHdr = MakeLabel("AUX FAN:", pad, y, FontBody, Color.FromArgb(120, 120, 135));
-                _lblAuxRpm = MakeLabel("-- RPM", pad + S(64), y, FontBodyBold, Color.White);
+                _lblAuxFanHdr.AutoSize = true;
+                _lblAuxRpm = MakeLabel("-- RPM", _lblAuxFanHdr.Right + S(6), y, FontBodyBold, Color.White);
+                _lblAuxRpm.AutoSize = true;
             }
 
             y += S(24);
-            MakeLabel("Fan speed:", pad, y, FontBody, Color.FromArgb(120, 120, 135));
-            _lblFanStatus = MakeLabel("Auto", pad + S(74), y, FontBodyBold, Color.White);
+            _lblFanHdr = MakeLabel("Fan speed:", pad, y, FontBody, Color.FromArgb(120, 120, 135));
+            _lblFanHdr.AutoSize = true;
+            _lblFanStatus = MakeLabel("Auto", _lblFanHdr.Right + S(6), y, FontBodyBold, Color.White);
+            _lblFanStatus.AutoSize = true;
 
-            _lblPowerHdr = MakeLabel("Power:", ClientSize.Width / 2 + S(10), y, FontBody, Color.FromArgb(120, 120, 135));
-            _lblPowerStatus = MakeLabel("Checking...", ClientSize.Width / 2 + S(56), y, FontBodyBold, Color.White);
+            _lblPowerHdr = MakeLabel("Power:", midX + S(10), y, FontBody, Color.FromArgb(120, 120, 135));
+            _lblPowerHdr.AutoSize = true;
+            _lblPowerStatus = MakeLabel("Checking...", _lblPowerHdr.Right + S(6), y, FontBodyBold, Color.White);
+            _lblPowerStatus.AutoSize = true;
+
+            _lblCpuHdr.SizeChanged += (s, e) => RepositionTelemetryLabels();
+            _lblCpuFanHdr.SizeChanged += (s, e) => RepositionTelemetryLabels();
+            _lblFanHdr.SizeChanged += (s, e) => RepositionTelemetryLabels();
+            _lblGpuHdr.SizeChanged += (s, e) => RepositionTelemetryLabels();
+            _lblGpuFanHdr.SizeChanged += (s, e) => RepositionTelemetryLabels();
+            _lblPowerHdr.SizeChanged += (s, e) => RepositionTelemetryLabels();
+            if (_lblAuxFanHdr != null)
+                _lblAuxFanHdr.SizeChanged += (s, e) => RepositionTelemetryLabels();
+            RepositionTelemetryLabels();
 
             y += S(30);
             AddSeparator(y);
@@ -1859,6 +1885,7 @@ namespace PredatorControlApp
             y += switchH + S(6);
             _lblBatteryHealth = MakeLabel("Battery Diagnostics: Calculating...", pad, y, FontBody, Color.FromArgb(120, 120, 135));
             _lblBatteryHealth.AutoSize = true;
+            _lblBatteryHealth.MaximumSize = new Size(contentW, 0);
             _contentPanel.Controls.Add(_lblBatteryHealth);
 
             // Populate battery health diagnostics immediately if available, or asynchronously on startup
@@ -2425,6 +2452,7 @@ namespace PredatorControlApp
             LoadRgbProfilesIntoUi();
 
             _contentPanel.AutoScrollMinSize = new Size(0, y + repairBtnH + S(50));
+            PerformCustomLayout();
             UpdateScrollMinSize();
         }
 
@@ -2588,58 +2616,106 @@ namespace PredatorControlApp
             lbl.Location = new Point(lbl.Left, controlY + (controlH - lbl.Height) / 2);
         }
 
-        protected override void OnResize(EventArgs e)
+        private void RepositionTelemetryLabels()
         {
-            base.OnResize(e);
+            if (_contentPanel == null || _lblCpuHdr == null) return;
+            int pad = S(24);
+            int midX = ClientSize.Width / 2;
 
-            if (_contentPanel != null && _lblTitle != null)
+            _lblCpuHdr.Left = pad;
+            if (_lblCpuTemp != null)
+                _lblCpuTemp.Left = Math.Max(_lblCpuHdr.Right + S(6), pad + S(42));
+
+            _lblCpuFanHdr.Left = pad;
+            if (_lblCpuRpm != null)
+                _lblCpuRpm.Left = Math.Max(_lblCpuFanHdr.Right + S(6), pad + S(74));
+
+            if (_lblAuxFanHdr != null)
             {
-                int pad = S(24);
-                int gap = S(6);
-                int contentW = Math.Max(S(350), ClientSize.Width - pad * 2);
+                _lblAuxFanHdr.Left = pad;
+                if (_lblAuxRpm != null)
+                    _lblAuxRpm.Left = Math.Max(_lblAuxFanHdr.Right + S(6), pad + S(74));
+            }
 
-                // Update separators
-                foreach (var sep in _separators)
-                    sep.Width = contentW;
+            _lblFanHdr.Left = pad;
+            if (_lblFanStatus != null)
+                _lblFanStatus.Left = Math.Max(_lblFanHdr.Right + S(6), pad + S(80));
 
-                // Telemetry right-column items
-                int midX = ClientSize.Width / 2;
-                if (_lblGpuHdr != null) _lblGpuHdr.Left = midX + S(10);
-                if (_lblGpuTemp != null) _lblGpuTemp.Left = midX + S(46);
-                if (_lblGpuFanHdr != null) _lblGpuFanHdr.Left = midX + S(10);
-                if (_lblGpuRpm != null) _lblGpuRpm.Left = midX + S(74);
-                if (_lblPowerHdr != null) _lblPowerHdr.Left = midX + S(10);
-                if (_lblPowerStatus != null) _lblPowerStatus.Left = midX + S(56);
+            if (_lblGpuHdr != null) _lblGpuHdr.Left = midX + S(10);
+            if (_lblGpuTemp != null && _lblGpuHdr != null)
+                _lblGpuTemp.Left = Math.Max(_lblGpuHdr.Right + S(6), midX + S(46));
 
-                // Theme switcher buttons
-                int themeBtnW = (contentW - 2 * gap) / 3;
-                if (_btnThemeTeal != null) _btnThemeTeal.Width = themeBtnW;
-                if (_btnThemeCrimson != null) { _btnThemeCrimson.Left = pad + themeBtnW + gap; _btnThemeCrimson.Width = themeBtnW; }
-                if (_btnThemeOled != null) { _btnThemeOled.Left = pad + (themeBtnW + gap) * 2; _btnThemeOled.Width = themeBtnW; }
+            if (_lblGpuFanHdr != null) _lblGpuFanHdr.Left = midX + S(10);
+            if (_lblGpuRpm != null && _lblGpuFanHdr != null)
+                _lblGpuRpm.Left = Math.Max(_lblGpuFanHdr.Right + S(6), midX + S(74));
 
-                // Power mode buttons
-                bool isNitro = _wmi.Capabilities.ChassisFamily == AcerChassisFamily.Nitro;
-                int btnW = isNitro ? (contentW - 2 * gap) / 3 : (contentW - 4 * gap) / 5;
-                if (_btnQuiet != null) _btnQuiet.Width = btnW;
+            if (_lblPowerHdr != null) _lblPowerHdr.Left = midX + S(10);
+            if (_lblPowerStatus != null && _lblPowerHdr != null)
+                _lblPowerStatus.Left = Math.Max(_lblPowerHdr.Right + S(6), midX + S(58));
+        }
+
+        private void PerformCustomLayout()
+        {
+            if (_contentPanel == null || _lblTitle == null) return;
+
+            int pad = S(24);
+            int gap = S(6);
+            int contentW = Math.Max(S(280), ClientSize.Width - pad * 2);
+
+            // Update separators
+            foreach (var sep in _separators)
+            {
+                sep.Left = pad;
+                sep.Width = contentW;
+            }
+
+            // Telemetry sensors layout
+            RepositionTelemetryLabels();
+
+            // Theme switcher buttons
+            int themeBtnW = (contentW - 2 * gap) / 3;
+            if (_btnThemeTeal != null) { _btnThemeTeal.Left = pad; _btnThemeTeal.Width = themeBtnW; }
+            if (_btnThemeCrimson != null) { _btnThemeCrimson.Left = pad + themeBtnW + gap; _btnThemeCrimson.Width = themeBtnW; }
+            if (_btnThemeOled != null) { _btnThemeOled.Left = pad + (themeBtnW + gap) * 2; _btnThemeOled.Width = contentW - (_btnThemeOled.Left - pad); }
+
+            // Power mode buttons
+            bool isNitro = _wmi.Capabilities.ChassisFamily == AcerChassisFamily.Nitro;
+            if (isNitro)
+            {
+                int btnW = (contentW - 2 * gap) / 3;
+                if (_btnQuiet != null) { _btnQuiet.Left = pad; _btnQuiet.Width = btnW; }
+                if (_btnBalanced != null) { _btnBalanced.Left = pad + (btnW + gap); _btnBalanced.Width = btnW; }
+                if (_btnPerform != null) { _btnPerform.Left = pad + (btnW + gap) * 2; _btnPerform.Width = contentW - (_btnPerform.Left - pad); }
+                if (_btnTurbo != null) _btnTurbo.Visible = false;
+                if (_btnEco != null) _btnEco.Visible = false;
+            }
+            else
+            {
+                int btnW = (contentW - 4 * gap) / 5;
+                if (_btnQuiet != null) { _btnQuiet.Left = pad; _btnQuiet.Width = btnW; }
                 if (_btnBalanced != null) { _btnBalanced.Left = pad + (btnW + gap); _btnBalanced.Width = btnW; }
                 if (_btnPerform != null) { _btnPerform.Left = pad + (btnW + gap) * 2; _btnPerform.Width = btnW; }
-                if (_btnTurbo != null) { _btnTurbo.Left = pad + (btnW + gap) * 3; _btnTurbo.Width = btnW; _btnTurbo.Visible = !isNitro; }
-                if (_btnEco != null) { _btnEco.Left = pad + (btnW + gap) * 4; _btnEco.Width = btnW; _btnEco.Visible = !isNitro; }
+                if (_btnTurbo != null) { _btnTurbo.Left = pad + (btnW + gap) * 3; _btnTurbo.Width = btnW; _btnTurbo.Visible = true; }
+                if (_btnEco != null) { _btnEco.Left = pad + (btnW + gap) * 4; _btnEco.Width = contentW - (_btnEco.Left - pad); _btnEco.Visible = true; }
+            }
 
-                // AC / Battery Profile dropdowns
-                int profileDropW = (contentW - gap) / 2;
-                if (_lblBatteryProfileHdr != null) _lblBatteryProfileHdr.Left = pad + profileDropW + gap;
-                if (_cboAcProfile != null) _cboAcProfile.Width = profileDropW;
-                if (_cboBatteryProfile != null) { _cboBatteryProfile.Left = pad + profileDropW + gap; _cboBatteryProfile.Width = profileDropW; }
+            // AC / Battery Profile dropdowns
+            int profileDropW = (contentW - gap) / 2;
+            if (_cboAcProfile != null) { _cboAcProfile.Left = pad; _cboAcProfile.Width = profileDropW; }
+            if (_lblBatteryProfileHdr != null) _lblBatteryProfileHdr.Left = pad + profileDropW + gap;
+            if (_cboBatteryProfile != null) { _cboBatteryProfile.Left = pad + profileDropW + gap; _cboBatteryProfile.Width = contentW - profileDropW - gap; }
 
-                // Fan mode buttons
-                int fanBtnW = (contentW - 2 * gap) / 3;
-                if (_btnAutoFan != null) _btnAutoFan.Width = fanBtnW;
-                if (_btnMaxFan != null) { _btnMaxFan.Left = pad + (fanBtnW + gap); _btnMaxFan.Width = fanBtnW; }
-                if (_btnCustomFan != null) { _btnCustomFan.Left = pad + (fanBtnW + gap) * 2; _btnCustomFan.Width = fanBtnW; }
+            // Fan mode buttons
+            int fanBtnW = (contentW - 2 * gap) / 3;
+            if (_btnAutoFan != null) { _btnAutoFan.Left = pad; _btnAutoFan.Width = fanBtnW; }
+            if (_btnMaxFan != null) { _btnMaxFan.Left = pad + (fanBtnW + gap); _btnMaxFan.Width = fanBtnW; }
+            if (_btnCustomFan != null) { _btnCustomFan.Left = pad + (fanBtnW + gap) * 2; _btnCustomFan.Width = contentW - (_btnCustomFan.Left - pad); }
 
-                // Fan sliders & sub buttons inside _pnlCustomFan
-                if (_pnlCustomFan != null) _pnlCustomFan.Width = contentW;
+            // Fan sliders & sub buttons inside _pnlCustomFan
+            if (_pnlCustomFan != null)
+            {
+                _pnlCustomFan.Left = pad;
+                _pnlCustomFan.Width = contentW;
                 if (_wmi.HasAuxFan)
                 {
                     int fanSliderW = (contentW - gap * 2) / 3;
@@ -2647,120 +2723,164 @@ namespace PredatorControlApp
                     if (_cpuFanSlider != null) _cpuFanSlider.Width = fanSliderW;
                     if (_gpuFanSlider != null) { _gpuFanSlider.Left = fanSliderW + gap; _gpuFanSlider.Width = fanSliderW; }
                     if (_lblAuxFanSpeedHdr != null) _lblAuxFanSpeedHdr.Left = (fanSliderW + gap) * 2;
-                    if (_auxFanSlider != null) { _auxFanSlider.Left = (fanSliderW + gap) * 2; _auxFanSlider.Width = fanSliderW; }
+                    if (_auxFanSlider != null) { _auxFanSlider.Left = (fanSliderW + gap) * 2; _auxFanSlider.Width = contentW - (_auxFanSlider.Left); }
                 }
                 else
                 {
                     int fanSliderW = (contentW - gap) / 2;
                     if (_lblGpuFanSpeedHdr != null) _lblGpuFanSpeedHdr.Left = fanSliderW + gap;
                     if (_cpuFanSlider != null) _cpuFanSlider.Width = fanSliderW;
-                    if (_gpuFanSlider != null) { _gpuFanSlider.Left = fanSliderW + gap; _gpuFanSlider.Width = fanSliderW; }
+                    if (_gpuFanSlider != null) { _gpuFanSlider.Left = fanSliderW + gap; _gpuFanSlider.Width = contentW - fanSliderW - gap; }
                 }
 
                 // Custom fan sub buttons
                 int subBtnW = (contentW - gap) / 2;
-                if (_btnFixedSpeed != null) _btnFixedSpeed.Width = subBtnW;
-                if (_btnFanCurve != null) { _btnFanCurve.Left = subBtnW + gap; _btnFanCurve.Width = subBtnW; }
-
-                // Display refresh rate buttons
-                if (_maxHz <= 60 || _btnMaxHz == null)
-                {
-                    if (_btn60Hz != null)
-                    {
-                        _btn60Hz.Left = pad;
-                        _btn60Hz.Width = contentW;
-                    }
-                }
-                else
-                {
-                    int dispBtnW = (contentW - gap) / 2;
-                    if (_btn60Hz != null) { _btn60Hz.Left = pad; _btn60Hz.Width = dispBtnW; }
-                    if (_btnMaxHz != null) { _btnMaxHz.Left = pad + dispBtnW + gap; _btnMaxHz.Width = dispBtnW; }
-                }
-
-                // GPU Working Mode (MUX Switch) buttons
-                int gpuBtnW = (contentW - 2 * gap) / 3;
-                if (_btnGpuOptimus != null) _btnGpuOptimus.Width = gpuBtnW;
-                if (_btnGpuDiscrete != null) { _btnGpuDiscrete.Left = pad + gpuBtnW + gap; _btnGpuDiscrete.Width = gpuBtnW; }
-                if (_btnGpuAuto != null) { _btnGpuAuto.Left = pad + (gpuBtnW + gap) * 2; _btnGpuAuto.Width = gpuBtnW; }
-
-                // LCD Overdrive & Backlight 30s Switches
-                if (_switchLcdOverdrive != null) _switchLcdOverdrive.Left = ClientSize.Width - pad - S(48);
-                if (_switchCoolBoost != null) _switchCoolBoost.Left = ClientSize.Width - pad - S(48);
-                if (_switchBacklight30s != null) _switchBacklight30s.Left = ClientSize.Width - pad - S(48);
-
-                // Battery Limit & Startup Switches
-                if (_switchBatteryLimit != null) _switchBatteryLimit.Left = ClientSize.Width - pad - S(48);
-                if (_switchStartWithWindows != null) _switchStartWithWindows.Left = ClientSize.Width - pad - S(48);
-
-                // System & Hardware Controls
-                if (_switchWinKeyLock != null) _switchWinKeyLock.Left = ClientSize.Width - pad - S(48);
-                if (_switchJelliEnabled != null) _switchJelliEnabled.Left = ClientSize.Width - pad - S(48);
-                if (_switchBootSound != null) _switchBootSound.Left = ClientSize.Width - pad - S(48);
-                if (_switchUsbCharging != null) _switchUsbCharging.Left = ClientSize.Width - pad - S(48);
-                if (_switchAutoCoolBoost != null) _switchAutoCoolBoost.Left = ClientSize.Width - pad - S(48);
-                if (_cboTurboAction != null && _cboPredatorAction != null)
-                {
-                    int keyDropW = (contentW - gap) / 2;
-                    _cboTurboAction.Width = keyDropW;
-                    _cboPredatorAction.Left = pad + keyDropW + gap;
-                    _cboPredatorAction.Width = keyDropW;
-                }
-                if (_switchOptimizeServices != null) _switchOptimizeServices.Left = ClientSize.Width - pad - S(48);
-
-                // Gaming Overlay controls
-                if (_switchOverlay != null) _switchOverlay.Left = ClientSize.Width - pad - S(48);
-                int overlayModeBtnW = (contentW - 3 * gap) / 4;
-                if (_btnOverlayLight != null) { _btnOverlayLight.Left = pad; _btnOverlayLight.Width = overlayModeBtnW; }
-                if (_btnOverlayDefault != null) { _btnOverlayDefault.Left = pad + overlayModeBtnW + gap; _btnOverlayDefault.Width = overlayModeBtnW; }
-                if (_btnOverlayFull != null) { _btnOverlayFull.Left = pad + (overlayModeBtnW + gap) * 2; _btnOverlayFull.Width = overlayModeBtnW; }
-                if (_btnOverlayComplete != null) { _btnOverlayComplete.Left = pad + (overlayModeBtnW + gap) * 3; _btnOverlayComplete.Width = overlayModeBtnW; }
-                if (_btnOverlaySettings != null) { _btnOverlaySettings.Left = pad; _btnOverlaySettings.Width = contentW; }
-
-                // Keyboard RGB controls
-                if (_rgbDropDown != null) _rgbDropDown.Width = contentW;
-
-                // Keyboard 4-Zone controls
-                int zoneBtnW = (contentW - 4 * gap) / 5;
-                if (_btnAllZones != null)
-                {
-                    _btnAllZones.Left = pad;
-                    _btnAllZones.Width = zoneBtnW;
-                }
-                for (int z = 0; z < 4; z++)
-                {
-                    if (_btnZones[z] != null)
-                    {
-                        _btnZones[z].Left = pad + (zoneBtnW + gap) * (z + 1);
-                        _btnZones[z].Width = zoneBtnW;
-                    }
-                }
-
-                int preW = (contentW - 5 * gap) / 6;
-                for (int i = 0; i < 6; i++)
-                {
-                    if (_btnPresetColors[i] != null)
-                    {
-                        _btnPresetColors[i].Left = pad + (preW + gap) * i;
-                        _btnPresetColors[i].Width = preW;
-                    }
-                }
-
-                if (_btnCustomColor != null) _btnCustomColor.Width = contentW;
-
-                int sliderW = _wmi.Capabilities.SupportsRgbLighting ? (contentW - gap * 4) / 2 : contentW;
-                if (_brightnessSlider != null) _brightnessSlider.Width = sliderW;
-                if (_lblSpeedHdr != null) _lblSpeedHdr.Left = midX + S(10);
-                if (_speedSlider != null) { _speedSlider.Left = midX + S(10); _speedSlider.Width = sliderW; }
-
-                // Game Sync & Updates
-                if (_switchGameSync != null) _switchGameSync.Left = ClientSize.Width - pad - S(48);
-                if (_btnConfigureGames != null) _btnConfigureGames.Width = contentW;
-                if (_btnCheckUpdates != null) _btnCheckUpdates.Left = ClientSize.Width - pad - _btnCheckUpdates.Width;
-
-                UpdateScrollMinSize();
-                _contentPanel.Invalidate(true);
+                if (_btnFixedSpeed != null) { _btnFixedSpeed.Left = 0; _btnFixedSpeed.Width = subBtnW; }
+                if (_btnFanCurve != null) { _btnFanCurve.Left = subBtnW + gap; _btnFanCurve.Width = contentW - subBtnW - gap; }
             }
+
+            // Display refresh rate buttons
+            if (_maxHz <= 60 || _btnMaxHz == null)
+            {
+                if (_btn60Hz != null)
+                {
+                    _btn60Hz.Left = pad;
+                    _btn60Hz.Width = contentW;
+                }
+            }
+            else
+            {
+                int dispBtnW = (contentW - gap) / 2;
+                if (_btn60Hz != null) { _btn60Hz.Left = pad; _btn60Hz.Width = dispBtnW; }
+                if (_btnMaxHz != null) { _btnMaxHz.Left = pad + dispBtnW + gap; _btnMaxHz.Width = contentW - dispBtnW - gap; }
+            }
+
+            // GPU Working Mode (MUX Switch) buttons
+            int gpuBtnW = (contentW - 2 * gap) / 3;
+            if (_btnGpuOptimus != null) { _btnGpuOptimus.Left = pad; _btnGpuOptimus.Width = gpuBtnW; }
+            if (_btnGpuDiscrete != null) { _btnGpuDiscrete.Left = pad + gpuBtnW + gap; _btnGpuDiscrete.Width = gpuBtnW; }
+            if (_btnGpuAuto != null) { _btnGpuAuto.Left = pad + (gpuBtnW + gap) * 2; _btnGpuAuto.Width = contentW - (_btnGpuAuto.Left - pad); }
+
+            // External monitor rows
+            if (_pnlExternalMonitors != null && _pnlExternalMonitors.Visible)
+            {
+                _pnlExternalMonitors.Left = pad;
+                _pnlExternalMonitors.Width = contentW;
+                int extDropW = S(110);
+                int extBtnW = S(70);
+                int extGap = S(6);
+                foreach (Control c in _pnlExternalMonitors.Controls)
+                {
+                    if (c is PredatorButton pb && pb.Text == "Apply")
+                    {
+                        pb.Left = contentW - extBtnW;
+                        pb.Width = extBtnW;
+                    }
+                    else if (c is PredatorDropDown pdd)
+                    {
+                        pdd.Left = contentW - extDropW - extBtnW - extGap;
+                        pdd.Width = extDropW;
+                    }
+                    else if (c is Label lbl)
+                    {
+                        lbl.Left = 0;
+                        lbl.Width = Math.Max(10, contentW - extDropW - extBtnW - extGap * 2);
+                    }
+                }
+            }
+
+            // Responsive Toggle Switches (aligned to pad + contentW)
+            int switchRight = pad + contentW;
+            void PlaceToggle(PredatorToggle? sw)
+            {
+                if (sw != null) sw.Left = switchRight - sw.Width;
+            }
+
+            PlaceToggle(_switchCoolBoost);
+            PlaceToggle(_switchLcdOverdrive);
+            PlaceToggle(_switchBacklight30s);
+            PlaceToggle(_switchBatteryLimit);
+            PlaceToggle(_switchStartWithWindows);
+            PlaceToggle(_switchWinKeyLock);
+            PlaceToggle(_switchJelliEnabled);
+            PlaceToggle(_switchBootSound);
+            PlaceToggle(_switchUsbCharging);
+            PlaceToggle(_switchAutoCoolBoost);
+            PlaceToggle(_switchOptimizeServices);
+            PlaceToggle(_switchOverlay);
+            PlaceToggle(_switchGameSync);
+
+            if (_lblBatteryHealth != null)
+            {
+                _lblBatteryHealth.Left = pad;
+                _lblBatteryHealth.MaximumSize = new Size(contentW, 0);
+            }
+
+            // Keyboard Shortcuts dropdowns
+            if (_cboTurboAction != null && _cboPredatorAction != null)
+            {
+                int keyDropW = (contentW - gap) / 2;
+                _cboTurboAction.Left = pad;
+                _cboTurboAction.Width = keyDropW;
+                _cboPredatorAction.Left = pad + keyDropW + gap;
+                _cboPredatorAction.Width = contentW - keyDropW - gap;
+            }
+
+            // Gaming Overlay controls
+            int overlayModeBtnW = (contentW - 3 * gap) / 4;
+            if (_btnOverlayLight != null) { _btnOverlayLight.Left = pad; _btnOverlayLight.Width = overlayModeBtnW; }
+            if (_btnOverlayDefault != null) { _btnOverlayDefault.Left = pad + overlayModeBtnW + gap; _btnOverlayDefault.Width = overlayModeBtnW; }
+            if (_btnOverlayFull != null) { _btnOverlayFull.Left = pad + (overlayModeBtnW + gap) * 2; _btnOverlayFull.Width = overlayModeBtnW; }
+            if (_btnOverlayComplete != null) { _btnOverlayComplete.Left = pad + (overlayModeBtnW + gap) * 3; _btnOverlayComplete.Width = contentW - (_btnOverlayComplete.Left - pad); }
+            if (_btnOverlaySettings != null) { _btnOverlaySettings.Left = pad; _btnOverlaySettings.Width = contentW; }
+
+            // Keyboard RGB controls
+            if (_rgbDropDown != null) { _rgbDropDown.Left = pad; _rgbDropDown.Width = contentW; }
+
+            // Keyboard 4-Zone controls
+            int zoneBtnW = (contentW - 4 * gap) / 5;
+            if (_btnAllZones != null) { _btnAllZones.Left = pad; _btnAllZones.Width = zoneBtnW; }
+            for (int z = 0; z < 4; z++)
+            {
+                if (_btnZones[z] != null)
+                {
+                    _btnZones[z].Left = pad + (zoneBtnW + gap) * (z + 1);
+                    _btnZones[z].Width = (z == 3) ? (contentW - (_btnZones[z].Left - pad)) : zoneBtnW;
+                }
+            }
+
+            int preW = (contentW - 5 * gap) / 6;
+            for (int i = 0; i < 6; i++)
+            {
+                if (_btnPresetColors[i] != null)
+                {
+                    _btnPresetColors[i].Left = pad + (preW + gap) * i;
+                    _btnPresetColors[i].Width = (i == 5) ? (contentW - (_btnPresetColors[i].Left - pad)) : preW;
+                }
+            }
+
+            if (_btnCustomColor != null) { _btnCustomColor.Left = pad; _btnCustomColor.Width = contentW; }
+
+            int midX = ClientSize.Width / 2;
+            int sliderW = _wmi.Capabilities.SupportsRgbLighting ? (contentW - gap * 4) / 2 : contentW;
+            if (_brightnessSlider != null) { _brightnessSlider.Left = pad; _brightnessSlider.Width = sliderW; }
+            if (_lblSpeedHdr != null) _lblSpeedHdr.Left = midX + S(10);
+            if (_speedSlider != null) { _speedSlider.Left = midX + S(10); _speedSlider.Width = sliderW; }
+
+            if (_btnAutoRepair != null) { _btnAutoRepair.Left = pad; _btnAutoRepair.Width = contentW; }
+
+            // Game Sync & Updates
+            if (_btnConfigureGames != null) { _btnConfigureGames.Left = pad; _btnConfigureGames.Width = contentW; }
+            if (_btnCheckUpdates != null) _btnCheckUpdates.Left = pad + contentW - _btnCheckUpdates.Width;
+
+            UpdateScrollMinSize();
+            _contentPanel.Invalidate(true);
+        }
+
+        protected override void OnResize(EventArgs e)
+        {
+            base.OnResize(e);
+            PerformCustomLayout();
 
             if (WindowState == FormWindowState.Minimized)
             {
@@ -2781,7 +2901,18 @@ namespace PredatorControlApp
             base.OnDpiChanged(e);
             _dpiScale = e.DeviceDpiNew / 96f;
             _contentPanel?.SetDpiScale(_dpiScale);
+
+            if (!e.SuggestedRectangle.IsEmpty)
+            {
+                Bounds = e.SuggestedRectangle;
+            }
+
+            MinimumSize = new Size(S(460), S(520));
+            MaximumSize = new Size(S(700), S(1200));
+            if (Width < S(460)) Width = S(460);
+
             FitFormToCurrentScreen();
+            PerformCustomLayout();
             UpdateScrollMinSize();
             _contentPanel?.Invalidate(true);
         }
@@ -2794,6 +2925,11 @@ namespace PredatorControlApp
             {
                 _dpiScale = currentDpiScale;
                 _contentPanel?.SetDpiScale(_dpiScale);
+                MinimumSize = new Size(S(460), S(520));
+                MaximumSize = new Size(S(700), S(1200));
+                if (Width < S(460)) Width = S(460);
+                FitFormToCurrentScreen();
+                PerformCustomLayout();
                 UpdateScrollMinSize();
                 _contentPanel?.Invalidate(true);
             }
@@ -2803,6 +2939,7 @@ namespace PredatorControlApp
         {
             base.OnResizeEnd(e);
             FitFormToCurrentScreen();
+            PerformCustomLayout();
             UpdateScrollMinSize();
         }
 

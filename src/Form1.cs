@@ -396,30 +396,15 @@ namespace PredatorControlApp
                 if (IsServicesOptimizationEnabled())
                     OptimizeAcerServices();
 
-                // On Nitro chassis, ensure hardware bridging services (battery limit / EC) are enabled & running
-                if (_wmi.ChassisFamily == AcerChassisFamily.Nitro)
+                // Auto-Repair and ensure essential OEM services for detected chassis (Nitro & Predator)
+                _ = Task.Run(() =>
                 {
-                    _ = Task.Run(() =>
+                    try
                     {
-                        string[] nitroEssential = { "ASMSvc", "AcerServiceSvc", "AcerDeviceEnablingServiceV2", "AcerDeviceEnablingService" };
-                        foreach (var svc in nitroEssential)
-                        {
-                            try
-                            {
-                                using var sc = new ServiceController(svc);
-                                if (sc.StartType == ServiceStartMode.Disabled)
-                                {
-                                    SetServiceStartup(svc, disable: false);
-                                }
-                                if (sc.Status == ServiceControllerStatus.Stopped)
-                                {
-                                    StartServiceSafe(svc);
-                                }
-                            }
-                            catch { }
-                        }
-                    });
-                }
+                        OemServiceManager.AutoRepairForChassis(_wmi.ChassisFamily);
+                    }
+                    catch { }
+                });
 
                 // F-7 (v1.2.5): 4-point RGB watchdog to defeat AcerLightingService's late-boot INI override.
                 // AcerLightingService re-initializes 1-8 seconds after user logon and writes its factory
@@ -2200,6 +2185,44 @@ namespace PredatorControlApp
             _lblOptimizeCounter = MakeLabel(string.Empty, pad, y, FontBody, Color.FromArgb(120, 120, 135));
             UpdateOptimizeCounter();
 
+            y += S(24);
+            int repairBtnW = S(240), repairBtnH = S(30);
+            var btnAutoRepair = MakeButton("\uD83D\uDEE0  Auto-Repair OEM Services", pad, y, repairBtnW, repairBtnH);
+            btnAutoRepair.Click += async (s, e) =>
+            {
+                btnAutoRepair.Enabled = false;
+                btnAutoRepair.Text = "\u23F3  Repairing...";
+                if (_lblOptimizeCounter != null)
+                {
+                    _lblOptimizeCounter.Text = "Scanning DriverStore and repairing OEM services...";
+                    _lblOptimizeCounter.ForeColor = Color.FromArgb(255, 189, 46);
+                }
+
+                await Task.Run(() =>
+                {
+                    try
+                    {
+                        OemServiceManager.AutoRepairForChassis(_wmi.ChassisFamily, msg =>
+                        {
+                            try
+                            {
+                                if (!IsDisposed && _lblOptimizeCounter != null)
+                                    BeginInvoke(() => _lblOptimizeCounter.Text = msg);
+                            }
+                            catch { }
+                        });
+                    }
+                    catch { }
+                });
+
+                if (!IsDisposed)
+                {
+                    btnAutoRepair.Enabled = true;
+                    btnAutoRepair.Text = "\uD83D\uDEE0  Auto-Repair OEM Services";
+                    UpdateOptimizeCounter();
+                }
+            };
+
             _switchOptimizeServices.CheckedChanged += (s, e) =>
             {
                 bool enabled = _switchOptimizeServices.Checked;
@@ -2221,7 +2244,7 @@ namespace PredatorControlApp
 
             LoadRgbProfilesIntoUi();
 
-            _contentPanel.AutoScrollMinSize = new Size(0, y + optSwitchH + S(50));
+            _contentPanel.AutoScrollMinSize = new Size(0, y + repairBtnH + S(50));
         }
 
         private void SelectZone(int zoneIndex)

@@ -129,7 +129,8 @@ namespace PredatorControlApp
             {
                 var (_, model, _, _) = WmiController.GetSystemIdentity();
                 if (model.Contains("Nitro", StringComparison.OrdinalIgnoreCase) ||
-                    model.StartsWith("AN", StringComparison.OrdinalIgnoreCase))
+                    model.StartsWith("AN", StringComparison.OrdinalIgnoreCase) ||
+                    model.StartsWith("AV", StringComparison.OrdinalIgnoreCase))
                 {
                     _current = NitroCrimson;
                 }

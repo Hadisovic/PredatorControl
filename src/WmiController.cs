@@ -380,33 +380,33 @@ namespace PredatorControlApp
         public bool HasAuxFan => AuxFanRpm.HasValue && AuxFanRpm.Value > 0;
         public int? GpuPowerW => GetSensorReading(0x0D);
 
-        private AcerChassisFamily? _chassisFamily;
-        public AcerChassisFamily ChassisFamily
+        private static AcerChassisFamily? _detectedChassisFamily;
+        public static AcerChassisFamily DetectChassisFamily()
         {
-            get
+            if (_detectedChassisFamily.HasValue) return _detectedChassisFamily.Value;
+            var (_, model, _, _) = GetSystemIdentity();
+            if (model.Contains("Nitro", StringComparison.OrdinalIgnoreCase) ||
+                model.StartsWith("AN", StringComparison.OrdinalIgnoreCase) ||
+                model.StartsWith("AV", StringComparison.OrdinalIgnoreCase))
             {
-                if (_chassisFamily.HasValue) return _chassisFamily.Value;
-                var (_, model, _, _) = GetSystemIdentity();
-                if (model.Contains("Nitro", StringComparison.OrdinalIgnoreCase) ||
-                    model.StartsWith("AN", StringComparison.OrdinalIgnoreCase))
-                {
-                    _chassisFamily = AcerChassisFamily.Nitro;
-                }
-                else if (model.Contains("Predator", StringComparison.OrdinalIgnoreCase) ||
-                         model.Contains("Helios", StringComparison.OrdinalIgnoreCase) ||
-                         model.Contains("Triton", StringComparison.OrdinalIgnoreCase) ||
-                         model.StartsWith("PH", StringComparison.OrdinalIgnoreCase) ||
-                         model.StartsWith("PT", StringComparison.OrdinalIgnoreCase))
-                {
-                    _chassisFamily = AcerChassisFamily.Predator;
-                }
-                else
-                {
-                    _chassisFamily = AcerChassisFamily.GenericAcer;
-                }
-                return _chassisFamily.Value;
+                _detectedChassisFamily = AcerChassisFamily.Nitro;
             }
+            else if (model.Contains("Predator", StringComparison.OrdinalIgnoreCase) ||
+                     model.Contains("Helios", StringComparison.OrdinalIgnoreCase) ||
+                     model.Contains("Triton", StringComparison.OrdinalIgnoreCase) ||
+                     model.StartsWith("PH", StringComparison.OrdinalIgnoreCase) ||
+                     model.StartsWith("PT", StringComparison.OrdinalIgnoreCase))
+            {
+                _detectedChassisFamily = AcerChassisFamily.Predator;
+            }
+            else
+            {
+                _detectedChassisFamily = AcerChassisFamily.GenericAcer;
+            }
+            return _detectedChassisFamily.Value;
         }
+
+        public AcerChassisFamily ChassisFamily => DetectChassisFamily();
 
         private HardwareCapabilities? _cachedCapabilities;
         public HardwareCapabilities Capabilities => _cachedCapabilities ??= ProbeCapabilities();
@@ -429,13 +429,14 @@ namespace PredatorControlApp
             bool batterySupported = IsBatteryControlSupported();
 
             // 4. Power Modes definition
-            int modeCount = chassis == AcerChassisFamily.Nitro ? 3 : 5;
-            string[] modeLabels = chassis == AcerChassisFamily.Nitro
-                ? new[] { "Quiet", "Default", "Performance" }
-                : new[] { "Quiet", "Balanced", "Perf", "Turbo", "Eco" };
-            byte[] modeValues = chassis == AcerChassisFamily.Nitro
-                ? new byte[] { 0x00, 0x01, 0x04 }
-                : new byte[] { 0x00, 0x01, 0x04, 0x05, 0x06 };
+            bool isPredator = chassis == AcerChassisFamily.Predator;
+            int modeCount = isPredator ? 5 : 3;
+            string[] modeLabels = isPredator
+                ? new[] { "Quiet", "Balanced", "Perf", "Turbo", "Eco" }
+                : new[] { "Quiet", "Default", "Performance" };
+            byte[] modeValues = isPredator
+                ? new byte[] { 0x00, 0x01, 0x04, 0x05, 0x06 }
+                : new byte[] { 0x00, 0x01, 0x04 };
 
             return new HardwareCapabilities
             {
@@ -1295,7 +1296,7 @@ namespace PredatorControlApp
             uint low32_get = 0x80001 | (hotkeyNum << 8);
 
             // 1. Hardware Service named pipes (kSvcCmdWMIGetFunction = 0x1E)
-            string[] pipeNames = { "systemmonitoring_hardware_service_", "predatorsense_hardware_service_" };
+            string[] pipeNames = { "systemmonitoring_hardware_service_", "predatorsense_hardware_service_", "nitrosense_hardware_service_" };
             byte[] packet = new byte[11];
             BitConverter.GetBytes((ushort)0x1E).CopyTo(packet, 0);
             packet[2] = 1;
@@ -1395,7 +1396,7 @@ namespace PredatorControlApp
             bool anySuccess = false;
 
             // Path 1: Hardware Service Named Pipe
-            string[] pipeNames = { "systemmonitoring_hardware_service_", "predatorsense_hardware_service_" };
+            string[] pipeNames = { "systemmonitoring_hardware_service_", "predatorsense_hardware_service_", "nitrosense_hardware_service_" };
             byte[] packet = new byte[15];
             BitConverter.GetBytes((ushort)0x1F).CopyTo(packet, 0); // kSvcCmdWMISetFunction
             packet[2] = 1;                                         // 1 argument
@@ -1520,7 +1521,8 @@ namespace PredatorControlApp
                          model.Contains("Nitro", StringComparison.OrdinalIgnoreCase) ||
                          model.Contains("PH", StringComparison.OrdinalIgnoreCase) ||
                          model.Contains("PT", StringComparison.OrdinalIgnoreCase) ||
-                         model.Contains("AN", StringComparison.OrdinalIgnoreCase));
+                         model.Contains("AN", StringComparison.OrdinalIgnoreCase) ||
+                         model.Contains("AV", StringComparison.OrdinalIgnoreCase));
                 }
                 catch { }
 

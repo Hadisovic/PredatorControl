@@ -396,7 +396,15 @@ namespace PredatorControlApp
         public int? CpuFanRpm => GetSensorReading(0x02);
         public int? GpuFanRpm => GetSensorReading(0x06);
         public int? AuxFanRpm => GetSensorReading(0x07) ?? GetSensorReading(0x0B);
-        public bool HasAuxFan => Supports(AcerFeature.AuxFan) || (AuxFanRpm.HasValue && AuxFanRpm.Value > 0);
+        public bool HasAuxFan
+        {
+            get
+            {
+                if (_supportedFeatures.HasValue && (_supportedFeatures.Value & AcerFeature.AuxFan) != 0)
+                    return true;
+                return AuxFanRpm.HasValue && AuxFanRpm.Value > 0;
+            }
+        }
         public int? GpuPowerW => GetSensorReading(0x0D);
 
         private static AcerChassisFamily? _detectedChassisFamily;
@@ -428,7 +436,29 @@ namespace PredatorControlApp
         public AcerChassisFamily ChassisFamily => DetectChassisFamily();
 
         private AcerFeature? _supportedFeatures;
-        public AcerFeature SupportedFeatures => _supportedFeatures ??= ProbeSupportedFeatures();
+        private bool _probingFeatures;
+
+        public AcerFeature SupportedFeatures
+        {
+            get
+            {
+                if (!_supportedFeatures.HasValue)
+                {
+                    if (_probingFeatures) return AcerFeature.None;
+                    _probingFeatures = true;
+                    try
+                    {
+                        _supportedFeatures = ProbeSupportedFeatures();
+                    }
+                    finally
+                    {
+                        _probingFeatures = false;
+                    }
+                }
+                return _supportedFeatures.Value;
+            }
+        }
+
         public bool Supports(AcerFeature feature) => (SupportedFeatures & feature) == feature;
 
         private AcerFeature ProbeSupportedFeatures()
@@ -459,7 +489,9 @@ namespace PredatorControlApp
             // USB Charging when powered off: supported on Predator and Nitro models
             f |= AcerFeature.UsbCharging;
 
-            if (HasAuxFan)
+            // 3rd Aux fan: supported if sensor returns a reading > 0 (Helios 18 / Triton 17)
+            var aux = AuxFanRpm;
+            if (aux.HasValue && aux.Value > 0)
                 f |= AcerFeature.AuxFan;
 
             return f;

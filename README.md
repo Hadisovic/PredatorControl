@@ -4,7 +4,7 @@
 
 # 🪼 Predator Control
 
-[![Version](https://img.shields.io/badge/version-1.2.6-00E5FF?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Hadisovic/PredatorControl/releases)
+[![Version](https://img.shields.io/badge/version-1.3.0-00E5FF?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Hadisovic/PredatorControl/releases)
 [![Jelli UI](https://img.shields.io/badge/Jelli%20UI-Live%20%F0%9F%AA%BC-FF69B4?style=for-the-badge&logo=sparkles&logoColor=white)](#-jelli-ui)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-00B4CC?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/Hadisovic/PredatorControl)
 [![Framework](https://img.shields.io/badge/.NET-10.0%20Windows-512BD4?style=for-the-badge&logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/)
@@ -136,11 +136,43 @@ The following services are disabled when the **Disable Acer Bloatware Services**
 
 ### 🖥️ Hardware & Battery Controls
 - 🔋 **80% Battery Charge Limiter**: Hardware register toggle to preserve battery lifespan.
+- 🩺 **Battery Health Diagnostics & Wear Monitor**: Live display of battery health %, wear percentage, current vs design capacity (mWh), and cycle count, plus 1-click Windows Battery Report generation.
+- 🎬🔊 **Startup Animation & Sound**: Toggles Acer Predator POST boot animation and chime directly through hardware services.
+- ⚡ **Power-off USB Charging**: Turns designated USB port (marked with battery icon) into a power bank when laptop is off, sleeping, or hibernating, with automatic 30% battery cutoff reserve.
 - 🔒 **Windows Key Lock**: Disables Windows key during gaming.
-- 🔊 **BIOS Startup Sound**: Toggle Acer Predator boot chime directly in BIOS/EC.
 - ⚡ **LCD Overdrive (3ms)**: Toggles panel response time.
 - 🖱️ **GPU MUX Switch**: Optimus, Discrete (NVIDIA Only), and Advanced Optimus.
 - 🖥️ **Refresh Rate Switcher**: Switch internal display (60Hz ↔ 165Hz/240Hz) and external monitors via Win32 CCD API.
+
+---
+
+### 🔧 BIOS Guide: How to Enable Startup Animation & Sound
+
+On Acer Predator and Nitro laptops (such as the Predator Helios Neo 16 / PHN16-71), the boot chime and animation run at the hardware level during the **Power-On Self-Test (POST)** phase before Windows starts.
+
+> [!IMPORTANT]
+> **If the boot animation and sound do not play on startup:**  
+> If POST Animation & Sound was muted or disabled in your laptop's BIOS setup, the hardware ignores desktop software requests. To restore and control it:
+> 1. **Restart your laptop** and immediately press **`F2`** repeatedly as soon as the screen turns on to enter BIOS Setup.
+> 2. Use the arrow keys to navigate to the **Main** tab.
+> 3. Scroll down to **POST Animation & Sound** (or **Boot Sound** depending on BIOS revision).
+> 4. Press `Enter`, change the value to **`Enabled`**, and press `Enter`.
+> 5. Press **`F10`**, select **Yes**, and hit `Enter` to save changes and reboot.
+> 6. Once Windows starts, you can now toggle **Startup Animation & Sound** directly inside Predator Control anytime without rebooting into BIOS!
+
+---
+
+### 🔋 Power-off USB Charging: How It Works
+
+Power-off USB Charging turns your laptop into a portable power bank, allowing you to charge smartphones, controllers, wireless earbuds, or other USB devices even when the laptop is **completely shut down, asleep, or hibernating**.
+
+* **Which USB Port?**  
+  Look closely at your laptop's USB-A ports. The designated port is marked with a **battery icon** or **lightning bolt** next to the standard USB symbol.
+* **Safety Battery Cutoff Reserve:**  
+  When your laptop is running on battery power (unplugged from AC), Power-off USB Charging automatically stops discharging if the laptop battery drops below **30%**. This ensures your laptop never exhausts its own battery while powering external devices.
+* **Direct Integration:**  
+  Predator Control synchronizes the state directly with the hardware controller and Acer configuration layer (`USBChargeState`, `USBChargeSwitch`, and `USBChargeLimit`).
+
 
 ### 🎮 OSD & In-Game Gaming Overlay
 - ⚡ **In-Game Gaming Overlay HUD**: Real-time neon green FPS counter (powered by zero-injection Windows ETW kernel Present monitoring), CPU/GPU temperatures, fan RPMs, active GPU wattage (`0x0D`), 60-second rolling sparkline performance graph, and battery gauge. Toggle with `Ctrl + Shift + O`, drag anywhere with `Ctrl + Shift + Drag`.
@@ -212,6 +244,14 @@ PredatorControl/
 
 ## 📋 Changelog
 
+### v1.3.0 — Battery Diagnostics, Multi-Monitor High-DPI & Hardware Controls
+- 🔋 **Battery Health Diagnostics & Wear Monitor**: Integrated live battery health %, wear percentage, current vs design capacity (mWh), and cycle count into the Battery Care section, plus 1-click Windows Battery Report generation.
+- 🎬🔊 **Startup Animation & Sound**: Renamed and upgraded boot chime control to full Startup Animation & Sound with synchronous integration to `AcerAgentService` (port 46933) and complete BIOS POST guide.
+- ⚡ **Power-off USB Charging**: Control power delivery to designated USB charging port while laptop is off, sleeping, or hibernating, with automatic 30% battery reserve cutoff protection.
+- 🖥️ **Multi-Monitor High-DPI Scaling**: Resolved text overlap in the telemetry sensor cluster (CPU, GPU, fans, power) and eliminated horizontal clipping when moving the application across displays with differing DPI scaling factors.
+- 🪟 **Focus & Scroll Stability**: Fixed focus-induced scroll snapping and scroll bounce when switching between active windows.
+- 🛠️ **Universal OEM Auto-Repair**: Auto-repair subsystem verifies, restores, and configures background services across both Predator and Nitro chassis.
+
 ### v1.2.1 — Jelli Toggle Fix & RGB Polish
 - 🔧 **Jelli Toggle — True Off**: Toggling Jelli off now kills all WebView2 child Chromium processes, guaranteeing **zero CPU and zero RAM** footprint when disabled.
 - 🔧 **Jelli Toggle — No Stuck Switching**: Fixed a hang in the Settings panel where the toggle would get stuck on "Switching..." if settings validation failed; now uses a direct IPC legacy path.
@@ -240,8 +280,9 @@ PredatorControl/
 - [ ] 🎮 **Raw Input HID Hook**: Native hardware Predator Key sniffing (`UsagePage 0xFFA0`)
 - [ ] ⚡ **ACPI Event Sniffing**: Deep `AcerEvent` / `APGeEvent` mapping
 - [ ] 🌊 **RGB Wave Direction**: Direction toggle (Left-to-Right / Right-to-Left)
-- [ ] 🔋 **USB Power-Off Charging**: Direct firmware toggle
-- [ ] 🩺 **Hardware Health Diagnostics**: Battery wear % & SSD S.M.A.R.T. readout
+- [x] 🔋 **USB Power-Off Charging**: Direct firmware & QA sync toggle (Live in v1.3.0)
+- [x] 🩺 **Hardware Health Diagnostics**: Battery wear %, capacity & report generator (Live in v1.3.0)
+- [ ] 💾 **Storage Health Diagnostics**: SSD S.M.A.R.T. readout
 
 ---
 

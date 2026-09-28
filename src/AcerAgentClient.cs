@@ -1,3 +1,20 @@
+// ====================================================================================================
+// PREDATOR CONTROL · OEM SERVICE NETWORK & NAMED PIPE IPC CLIENT
+// File: src/AcerAgentClient.cs
+//
+// 📖 C++ / SYSTEMS DEVELOPER ROSETTA STONE:
+// - C++ Equivalent : A native Winsock2 TCP client (`SOCKET` on `127.0.0.1:46933`) with Named Pipe fallback.
+// - Subsystem Role : Dispatches hardware commands directly to Acer's background service (`AASSvc`).
+// - Protocol Format: Binary frame: [4 Bytes Magic "ACER"] + [4 Bytes CMD_ID uint32] + [JSON Payload UTF-8].
+//
+// 🔄 C# -> C++ TYPE TRANSLATION REFERENCE:
+// - TcpClient / NetworkStream        => SOCKET (Win32 Winsock API connect/send/recv)
+// - NamedPipeClientStream            => CreateFile("\\\\.\\pipe\\...", GENERIC_READ | GENERIC_WRITE)
+// - SemaphoreSlim(1, 1)              => std::mutex / CreateSemaphore(1, 1)
+// - CancellationTokenSource          => std::atomic<bool> cancel_flag / event handle
+// - Task<T>                          => std::future<T> running on worker thread pool
+// ====================================================================================================
+
 using System;
 using System.Drawing;
 using System.IO.Pipes;

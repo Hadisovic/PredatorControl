@@ -1,3 +1,20 @@
+// ====================================================================================================
+// PREDATOR CONTROL · WINDOWS SCM & OEM DRIVER SERVICE ORCHESTRATOR
+// File: src/OemServiceManager.cs
+//
+// 📖 C++ / SYSTEMS DEVELOPER ROSETTA STONE:
+// - C++ Equivalent : Windows Service Control Manager client (advapi32.dll / winsvc.h).
+// - Subsystem Role : Queries, configures, starts, and repairs background Windows services
+//                    (ASMSvc, AcerDeviceEnablingService, AcerLightingService, AASSvc) and runs pnputil.exe.
+//
+// 🔄 C# -> C++ TYPE TRANSLATION REFERENCE:
+// - ServiceController                 => SC_HANDLE via OpenSCManagerW / OpenServiceW
+// - sc.Status == Running              => QueryServiceStatusEx(hService, ... SERVICE_STATUS_PROCESS)
+// - sc.Start()                        => StartServiceW(hService, 0, NULL)
+// - sc.Stop()                         => ControlService(hService, SERVICE_CONTROL_STOP, ...)
+// - Process.Start("sc.exe", ...)      => ChangeServiceConfigW(hService, ..., SERVICE_AUTO_START, ...)
+// ====================================================================================================
+
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;

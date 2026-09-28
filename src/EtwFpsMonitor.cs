@@ -1,3 +1,20 @@
+// ====================================================================================================
+// PREDATOR CONTROL · KERNEL ETW FPS & FRAME TIME MONITOR
+// File: src/EtwFpsMonitor.cs
+//
+// 📖 C++ / SYSTEMS DEVELOPER ROSETTA STONE:
+// - C++ Equivalent : Direct Win32 Advapi32 ETW session consumer (StartTraceW, OpenTraceW, ProcessTrace).
+// - Subsystem Role : Measures real-time gaming FPS and 1% lows via kernel trace events (Microsoft-Windows-DxgKrnl).
+// - Zero Injection : Safe with Riot Vanguard, EasyAntiCheat, BattlEye (zero DLL injection or hooking).
+//
+// 🔄 C# -> C++ TYPE TRANSLATION REFERENCE:
+// - TRACEHANDLE (ulong)              => Win32 TRACEHANDLE (uint64_t)
+// - EVENT_RECORD*                    => PEVENT_RECORD (Windows Event Tracing record pointer)
+// - EventRecordCallback              => PEVENT_RECORD_CALLBACK (C function pointer for kernel event dispatch)
+// - QueryPerformanceCounter (QPC)    => QueryPerformanceCounter / std::chrono::high_resolution_clock
+// - RingBuffer                       => std::deque / circular array for rolling frame time averages
+// ====================================================================================================
+
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;

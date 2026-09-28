@@ -1,3 +1,19 @@
+// ====================================================================================================
+// PREDATOR CONTROL · NATIVE WIN32 LOW-LEVEL KEYBOARD HOOK (WH_KEYBOARD_LL)
+// File: src/PredatorKeyHook.cs
+//
+// 📖 C++ / SYSTEMS DEVELOPER ROSETTA STONE:
+// - C++ Equivalent : Windows Low-Level Keyboard Hook procedure (user32.dll / SetWindowsHookExW).
+// - Subsystem Role : Intercepts hardware scan codes and virtual keys for the physical Predator / Nitro key
+//                    (VK=0xFF, SC=0x75) and Turbo/Mode key before the OS or background bloatware swallows them.
+//
+// 🔄 C# -> C++ TYPE TRANSLATION REFERENCE:
+// - SetWindowsHookEx                  => ::SetWindowsHookExW(WH_KEYBOARD_LL, LowLevelKeyboardProc, hMod, 0)
+// - CallNextHookEx                    => ::CallNextHookEx(hHook, nCode, wParam, lParam)
+// - UnhookWindowsHookEx               => ::UnhookWindowsHookEx(hHook)
+// - KBDLLHOOKSTRUCT                   => tagKBDLLHOOKSTRUCT (winuser.h)
+// ====================================================================================================
+
 using System.Diagnostics;
 using System.Management;
 using System.Runtime.InteropServices;

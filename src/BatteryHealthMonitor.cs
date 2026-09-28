@@ -1,3 +1,19 @@
+// ====================================================================================================
+// PREDATOR CONTROL · NATIVE BATTERY HARDWARE & WEAR DIAGNOSTICS
+// File: src/BatteryHealthMonitor.cs
+//
+// 📖 C++ / SYSTEMS DEVELOPER ROSETTA STONE:
+// - C++ Equivalent : Native Win32 DeviceIoControl(IOCTL_BATTERY_QUERY_INFORMATION) or ACPI WMI probe.
+// - Hardware Target: Windows Battery Device Class / ACPI Control Method Battery (\_SB.BAT0 / BAT1).
+// - Subsystem Role : Calculates true battery health, degradation (wear %), design vs full capacity.
+//
+// 🔄 C# -> C++ TYPE TRANSLATION REFERENCE:
+// - BatteryHealthInfo                 => struct BatteryHealthInfo { int32_t design, full, cycles; double wear; }
+// - Task<BatteryHealthInfo?>          => std::future<std::optional<BatteryHealthInfo>>
+// - Environment.TickCount64           => GetTickCount64()
+// - ManagementObjectSearcher          => IWbemServices::ExecQuery(bstr("SELECT * FROM BatteryStatus..."))
+// ====================================================================================================
+
 using System;
 using System.Diagnostics;
 using System.IO;

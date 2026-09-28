@@ -4,7 +4,7 @@
 
 # 🪼 Predator Control
 
-[![Version](https://img.shields.io/badge/version-1.3.0-00E5FF?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Hadisovic/PredatorControl/releases)
+[![Version](https://img.shields.io/badge/version-1.3.1-00E5FF?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Hadisovic/PredatorControl/releases)
 [![Jelli UI](https://img.shields.io/badge/Jelli%20UI-Live%20%F0%9F%AA%BC-FF69B4?style=for-the-badge&logo=sparkles&logoColor=white)](#-jelli-ui)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-00B4CC?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/Hadisovic/PredatorControl)
 [![Framework](https://img.shields.io/badge/.NET-10.0%20Windows-512BD4?style=for-the-badge&logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/)
@@ -243,6 +243,13 @@ PredatorControl/
 ---
 
 ## 📋 Changelog
+
+### v1.3.1 — Code Simplification, Zero-Allocation Telemetry & C++ Architecture
+- ⚡ **Zero-Allocation Telemetry Loop**: Converted `TelemetrySnapshot` into a stack-allocated readonly record struct (POD) and implemented cached string tables for sensor values, achieving 0 heap allocations during background sensor polling and gaming.
+- 📖 **C++ Rosetta Stone Headers**: Added native systems / C++ architectural documentation headers across all core hardware and networking files (`WmiController.cs`, `AcerAgentClient.cs`, `EtwFpsMonitor.cs`, `NvmlGpuMonitor.cs`, `Form1.cs`).
+- 🎯 **Direct Hardware Cause-and-Effect Mappings**: Documented all ACPI EC registers, named pipes, and WMI methods with explicit `[TRIGGER] ➔ [HARDWARE I/O] ➔ [EFFECT]` blocks.
+- 🧱 **Structured Section Grouping**: Organized hardware I/O, SCM optimization, telemetry, and Win32 message dispatching into clear, predictable architectural sections.
+- 🛡️ **Sensor Update Debouncing**: Eliminated redundant WinForms GDI label redraws when sensor values remain unchanged between ticks.
 
 ### v1.3.0 — Battery Diagnostics, Multi-Monitor High-DPI & Hardware Controls
 - 🔋 **Battery Health Diagnostics & Wear Monitor**: Integrated live battery health %, wear percentage, current vs design capacity (mWh), and cycle count into the Battery Care section, plus 1-click Windows Battery Report generation.

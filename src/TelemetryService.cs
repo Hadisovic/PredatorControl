@@ -4,7 +4,7 @@ using System.Runtime.Versioning;
 
 namespace PredatorControlApp
 {
-    public record TelemetrySnapshot(
+    public readonly record struct TelemetrySnapshot(
         int? CpuTemp,
         int? GpuTemp,
         int? CpuFanRpm,

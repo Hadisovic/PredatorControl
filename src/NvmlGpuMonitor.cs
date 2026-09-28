@@ -1,3 +1,19 @@
+// ====================================================================================================
+// PREDATOR CONTROL · NVIDIA MANAGEMENT LIBRARY (NVML) C-API BRIDGE
+// File: src/NvmlGpuMonitor.cs
+//
+// 📖 C++ / SYSTEMS DEVELOPER ROSETTA STONE:
+// - C++ Equivalent : Direct dynamic linking to NVIDIA's native C-API (%WINDIR%\System32\nvml.dll).
+// - Subsystem Role : Queries live GPU wattage, core temperatures, and utilization directly from NVIDIA drivers.
+// - Security Model : Qualified LoadLibraryEx with LOAD_LIBRARY_SEARCH_SYSTEM32 to prevent DLL search-order hijacking.
+//
+// 🔄 C# -> C++ TYPE TRANSLATION REFERENCE:
+// - [DllImport]                      => extern "C" __declspec(dllimport) or GetProcAddress
+// - IntPtr device                    => nvmlDevice_t (opaque pointer to GPU handle)
+// - out uint powerMilliWatts         => uint32_t* (pass by pointer/reference)
+// - nvmlReturn_t (int)               => 0 = NVML_SUCCESS
+// ====================================================================================================
+
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 

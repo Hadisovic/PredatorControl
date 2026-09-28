@@ -1,3 +1,22 @@
+// ====================================================================================================
+// PREDATOR CONTROL · HARDWARE EC & ACPI WMI DRIVER BRIDGE
+// File: src/WmiController.cs
+//
+// 📖 C++ / SYSTEMS DEVELOPER ROSETTA STONE:
+// - C++ Equivalent : A native Windows Kernel/Driver bridge (similar to a Win32 COM WMI client / IOCTL).
+// - Subsystem Role : Communicates directly with the Acer Embedded Controller (EC) and BIOS firmware.
+// - Hardware Bus   : ACPI WMI (`root\wmi` -> `AcerGamingFunction`) and low-level Named Pipes.
+//
+// 🔄 C# -> C++ TYPE TRANSLATION REFERENCE:
+// - IntPtr                           => void* or Win32 HANDLE / HWND
+// - byte[]                           => uint8_t[] (flat memory buffer)
+// - Span<T> / ReadOnlySpan<T>        => std::span<T> (pointer + size, zero-copy stack/heap view)
+// - fixed (byte* p = ...)            => Taking a raw C-style pointer: uint8_t* p = ...
+// - [Flags] enum AcerFeature : uint  => enum class AcerFeature : uint32_t (32-bit bitmask flags)
+// - using (var obj = ...)            => RAII deterministic scope cleanup (calls ~Destructor on exit)
+// - lock (_lock) { ... }             => std::lock_guard<std::mutex> lock(_mutex);
+// ====================================================================================================
+
 using System.IO;
 using System.IO.Pipes;
 using System.Management;
@@ -9,6 +28,10 @@ using Microsoft.Win32;
 
 namespace PredatorControlApp
 {
+    // ================================================================================================
+    // SECTION 1: HARDWARE IDENTIFICATION, PROBING & 4-BYTE BITMASK CAPABILITIES
+    // ================================================================================================
+
     public enum AcerChassisFamily
     {
         Predator,
@@ -682,6 +705,15 @@ namespace PredatorControlApp
             return anySuccess;
         }
 
+        // ============================================================================================
+        // SECTION 2: POWER MODES & PROFILES (EC DIRECT DISPATCH)
+        // ============================================================================================
+
+        /// <summary>
+        /// [TRIGGER]     : User selects a power profile (Quiet, Balanced, Performance, Turbo, Eco)
+        /// [HARDWARE I/O]: Writes mode byte to ACPI register 0x0B and dual-dispatches to AcerAgentService
+        /// [EFFECT]      : Embedded Controller adjusts PL1/PL2 CPU power ceilings and GPU overclock
+        /// </summary>
         public void SetPowerMode(byte mode)
         {
             // 1. Dual-dispatch to Acer OEM Agent Service (TCP socket & named pipe)
@@ -706,6 +738,15 @@ namespace PredatorControlApp
             SyncWindowsPowerMode(mode);
         }
 
+        // ============================================================================================
+        // SECTION 3: THERMAL MANAGEMENT, FAN SPEEDS & TACHOMETERS
+        // ============================================================================================
+
+        /// <summary>
+        /// [TRIGGER]     : User changes fan profile (Auto, Max, Custom)
+        /// [HARDWARE I/O]: Calls SetGamingFanBehavior with mode bits and dual-dispatches to AcerAgentService
+        /// [EFFECT]      : Switches EC between hardware thermal curve (Auto), 100% blast (Max), or manual PWM
+        /// </summary>
         public void SetFanBehavior(byte mode)
         {
             // 1. Direct ACPI WMI Fan Behavior command
@@ -732,6 +773,11 @@ namespace PredatorControlApp
                 SetFanSpeed(_customCpuFanSpeed, _customGpuFanSpeed);
         }
 
+        /// <summary>
+        /// [TRIGGER]     : User drags CPU/GPU custom fan sliders
+        /// [HARDWARE I/O]: Dispatches SetGamingFanSpeed with PWM duty cycle percentage (0-100%)
+        /// [EFFECT]      : EC overrides fan PWM driver circuit to maintain targeted RPM
+        /// </summary>
         public bool SetFanSpeed(byte cpuSpeed, byte gpuSpeed)
         {
             _customCpuFanSpeed = cpuSpeed;
@@ -1187,6 +1233,15 @@ namespace PredatorControlApp
             catch { }
         }
 
+        // ============================================================================================
+        // SECTION 4: BATTERY HEALTH & 80% CHARGE LIMITER
+        // ============================================================================================
+
+        /// <summary>
+        /// [TRIGGER]     : User clicks "80% Battery Limit" toggle in UI
+        /// [HARDWARE I/O]: Invokes ACPI WMI SetBatteryHealthControl(uFunctionStatus=1) or sets ASMSvc registry
+        /// [EFFECT]      : Embedded Controller and battery charger IC cap charging circuit at 80% capacity
+        /// </summary>
         public bool SetBatteryChargeLimit(bool enable)
         {
             // 1. Primary: BIOS native ACPI WMI BatteryControl class (Predator & modern Nitro)
@@ -1304,11 +1359,16 @@ namespace PredatorControlApp
             return false;
         }
 
+        // ============================================================================================
+        // SECTION 5: GPU MUX SWITCH, LCD OVERDRIVE, STARTUP SOUND & USB CHARGING
+        // ============================================================================================
+
         #region Hardware Features (GPU MUX, LCD Overdrive, Backlight Sleep, Windows Key Lock)
 
         /// <summary>
-        /// Queries the current GPU MUX Working Mode via Acer OEM Agent Service (Port 46933).
-        /// Returns 0 = Optimus (Hybrid), 1 = Discrete GPU, 2 = Auto / Advanced Optimus.
+        /// [TRIGGER]     : Dashboard initialization / polling
+        /// [HARDWARE I/O]: Queries AASSvc TCP 46933 (packet 101)
+        /// [EFFECT]      : Reads active GPU MUX state: 0 = Optimus (Hybrid), 1 = Discrete GPU, 2 = Auto
         /// </summary>
         public async Task<int?> GetGpuModeAsync()
         {
@@ -1316,10 +1376,9 @@ namespace PredatorControlApp
         }
 
         /// <summary>
-        /// Queries supported GPU MUX capabilities bitmask:
-        /// Bit 0 (1): Optimus
-        /// Bit 1 (2): Discrete GPU
-        /// Bit 2 (4): Auto / Advanced Optimus
+        /// [TRIGGER]     : Probing GPU MUX capability at boot
+        /// [HARDWARE I/O]: Queries AASSvc TCP 46933 for supported modes bitmask
+        /// [EFFECT]      : Bit 0 = Optimus, Bit 1 = Discrete, Bit 2 = Auto
         /// </summary>
         public async Task<int> GetGpuModeCapabilityAsync()
         {
@@ -1327,12 +1386,9 @@ namespace PredatorControlApp
         }
 
         /// <summary>
-        /// Sets the GPU MUX Working Mode:
-        /// 0 = Optimus (Dynamic switching / Hybrid)
-        /// 1 = Discrete (NVIDIA GPU Only / Direct display connection)
-        /// 2 = Auto (Advanced Optimus)
-        /// Dual-dispatches to Acer OEM Agent Service (runs as LocalSystem) and direct ACPI WMI fallback.
-        /// Note: Hardware MUX switch requires a system reboot to take effect in firmware.
+        /// [TRIGGER]     : User selects GPU Working Mode (Optimus, Discrete, Auto)
+        /// [HARDWARE I/O]: Dual-dispatches to Acer OEM Agent Service and ACPI Feature ID 0x02
+        /// [EFFECT]      : Writes MUX mode into BIOS NVRAM (takes effect after system reboot)
         /// </summary>
         public async Task<bool> SetGpuModeAsync(int mode)
         {
@@ -1350,6 +1406,11 @@ namespace PredatorControlApp
             return agentOk || wmiOk;
         }
 
+        /// <summary>
+        /// [TRIGGER]     : User toggles LCD Overdrive (3ms response time)
+        /// [HARDWARE I/O]: Calls SetGamingMiscSetting with Feature ID 0x10 and state bit
+        /// [EFFECT]      : Embedded Controller sets panel overdrive voltage to eliminate ghosting
+        /// </summary>
         public bool SetLcdOverdrive(bool enable)
         {
             // Reverse-engineered from AcerAgentService.exe / AcerHardwareService.exe:
@@ -1360,6 +1421,11 @@ namespace PredatorControlApp
             return ok;
         }
 
+        /// <summary>
+        /// [TRIGGER]     : User toggles "Startup Animation & Sound"
+        /// [HARDWARE I/O]: Sends packet 102 ({"Function":"BOOT_SOUND","Parameter":{"status":1/0}}) to AASSvc (TCP 46933)
+        /// [EFFECT]      : Embedded Controller toggles firmware boot chime flag (requires BIOS POST enabled)
+        /// </summary>
         public bool SetBootSound(bool enable)
         {
             // 1. Primary: OEM AcerAgentService (Port 46933) - exact socket used by official PredatorSense
@@ -1406,6 +1472,11 @@ namespace PredatorControlApp
             return false;
         }
 
+        /// <summary>
+        /// [TRIGGER]     : User toggles "Power-off USB Charging" and selects safety cutoff percentage
+        /// [HARDWARE I/O]: Calls SetGamingMiscSetting with Feature ID 0x0C (state) and 0x0D (cutoff) and syncs settings.json
+        /// [EFFECT]      : Embedded Controller energizes designated high-power USB port while laptop is off/sleeping
+        /// </summary>
         public bool SetUsbCharging(bool enable, int cutoffPercent = 10)
         {
             // Feature ID 0x0C (Power-off USB Charging Enable/Disable)

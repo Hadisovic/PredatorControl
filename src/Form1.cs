@@ -1,3 +1,20 @@
+// ====================================================================================================
+// PREDATOR CONTROL · MAIN DASHBOARD, WIN32 MESSAGE DISPATCHER & UI HUB
+// File: src/Form1.cs
+//
+// 📖 C++ / SYSTEMS DEVELOPER ROSETTA STONE:
+// - C++ Equivalent : A native Win32 window class with custom WindowProc message loop (HWND, WndProc).
+// - Subsystem Role : Orchestrates UI events, telemetry timer dispatch, SCM services, and hardware methods.
+// - Win32 Messages : Handles WM_HOTKEY, WM_DPICHANGED, WM_POWERBROADCAST, WM_NCLBUTTONDOWN.
+//
+// 🔄 C# -> C++ TYPE TRANSLATION REFERENCE:
+// - this.Handle                      => HWND (Window Handle)
+// - Message m / WndProc(ref Message) => LRESULT CALLBACK WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+// - BeginInvoke / Invoke             => PostMessage / SendMessage to UI thread message queue
+// - System.Windows.Forms.Timer       => SetTimer / WM_TIMER callback
+// - Color                            => COLORREF / RGB(r, g, b)
+// ====================================================================================================
+
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
@@ -11,6 +28,10 @@ namespace PredatorControlApp
     [SupportedOSPlatform("windows")]
     public partial class Form1 : Form
     {
+        // ============================================================================================
+        // SECTION 1: WINDOW INITIALIZATION, DWM DARK MODE & NATIVE WIN32 MESSAGES
+        // ============================================================================================
+
         #region Win32 Interop - DWM & Dark Mode
 
         [DllImport("dwmapi.dll")]
@@ -100,6 +121,9 @@ namespace PredatorControlApp
 
         private int? _cpuTemp, _gpuTemp;
         private int? _cpuFanRpm, _gpuFanRpm;
+        private int? _prevCpuTemp, _prevGpuTemp, _prevCpuFanRpm, _prevGpuFanRpm, _prevAuxFanRpm;
+        private static readonly string[] _cachedTemps = Enumerable.Range(0, 130).Select(i => $"{i}\u00b0C").ToArray();
+        private static string FormatTemp(int? temp) => (temp.HasValue && temp.Value >= 0 && temp.Value < _cachedTemps.Length) ? _cachedTemps[temp.Value] : (temp.HasValue ? $"{temp.Value}\u00b0C" : "--\u00b0C");
         private DarkScrollPanel _contentPanel = null!;
         private Panel _pnlTitle = null!;
 
@@ -519,6 +543,10 @@ namespace PredatorControlApp
             }
             catch { return false; }
         }
+
+        // ============================================================================================
+        // SECTION 3: SCM SERVICE MANAGER (BLOATWARE OPTIMIZATION & AUTO-REPAIR)
+        // ============================================================================================
 
         private static void SetServicesOptimizationEnabled(bool enabled)
         {
@@ -4284,6 +4312,10 @@ namespace PredatorControlApp
             return ticks >= 2 ? pluggedIn : current;
         }
 
+        // ============================================================================================
+        // SECTION 4: 1Hz ZERO-ALLOCATION TELEMETRY LOOP & SENSOR GAUGE UPDATES
+        // ============================================================================================
+
         private void OnTelemetryReceived(TelemetrySnapshot snap)
         {
             _jelliTelemetry = snap;
@@ -4302,18 +4334,37 @@ namespace PredatorControlApp
             _gpuFanRpm = snap.GpuFanRpm;
             _auxFanRpm = snap.AuxFanRpm;
 
-            // Audit: check .HasValue and never format as "CPU: \u00b0C"
-            _lblCpuTemp.Text = _cpuTemp.HasValue ? $"{_cpuTemp.Value}\u00b0C" : "--\u00b0C";
-            _lblGpuTemp.Text = _gpuTemp.HasValue ? $"{_gpuTemp.Value}\u00b0C" : "--\u00b0C";
-            _lblCpuTemp.ForeColor = TempColor(_cpuTemp ?? 0);
-            _lblGpuTemp.ForeColor = TempColor(_gpuTemp ?? 0);
+            // Zero-allocation cached debounced telemetry updates (no GC allocations on idle)
+            if (_prevCpuTemp != _cpuTemp)
+            {
+                _lblCpuTemp.Text = FormatTemp(_cpuTemp);
+                _lblCpuTemp.ForeColor = TempColor(_cpuTemp ?? 0);
+                _prevCpuTemp = _cpuTemp;
+            }
+            if (_prevGpuTemp != _gpuTemp)
+            {
+                _lblGpuTemp.Text = FormatTemp(_gpuTemp);
+                _lblGpuTemp.ForeColor = TempColor(_gpuTemp ?? 0);
+                _prevGpuTemp = _gpuTemp;
+            }
 
-            _lblCpuRpm.Text = _cpuFanRpm.HasValue ? $"{_cpuFanRpm.Value} RPM" : "-- RPM";
-            _lblGpuRpm.Text = _gpuFanRpm.HasValue ? $"{_gpuFanRpm.Value} RPM" : "-- RPM";
-            if (_lblAuxRpm != null)
+            if (_prevCpuFanRpm != _cpuFanRpm)
+            {
+                _lblCpuRpm.Text = _cpuFanRpm.HasValue ? $"{_cpuFanRpm.Value} RPM" : "-- RPM";
+                _prevCpuFanRpm = _cpuFanRpm;
+            }
+            if (_prevGpuFanRpm != _gpuFanRpm)
+            {
+                _lblGpuRpm.Text = _gpuFanRpm.HasValue ? $"{_gpuFanRpm.Value} RPM" : "-- RPM";
+                _prevGpuFanRpm = _gpuFanRpm;
+            }
+            if (_lblAuxRpm != null && _prevAuxFanRpm != _auxFanRpm)
+            {
                 _lblAuxRpm.Text = _auxFanRpm.HasValue ? $"{_auxFanRpm.Value} RPM" : "-- RPM";
+                _prevAuxFanRpm = _auxFanRpm;
+            }
 
-            _trayIcon.Text = $"Predator Control\nCPU: {(_cpuTemp.HasValue ? $"{_cpuTemp.Value}\u00b0C" : "--\u00b0C")}  GPU: {(_gpuTemp.HasValue ? $"{_gpuTemp.Value}\u00b0C" : "--\u00b0C")}";
+            _trayIcon.Text = $"Predator Control\nCPU: {FormatTemp(_cpuTemp)}  GPU: {FormatTemp(_gpuTemp)}";
 
             if (_fanCurveForm != null && !_fanCurveForm.IsDisposed)
                 _fanCurveForm.UpdateTemps(_cpuTemp ?? 0, _gpuTemp ?? 0);

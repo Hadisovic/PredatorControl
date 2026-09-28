@@ -2453,7 +2453,7 @@ namespace PredatorControlApp
                                     BeginInvoke(() => _lblOptimizeCounter.Text = msg);
                             }
                             catch { }
-                        });
+                        }, forcePrompt: true);
                     }
                     catch { }
                 });

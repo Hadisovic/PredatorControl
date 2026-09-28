@@ -154,6 +154,14 @@ namespace PredatorControlApp
                 return; // Fast headless battery charge enforcement mode
             }
 
+            if (args.Length > 0 && args[0].Equals("--self-check", StringComparison.OrdinalIgnoreCase))
+            {
+#if DEBUG
+                SelfCheck.Run();
+#endif
+                return;
+            }
+
             ApplicationConfiguration.Initialize();
             Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
             JelliHostForm.EnsureWebView2Loader();

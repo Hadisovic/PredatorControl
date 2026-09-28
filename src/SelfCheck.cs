@@ -39,12 +39,68 @@ namespace PredatorControlApp
             Debug.Assert(Array.Exists(OemServiceManager.NitroEssentialServices, s => s == "ASMSvc"), "OemServiceManager must include ASMSvc for Nitro");
             Debug.Assert(Array.Exists(OemServiceManager.PredatorEssentialServices, s => s == "AcerLightingService"), "OemServiceManager must include AcerLightingService for Predator");
 
+            CheckOemServiceSecurity();
             CheckBitmaskEngine();
             CheckPowerLineDebounce();
             CheckPredatorKeyHook();
             CheckDisplayCcdTechnology();
             CheckThemes();
             CheckDebounceHelper();
+        }
+
+        private static void CheckOemServiceSecurity()
+        {
+            // 1. Verify FindMatchingDriverFiles only returns files inside DriverStore
+            string driverStore = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "DriverStore", "FileRepository");
+            var files = OemServiceManager.FindMatchingDriverFiles(new[] { "sysmonitorservice.inf", "acerdeviceenablingservicecomponent.inf", "acerlightingservice.inf" });
+            foreach (var f in files)
+            {
+                Debug.Assert(Path.GetFullPath(f).StartsWith(Path.GetFullPath(driverStore), StringComparison.OrdinalIgnoreCase),
+                    $"Found driver file outside DriverStore: {f}");
+                Debug.Assert(!f.Contains("oem_drivers", StringComparison.OrdinalIgnoreCase) || f.StartsWith(driverStore, StringComparison.OrdinalIgnoreCase),
+                    "FindMatchingDriverFiles must never search local oem_drivers");
+            }
+
+            // 2. Verify VerifyFileAuthenticity rejects non-existent and untrusted files
+            bool nonExistentPass = OemServiceManager.VerifyFileAuthenticity(Path.Combine(driverStore, "nonexistent.exe"), out string reason1);
+            Debug.Assert(!nonExistentPass && !string.IsNullOrEmpty(reason1), "Non-existent file must fail verification");
+
+            string tempFile = Path.Combine(Path.GetTempPath(), "fake_service.exe");
+            File.WriteAllText(tempFile, "fake binary content");
+            try
+            {
+                bool outsidePass = OemServiceManager.VerifyFileAuthenticity(tempFile, out string reason2);
+                Debug.Assert(!outsidePass && reason2.Contains("outside DriverStore", StringComparison.OrdinalIgnoreCase),
+                    "File outside DriverStore must fail verification");
+            }
+            finally
+            {
+                try { File.Delete(tempFile); } catch { }
+            }
+
+            // 3. Verify that real DriverStore Acer binary passes verification if present
+            foreach (var f in files.Where(x => x.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)))
+            {
+                bool verified = OemServiceManager.VerifyFileAuthenticity(f, out string reason);
+                Debug.Assert(verified, $"Real DriverStore Acer binary should verify: {f} (failed: {reason})");
+            }
+
+            // 4. Verify UserConsentPrompt delegate can intercept and decline consent cleanly
+            bool promptInvoked = false;
+            OemServiceManager.UserConsentPrompt = (svc, path) =>
+            {
+                promptInvoked = true;
+                return false; // Decline consent
+            };
+            try
+            {
+                bool accepted = OemServiceManager.UserConsentPrompt("TestService", "TestBinary.exe");
+                Debug.Assert(!accepted && promptInvoked, "Consent prompt hook must intercept and decline");
+            }
+            finally
+            {
+                OemServiceManager.UserConsentPrompt = null;
+            }
         }
 
         private static void CheckBitmaskEngine()

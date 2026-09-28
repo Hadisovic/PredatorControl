@@ -1,8 +1,10 @@
+using System.IO;
 using System.IO.Pipes;
 using System.Management;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.ServiceProcess;
+using System.Text.Json;
 using Microsoft.Win32;
 
 namespace PredatorControlApp
@@ -1360,14 +1362,18 @@ namespace PredatorControlApp
 
         public bool SetBootSound(bool enable)
         {
-            // Feature ID 0x0E (Boot Animation Sound): bits [31:0] = 0x0E, bits [63:32] = 1 (enable) or 0 (disable)
+            // 1. Primary: OEM AcerAgentService (Port 46933) - exact socket used by official PredatorSense
+            bool agentOk = false;
+            try
+            {
+                var task = AcerAgentClient.SetBootSoundAsync(enable);
+                if (task.Wait(1000)) agentOk = task.Result;
+            }
+            catch { }
+
+            // 2. Secondary: Direct WMI SetGamingMiscSetting (Feature ID 0x0E)
             ulong payload = ((enable ? 1UL : 0UL) << 32) | 0x0EUL;
             var (ok, _) = SendCommand("SetGamingMiscSetting", payload);
-
-            _ = Task.Run(async () =>
-            {
-                try { await AcerAgentClient.SetBootSoundAsync(enable); } catch { }
-            });
 
             try
             {
@@ -1383,11 +1389,21 @@ namespace PredatorControlApp
         {
             try
             {
+                var task = AcerAgentClient.GetBootSoundAsync();
+                if (task.Wait(150) && task.Result.HasValue)
+                {
+                    return task.Result.Value;
+                }
+            }
+            catch { }
+
+            try
+            {
                 using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"SOFTWARE\PredatorControl");
                 if (key?.GetValue("BootSound") is int val) return val == 1;
             }
             catch { }
-            return true;
+            return false;
         }
 
         public bool SetUsbCharging(bool enable, int cutoffPercent = 10)
@@ -1399,6 +1415,25 @@ namespace PredatorControlApp
             // Feature ID 0x0D (Battery cutoff threshold percentage: 10, 20, 30%)
             ulong payloadCutoff = (((ulong)cutoffPercent) << 32) | 0x0DUL;
             SendCommand("SetGamingMiscSetting", payloadCutoff);
+
+            // Synchronize with Acer Quick Access settings.json if present
+            try
+            {
+                string qaSettingsPath = @"C:\ProgramData\Acer\QA\settings.json";
+                if (File.Exists(qaSettingsPath))
+                {
+                    string json = File.ReadAllText(qaSettingsPath);
+                    var dict = JsonSerializer.Deserialize<Dictionary<string, object>>(json);
+                    if (dict != null)
+                    {
+                        dict["USBChargeState"] = enable ? 15 : 0;
+                        dict["USBChargeSwitch"] = enable;
+                        dict["USBChargeLimit"] = cutoffPercent;
+                        File.WriteAllText(qaSettingsPath, JsonSerializer.Serialize(dict, new JsonSerializerOptions { WriteIndented = true }));
+                    }
+                }
+            }
+            catch { }
 
             try
             {
@@ -1415,11 +1450,31 @@ namespace PredatorControlApp
         {
             try
             {
+                string qaSettingsPath = @"C:\ProgramData\Acer\QA\settings.json";
+                if (File.Exists(qaSettingsPath))
+                {
+                    string json = File.ReadAllText(qaSettingsPath);
+                    using var doc = JsonDocument.Parse(json);
+                    if (doc.RootElement.TryGetProperty("USBChargeSwitch", out var sw))
+                    {
+                        if (sw.ValueKind == JsonValueKind.True || sw.ValueKind == JsonValueKind.False)
+                            return sw.GetBoolean();
+                    }
+                    if (doc.RootElement.TryGetProperty("USBChargeState", out var st))
+                    {
+                        return st.GetInt32() > 0;
+                    }
+                }
+            }
+            catch { }
+
+            try
+            {
                 using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"SOFTWARE\PredatorControl");
                 if (key?.GetValue("UsbCharging") is int val) return val == 1;
             }
             catch { }
-            return true;
+            return false;
         }
 
         private static uint GetBkHotkeyNumber()

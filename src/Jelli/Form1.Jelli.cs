@@ -253,7 +253,7 @@ public partial class Form1 : IJelliBackend
             Toggle("hardware.keyLock", "Lock Windows & Menu keys", _switchWinKeyLock)
         };
         if (_switchBootSound != null)
-            hwControls.Add(Toggle("hardware.bootsound", "Acer startup sound", _switchBootSound));
+            hwControls.Add(Toggle("hardware.bootsound", "Startup Animation & Sound", _switchBootSound));
         if (_switchUsbCharging != null)
             hwControls.Add(Toggle("hardware.usbcharging", "Power-off USB charging", _switchUsbCharging));
         if (_switchAutoCoolBoost != null)

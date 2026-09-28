@@ -2223,7 +2223,7 @@ namespace PredatorControlApp
             if (_wmi.Supports(AcerFeature.BootSound))
             {
                 y += switchH + S(12);
-                _lblBootSound = MakeLabel("Acer Startup Sound (Boot Chime)", pad, y, FontBody, Color.FromArgb(120, 120, 135));
+                _lblBootSound = MakeLabel("Startup Animation & Sound", pad, y, FontBody, Color.FromArgb(120, 120, 135));
                 CenterV(_lblBootSound, y, switchH);
 
                 _switchBootSound = new PredatorToggle
@@ -2233,6 +2233,10 @@ namespace PredatorControlApp
                     Checked = _wmi.GetBootSound()
                 };
                 _contentPanel.Controls.Add(_switchBootSound);
+
+                var tipBoot = new ToolTip();
+                tipBoot.SetToolTip(_lblBootSound, "Startup Animation & Sound:\nControls the boot logo animation and sound chime on startup (POST Animation & Sound in BIOS).");
+                tipBoot.SetToolTip(_switchBootSound, "Startup Animation & Sound:\nControls the boot logo animation and sound chime on startup (POST Animation & Sound in BIOS).");
 
                 _switchBootSound.CheckedChanged += (s, e) =>
                 {
@@ -2256,6 +2260,10 @@ namespace PredatorControlApp
                     Checked = _wmi.GetUsbCharging()
                 };
                 _contentPanel.Controls.Add(_switchUsbCharging);
+
+                var tipUsb = new ToolTip();
+                tipUsb.SetToolTip(_lblUsbCharging, "Power-off USB Charging:\nKeeps the USB port with the battery/lightning icon powered when the laptop is off or sleeping to charge external devices (phone, earbuds, etc.).");
+                tipUsb.SetToolTip(_switchUsbCharging, "Power-off USB Charging:\nKeeps the USB port with the battery/lightning icon powered when the laptop is off or sleeping to charge external devices (phone, earbuds, etc.).");
 
                 _switchUsbCharging.CheckedChanged += (s, e) =>
                 {

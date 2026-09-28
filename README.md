@@ -4,7 +4,7 @@
 
 # 🪼 Predator Control
 
-[![Version](https://img.shields.io/badge/version-1.3.1-00E5FF?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Hadisovic/PredatorControl/releases)
+[![Version](https://img.shields.io/badge/version-1.3.2-00E5FF?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Hadisovic/PredatorControl/releases)
 [![Jelli UI](https://img.shields.io/badge/Jelli%20UI-Live%20%F0%9F%AA%BC-FF69B4?style=for-the-badge&logo=sparkles&logoColor=white)](#-jelli-ui)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-00B4CC?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/Hadisovic/PredatorControl)
 [![Framework](https://img.shields.io/badge/.NET-10.0%20Windows-512BD4?style=for-the-badge&logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/)
@@ -243,6 +243,11 @@ PredatorControl/
 ---
 
 ## 📋 Changelog
+
+### v1.3.2 — Security Hardening: Authenticode Verification & User Consent for OEM Services
+- 🔒 **Authenticode Signature Verification**: Enforced cryptographic Authenticode signature verification (`WinVerifyTrust` + `X509Chain`) for all OEM drivers and service binaries prior to installation or registration, requiring explicit `Acer Incorporated` publisher verification.
+- 🛡️ **Discovery Isolation**: Removed searching user-writable directories (`appDir/oem_drivers` and `parentOem/oem_drivers`); restricted driver discovery strictly to `C:\Windows\System32\DriverStore\FileRepository`.
+- ✋ **Explicit User Consent**: Added one-time user confirmation dialog before registering any new background Windows services (`ASMSvc`, `AcerDeviceEnablingServiceV2`, `AcerLightingService`), with clean abort logic if declined.
 
 ### v1.3.1 — Code Simplification, Zero-Allocation Telemetry & C++ Architecture
 - ⚡ **Zero-Allocation Telemetry Loop**: Converted `TelemetrySnapshot` into a stack-allocated readonly record struct (POD) and implemented cached string tables for sensor values, achieving 0 heap allocations during background sensor polling and gaming.

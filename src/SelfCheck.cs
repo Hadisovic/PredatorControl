@@ -195,7 +195,7 @@ namespace PredatorControlApp
         [Conditional("DEBUG")]
         private static void CheckUpdater()
         {
-            Debug.Assert(Updater.TryParseTag("v1.3.1", out var tag) && tag == new Version(1, 3, 1), "tag must parse without the v");
+            Debug.Assert(Updater.TryParseTag("v1.3.2", out var tag) && tag == new Version(1, 3, 2), "tag must parse without the v");
             Debug.Assert(!Updater.TryParseTag("nightly", out _), "junk tags must be rejected");
             Debug.Assert(Updater.Current.Revision == -1, "Current must be Major.Minor.Build so tags compare cleanly");
 

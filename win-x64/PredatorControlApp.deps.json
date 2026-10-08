@@ -7,7 +7,7 @@
   "targets": {
     ".NETCoreApp,Version=v10.0": {},
     ".NETCoreApp,Version=v10.0/win-x64": {
-      "PredatorControlApp/1.3.3": {
+      "PredatorControlApp/1.3.4": {
         "dependencies": {
           "Microsoft.Web.WebView2": "1.0.3650.58",
           "System.Management": "10.0.0",
@@ -61,7 +61,7 @@
     }
   },
   "libraries": {
-    "PredatorControlApp/1.3.3": {
+    "PredatorControlApp/1.3.4": {
       "type": "project",
       "serviceable": false,
       "sha512": ""

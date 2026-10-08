@@ -4,7 +4,7 @@
 
 # 🪼 Predator Control
 
-[![Version](https://img.shields.io/badge/version-1.3.3-00E5FF?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Hadisovic/PredatorControl/releases)
+[![Version](https://img.shields.io/badge/version-1.3.4-00E5FF?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Hadisovic/PredatorControl/releases)
 [![Jelli UI](https://img.shields.io/badge/Jelli%20UI-Live%20%F0%9F%AA%BC-FF69B4?style=for-the-badge&logo=sparkles&logoColor=white)](#-jelli-ui)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-00B4CC?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/Hadisovic/PredatorControl)
 [![Framework](https://img.shields.io/badge/.NET-10.0%20Windows-512BD4?style=for-the-badge&logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/)
@@ -98,7 +98,7 @@ The following services are disabled when the **Disable Acer Bloatware Services**
 | :--- | :--- | :--- |
 | **`AcerServiceSvc`** | **Acer Service Component** | Disabled (Handles legacy APGe actions; direct WMI used where available) |
 | **`AcerDeviceEnablingServiceV2`** | **Acer Device Enabling Service V2** | Disabled (Legacy driver bridge; direct ACPI WMI preferred) |
-| **`AcerCCAgentSvis`** | **Acer Care Center** | Disabled (Telemetry, nagware, background RAM usage) |
+| **`AcerCCAgentSvis`** | **Acer Care Center** | Disabled (Background telemetry, periodic popups, RAM usage) |
 | **`AcerQAAgentSvis`** | **Acer Quick Access** | Disabled (Legacy popups & slow OSD) |
 | **`AcerDIAgentSvis`** | **Acer Device Info** | Disabled (Cloud telemetry uploads) |
 | **`ASMSvc`** | **Acer System Monitor Service** | Disabled (Duplicate sensor polling causing CPU wakeups) |
@@ -148,7 +148,7 @@ The following services are disabled when the **Disable Acer Bloatware Services**
 
 ### 🔧 BIOS Guide: How to Enable Startup Animation & Sound
 
-On Acer Predator and Nitro laptops (such as the Predator Helios Neo 16 / PHN16-71), the boot chime and animation run at the hardware level during the **Power-On Self-Test (POST)** phase before Windows starts.
+On Acer Predator and Nitro laptops (such as Predator Helios and Nitro series), the boot chime and animation run at the hardware level during the **Power-On Self-Test (POST)** phase before Windows starts.
 
 > [!IMPORTANT]
 > **If the boot animation and sound do not play on startup:**  
@@ -176,9 +176,9 @@ Power-off USB Charging turns your laptop into a portable power bank, allowing yo
 
 ### 🎮 OSD & In-Game Gaming Overlay
 - ⚡ **In-Game Gaming Overlay HUD**: Real-time neon green FPS counter (powered by zero-injection Windows ETW kernel Present monitoring), CPU/GPU temperatures, fan RPMs, active GPU wattage (`0x0D`), 60-second rolling sparkline performance graph, and battery gauge. Toggle with `Ctrl + Shift + O`, drag anywhere with `Ctrl + Shift + Drag`.
-- 🛡️ **100% Anti-Cheat Safe**: Uses Windows ETW kernel tracing (`Microsoft-Windows-DxgKrnl` Event ID 184 / `DXGI` Event ID 42). Zero DLL injection, zero API hooking (safe with Vanguard, EAC, BattlEye, Ricochet).
+- 🛡️ **Non-Invasive Architecture**: Uses standard Windows ETW kernel tracing (`Microsoft-Windows-DxgKrnl` Event ID 184 / `DXGI` Event ID 42). Zero DLL injection, zero API hooking, completely non-invasive alongside active games.
 - 🔑 **Dedicated Predator Key Intercept**: Low-level hardware hook (`WH_KEYBOARD_LL`) intercepting Acer scan code `0x75` (`VK_0xFF`) to toggle the app window instantly without stealing in-game focus.
-- 🏎️ **High CPU Priority Enforcement**: Automatically configures Windows Registry IFEO (`CpuPriorityClass=3`), Task Scheduler `<Priority>2</Priority>`, and runtime `ProcessPriorityClass.High` (`BasePriority=13`) for zero latency and micro-stutter immunity during AAA gaming.
+- 🏎️ **High CPU Priority Enforcement**: Automatically configures background task priority and runtime `ProcessPriorityClass.High` (`BasePriority=13`) for zero latency and micro-stutter immunity during AAA gaming.
 - 🌊 **Floating Mode OSD**: Focus-safe banner with custom neon vector emblems on profile changes.
 - 🎮 **Game Sync Profiles**: Automatically binds performance, fans, and RGB to game `.exe` launches.
 
@@ -205,7 +205,7 @@ Predator Control includes an ultra-lightweight, customizable in-game telemetry H
 | **`Ctrl + Shift + Middle Click`** | **Reset Scale (100%)** | Instantly resets HUD scaling back to standard 100%. |
 
 > [!TIP]
-> **Anti-Cheat Safe:** The overlay utilizes Windows ETW kernel tracing (`Microsoft-Windows-DxgKrnl` Event ID 184 / `DXGI` Event ID 42). It requires zero DLL injection and zero API hooks, making it completely safe in games with anti-cheats (Vanguard, EAC, BattlEye, Ricochet).
+> **Non-Invasive Architecture:** The overlay utilizes standard Windows ETW kernel tracing (`Microsoft-Windows-DxgKrnl` Event ID 184 / `DXGI` Event ID 42). It requires zero DLL injection and zero API hooks, making it completely non-invasive and safe alongside running games.
 
 ## 🏗️ Repository Structure
 
@@ -267,7 +267,7 @@ PredatorControl/
 
 ### v1.3.0 — Battery Diagnostics, Multi-Monitor High-DPI & Hardware Controls
 - 🔋 **Battery Health Diagnostics & Wear Monitor**: Integrated live battery health %, wear percentage, current vs design capacity (mWh), and cycle count into the Battery Care section, plus 1-click Windows Battery Report generation.
-- 🎬🔊 **Startup Animation & Sound**: Renamed and upgraded boot chime control to full Startup Animation & Sound with synchronous integration to `AcerAgentService` (port 46933) and complete BIOS POST guide.
+- 🎬🔊 **Startup Animation & Sound**: Renamed and upgraded boot chime control to full Startup Animation & Sound with synchronous integration to `AcerAgentService` and complete BIOS POST guide.
 - ⚡ **Power-off USB Charging**: Control power delivery to designated USB charging port while laptop is off, sleeping, or hibernating, with automatic 30% battery reserve cutoff protection.
 - 🖥️ **Multi-Monitor High-DPI Scaling**: Resolved text overlap in the telemetry sensor cluster (CPU, GPU, fans, power) and eliminated horizontal clipping when moving the application across displays with differing DPI scaling factors.
 - 🪟 **Focus & Scroll Stability**: Fixed focus-induced scroll snapping and scroll bounce when switching between active windows.
@@ -340,7 +340,7 @@ Because utilities that manipulate laptop hardware write directly to the Embedded
 
 ### 2. Review the Source Code Before Running Binaries
 - Since this is an indie repo with a small user base, avoid downloading precompiled `.exe` releases blind.
-- Review the repository's source files (C# .NET) to verify what drivers or external libraries (such as WinRing0 or LibreHardwareMonitor) it loads. Predator Control communicates directly via standard Windows WMI (`root\wmi`) and Acer's official Agent Named Pipe, loading **zero third-party kernel drivers**.
+- Review the repository's source files (C# .NET) to verify what drivers or external libraries it loads. Predator Control communicates directly via standard Windows WMI (`root\wmi`) and Acer's official Agent Named Pipe, loading **zero third-party kernel drivers**.
 
 ### 3. Windows Defender / SmartScreen Flags
 - Any custom utility that communicates with low-level hardware or WMI without an expensive signed EV certificate will trigger a Windows Defender or SmartScreen prompt. This is expected for custom hardware tools, but all the more reason to inspect the source code first.

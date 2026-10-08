@@ -36,6 +36,11 @@ namespace PredatorControlApp
             {
                 isFirstInstance = true;
             }
+            catch (UnauthorizedAccessException)
+            {
+                // Access denied on existing mutex: never grant primary status to a secondary process
+                isFirstInstance = false;
+            }
             catch
             {
                 // If mutex creation fails (e.g. permission restriction), treat as first instance
@@ -101,7 +106,14 @@ namespace PredatorControlApp
                         await server.WaitForConnectionAsync(_cts.Token);
 
                         using var reader = new StreamReader(server, Encoding.UTF8);
-                        string? line = await reader.ReadLineAsync(_cts.Token);
+                        var readTask = reader.ReadLineAsync(_cts.Token).AsTask();
+                        var done = await Task.WhenAny(readTask, Task.Delay(5000, _cts.Token));
+                        if (done != readTask)
+                        {
+                            server.Close();
+                            continue;
+                        }
+                        string? line = await readTask;
                         if (!string.IsNullOrEmpty(line))
                         {
                             try { _onCommandReceived(line); } catch { }
@@ -132,7 +144,7 @@ namespace PredatorControlApp
                     _mutex.ReleaseMutex();
                 }
                 catch { }
-                _mutex.Dispose();
+                _mutex?.Dispose();
             }
         }
     }

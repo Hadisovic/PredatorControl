@@ -205,12 +205,10 @@ namespace PredatorControlApp
 
         public static bool IsModeKey(uint vkCode, uint scanCode, uint flags)
         {
-            // Hardware scan codes emitted by physical Mode / Turbo button
-            if (scanCode == ACER_SCANCODE_MODE_KEY || scanCode == ACER_SCANCODE_MODE_EXT)
+            // Match virtual key code AND scan code together
+            if (vkCode == VK_OEM_PREDATOR && scanCode == ACER_SCANCODE_MODE_KEY) // 0x76
                 return true;
-
-            // Extended Function Keys mapped to Mode / Turbo by laptop firmware
-            if (vkCode == VK_F24 || vkCode == VK_F23)
+            if (vkCode == VK_OEM_PREDATOR && scanCode == ACER_SCANCODE_MODE_EXT) // 0x54 // TODO: verify on hardware
                 return true;
 
             return false;
@@ -218,22 +216,26 @@ namespace PredatorControlApp
 
         public static bool IsPredatorKey(uint vkCode, uint scanCode, uint flags)
         {
-            // Primary Acer Hotkeys: Launch App 2 (Predator), Launch App 1 (Nitro)
-            if (vkCode == VK_LAUNCH_APP2 || vkCode == VK_LAUNCH_APP1)
-                return true;
-
+            // Match virtual key code AND scan code together
             // Confirmed hardware: VK=0xFF + SC=0x75 — actual Predator logo key on this unit (captured via sniffer)
-            if (vkCode == VK_OEM_PREDATOR && scanCode == ACER_SCANCODE_PREDATOR_ACTUAL)
+            if (vkCode == VK_OEM_PREDATOR && scanCode == ACER_SCANCODE_PREDATOR_ACTUAL) // 0x75
                 return true;
 
             // Physical Predator key scan codes (older firmware / other Acer models)
-            if (scanCode == ACER_SCANCODE_PREDATOR_KEY ||
-                scanCode == ACER_SCANCODE_PREDATOR_ALT ||
-                scanCode == ACER_SCANCODE_NITRO_1 ||
-                scanCode == ACER_SCANCODE_NITRO_2)
-            {
+            if (vkCode == VK_OEM_PREDATOR && scanCode == ACER_SCANCODE_PREDATOR_KEY) // 0x71
                 return true;
-            }
+            if (vkCode == VK_OEM_PREDATOR && scanCode == ACER_SCANCODE_PREDATOR_ALT) // 0x6C // TODO: verify on hardware
+                return true;
+
+            // Nitro OEM App 1 key
+            if (vkCode == VK_LAUNCH_APP1 && scanCode == ACER_SCANCODE_NITRO_1) // 0x6E
+                return true;
+            if (vkCode == VK_LAUNCH_APP1 && scanCode == ACER_SCANCODE_NITRO_2) // 0x6D // TODO: verify on hardware
+                return true;
+            if (vkCode == VK_OEM_PREDATOR && scanCode == ACER_SCANCODE_NITRO_1) // 0x6E
+                return true;
+            if (vkCode == VK_OEM_PREDATOR && scanCode == ACER_SCANCODE_NITRO_2) // 0x6D // TODO: verify on hardware
+                return true;
 
             return false;
         }
@@ -254,6 +256,10 @@ namespace PredatorControlApp
             if (nCode >= 0 && (wParam == (IntPtr)WM_KEYDOWN || wParam == (IntPtr)WM_SYSKEYDOWN || wParam == (IntPtr)WM_KEYUP || wParam == (IntPtr)WM_SYSKEYUP))
             {
                 var kb = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
+
+                // Ignore injected/synthetic events (LLKHF_INJECTED = 0x10) to prevent feedback loops
+                if ((kb.flags & 0x10) != 0)
+                    return CallNextHookEx(_hookId, nCode, wParam, lParam);
 
                 // IN-GAME WINDOWS KEY &amp; MENU KEY LOCK:
                 // Suppress Left/Right Windows keys (0x5B, 0x5C) and Application/Menu key (0x5D)

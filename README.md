@@ -4,7 +4,7 @@
 
 # 🪼 Predator Control
 
-[![Version](https://img.shields.io/badge/version-1.3.2-00E5FF?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Hadisovic/PredatorControl/releases)
+[![Version](https://img.shields.io/badge/version-1.3.3-00E5FF?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Hadisovic/PredatorControl/releases)
 [![Jelli UI](https://img.shields.io/badge/Jelli%20UI-Live%20%F0%9F%AA%BC-FF69B4?style=for-the-badge&logo=sparkles&logoColor=white)](#-jelli-ui)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-00B4CC?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/Hadisovic/PredatorControl)
 [![Framework](https://img.shields.io/badge/.NET-10.0%20Windows-512BD4?style=for-the-badge&logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/)
@@ -244,6 +244,15 @@ PredatorControl/
 
 ## 📋 Changelog
 
+### v1.3.3 — Reliability Fixes & Telemetry Accuracy
+- ⏱️ **Debounce Race Fixed**: A superseded timer can no longer remove or fire a newer pending action early. Ownership is verified inside the lock, actions run outside it, and every `CancellationTokenSource` is disposed.
+- 🧵 **Clean Telemetry Shutdown**: The worker task is retained and awaited on `Dispose()`; the cancellation token is captured up front and no snapshot is published after shutdown begins.
+- 📈 **FPS Buffer Synchronization**: Frame writes, sampling and `TargetPid` switches now share a short lock and sampling works on a consistent snapshot.
+- 🎨 **RGB Profile Safety**: Defaults are deep-copied, loaded profiles are validated, writes are atomic, and a damaged profile file is moved aside (`.corrupt-<timestamp>`) instead of overwritten. A temporarily unreadable file is never replaced.
+- 🔄 **Safer Updater Handoff**: Unique, ACL-restricted staging directory; download and hash through one exclusive handle; hash re-verified by the script right before replacement; move result checked with retries; previous version kept in `%LOCALAPPDATA%\PredatorControl\backup`.
+- 🚀 **Game Sync**: One process enumeration per poll (instead of one per profile), profile priority preserved, and process handles always disposed.
+- 🧹 **No Forced Memory Trimming**: Removed periodic `GC.Collect` / `WaitForPendingFinalizers` / `SetProcessWorkingSetSize`.
+- 🎯 **Honest GPU Utilization**: No more fake utilization derived from power or temperature; it is only shown when a real measurement exists.
 ### v1.3.2 — Security Hardening: Authenticode Verification & User Consent for OEM Services
 - 🔒 **Authenticode Signature Verification**: Enforced cryptographic Authenticode signature verification (`WinVerifyTrust` + `X509Chain`) for all OEM drivers and service binaries prior to installation or registration, requiring explicit `Acer Incorporated` publisher verification.
 - 🛡️ **Discovery Isolation**: Removed searching user-writable directories (`appDir/oem_drivers` and `parentOem/oem_drivers`); restricted driver discovery strictly to `C:\Windows\System32\DriverStore\FileRepository`.

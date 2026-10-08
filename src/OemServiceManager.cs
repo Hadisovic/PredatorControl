@@ -660,10 +660,6 @@ namespace PredatorControlApp
                 }
             }
 
-            // 3. Configure Battery 80% Limiter Registry Keys
-            statusCallback?.Invoke("Configuring 80% battery charge limit...");
-            ConfigureNitroBatteryLimitRegistry();
-
             string summary = $"Nitro services verified: {repairedCount} running" + (installedCount > 0 ? $", {installedCount} installed/registered" : string.Empty);
             statusCallback?.Invoke(summary);
             return (repairedCount > 0, summary);

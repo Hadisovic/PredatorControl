@@ -993,8 +993,9 @@ namespace PredatorControlApp
 
                 int gpuVal = Math.Clamp(_gpuUsage ?? 0, 0, 100);
                 int cpuVal = Math.Clamp(_cpuUsage ?? 0, 0, 100);
-                string gpuPct = $"{gpuVal}%";
-                string cpuPct = $"{cpuVal}%";
+                // No real measurement (e.g. NVML unavailable) shows "--" rather than a misleading 0%.
+                string gpuPct = _gpuUsage.HasValue ? $"{gpuVal}%" : "--";
+                string cpuPct = _cpuUsage.HasValue ? $"{cpuVal}%" : "--";
 
                 using (var gpuBrush = new SolidBrush(gpuCol))
                 using (var cpuBrush = new SolidBrush(cpuCol))

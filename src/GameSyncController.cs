@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Runtime.Versioning;
 using System.Text.Json;
 
@@ -109,44 +109,66 @@ namespace PredatorControlApp
             _savedSnapshot = snapshot;
         }
 
-        private bool IsProcessActive(string nameWithoutExe)
+        private static bool IsBrowser(string name) =>
+            name.Equals("chrome", StringComparison.OrdinalIgnoreCase) ||
+            name.Equals("brave", StringComparison.OrdinalIgnoreCase) ||
+            name.Equals("msedge", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Enumerates processes ONCE and returns the names that count as "active".
+        /// Browsers only count when they own a visible main window (background helper processes don't).
+        /// </summary>
+        private static HashSet<string> SnapshotActiveProcessNames()
         {
+            var active = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            Process[] all;
+            try { all = Process.GetProcesses(); }
+            catch { return active; }
+
             try
             {
-                var matches = Process.GetProcessesByName(nameWithoutExe);
-                if (matches.Length == 0) return false;
-
-                bool isBrowser = nameWithoutExe.Equals("chrome", StringComparison.OrdinalIgnoreCase) ||
-                                 nameWithoutExe.Equals("brave", StringComparison.OrdinalIgnoreCase) ||
-                                 nameWithoutExe.Equals("msedge", StringComparison.OrdinalIgnoreCase);
-
-                bool active = false;
-                if (isBrowser)
+                foreach (var p in all)
                 {
-                    active = matches.Any(p => p.MainWindowHandle != IntPtr.Zero);
-                }
-                else
-                {
-                    active = true;
-                }
+                    try
+                    {
+                        string name = p.ProcessName;
+                        if (active.Contains(name)) continue;
 
-                foreach (var p in matches) p.Dispose();
-                return active;
+                        if (IsBrowser(name))
+                        {
+                            if (p.MainWindowHandle != IntPtr.Zero) active.Add(name);
+                        }
+                        else
+                        {
+                            active.Add(name);
+                        }
+                    }
+                    catch
+                    {
+                        // Process exited or access denied mid-enumeration; skip it.
+                    }
+                }
             }
-            catch
+            finally
             {
-                return false;
+                foreach (var p in all)
+                {
+                    try { p.Dispose(); } catch { }
+                }
             }
+            return active;
         }
 
         private void PollProcesses(object? sender, EventArgs e)
         {
             if (!_enabled || _profiles.Count == 0) return;
 
+            var running = SnapshotActiveProcessNames();
+
             if (_activeExe != null)
             {
                 string nameWithoutExe = Path.GetFileNameWithoutExtension(_activeExe);
-                bool stillRunning = IsProcessActive(nameWithoutExe);
+                bool stillRunning = running.Contains(nameWithoutExe);
 
                 if (!stillRunning)
                 {
@@ -159,10 +181,11 @@ namespace PredatorControlApp
             }
             else
             {
+                // Iterate profiles in their configured order so profile priority is unchanged.
                 foreach (var profile in _profiles)
                 {
                     string nameWithoutExe = Path.GetFileNameWithoutExtension(profile.ExecutableName);
-                    if (IsProcessActive(nameWithoutExe))
+                    if (running.Contains(nameWithoutExe))
                     {
                         _activeExe = profile.ExecutableName;
                         GameDetected?.Invoke(profile);
@@ -171,7 +194,6 @@ namespace PredatorControlApp
                 }
             }
         }
-
         #region Persistence
 
         private void Save()

@@ -1,42 +1,77 @@
 {
   "runtimeTarget": {
-    "name": ".NETCoreApp,Version=v10.0",
+    "name": ".NETCoreApp,Version=v10.0/win-x64",
     "signature": ""
   },
   "compilationOptions": {},
   "targets": {
-    ".NETCoreApp,Version=v10.0": {
-      "PredatorControlApp/1.1.7": {
+    ".NETCoreApp,Version=v10.0": {},
+    ".NETCoreApp,Version=v10.0/win-x64": {
+      "PredatorControlApp/1.3.3": {
         "dependencies": {
-          "System.Management": "10.0.0"
+          "Microsoft.Web.WebView2": "1.0.3650.58",
+          "System.Management": "10.0.0",
+          "System.ServiceProcess.ServiceController": "10.0.12",
+          "Microsoft.Web.WebView2.Core": "1.0.3650.58",
+          "Microsoft.Web.WebView2.WinForms": "1.0.3650.58"
         },
         "runtime": {
           "PredatorControlApp.dll": {}
         }
       },
+      "Microsoft.Web.WebView2/1.0.3650.58": {
+        "native": {
+          "runtimes/win-x64/native/WebView2Loader.dll": {
+            "fileVersion": "1.0.3650.58"
+          }
+        }
+      },
       "System.Management/10.0.0": {
         "runtime": {
-          "lib/net10.0/System.Management.dll": {
+          "runtimes/win/lib/net10.0/System.Management.dll": {
             "assemblyVersion": "10.0.0.0",
             "fileVersion": "10.0.25.52411"
           }
-        },
-        "runtimeTargets": {
-          "runtimes/win/lib/net10.0/System.Management.dll": {
-            "rid": "win",
-            "assetType": "runtime",
-            "assemblyVersion": "10.0.0.0",
-            "fileVersion": "10.0.25.52411"
+        }
+      },
+      "System.ServiceProcess.ServiceController/10.0.12": {
+        "runtime": {
+          "runtimes/win/lib/net10.0/System.ServiceProcess.ServiceController.dll": {
+            "assemblyVersion": "10.0.0.12",
+            "fileVersion": "10.0.1226.42308"
+          }
+        }
+      },
+      "Microsoft.Web.WebView2.Core/1.0.3650.58": {
+        "runtime": {
+          "Microsoft.Web.WebView2.Core.dll": {
+            "assemblyVersion": "1.0.3650.58",
+            "fileVersion": "1.0.3650.58"
+          }
+        }
+      },
+      "Microsoft.Web.WebView2.WinForms/1.0.3650.58": {
+        "runtime": {
+          "Microsoft.Web.WebView2.WinForms.dll": {
+            "assemblyVersion": "1.0.3650.58",
+            "fileVersion": "1.0.3650.58"
           }
         }
       }
     }
   },
   "libraries": {
-    "PredatorControlApp/1.1.7": {
+    "PredatorControlApp/1.3.3": {
       "type": "project",
       "serviceable": false,
       "sha512": ""
+    },
+    "Microsoft.Web.WebView2/1.0.3650.58": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-BrfpVqOuWtW8yA/it365aB6K6H6EYCXjqJkX730UiO7weVsSYjUyKPFVY5WGa+IfRHqknh619uXHMYTOR4WFRw==",
+      "path": "microsoft.web.webview2/1.0.3650.58",
+      "hashPath": "microsoft.web.webview2.1.0.3650.58.nupkg.sha512"
     },
     "System.Management/10.0.0": {
       "type": "package",
@@ -44,6 +79,23 @@
       "sha512": "sha512-LE3rDZoPzulou78Tsq+3ALhUs4vatQ03v2QWbYVIenVPneUH/+LTUmHyyl098OxIFLQI6sNkZs8YHbUnT/sm3A==",
       "path": "system.management/10.0.0",
       "hashPath": "system.management.10.0.0.nupkg.sha512"
+    },
+    "System.ServiceProcess.ServiceController/10.0.12": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-sFV+RM/yPtshiCAEIuTm8Dt4F7VuKRbL50PnGC9nXHolk/jw+z3T8zx7axKTBC8mqtQU2ZmjsoPC9b1iwOilNQ==",
+      "path": "system.serviceprocess.servicecontroller/10.0.12",
+      "hashPath": "system.serviceprocess.servicecontroller.10.0.12.nupkg.sha512"
+    },
+    "Microsoft.Web.WebView2.Core/1.0.3650.58": {
+      "type": "reference",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "Microsoft.Web.WebView2.WinForms/1.0.3650.58": {
+      "type": "reference",
+      "serviceable": false,
+      "sha512": ""
     }
   }
 }

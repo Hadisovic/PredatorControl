@@ -48,6 +48,53 @@ namespace PredatorControlApp
             finally { _dialogOpen = false; }
         }
 
+        /// <summary>
+        /// Applies persisted hardware preferences (battery limit, RGB, boot sound, USB charging).
+        /// batteryOnly = true performs only the headless battery charge enforcement (--boot-limit).
+        /// Registry reads use RegistryConfig (HKCU first, then HKLM fallback).
+        /// </summary>
+        private static void ApplyHardwarePreferences(bool batteryOnly = false)
+        {
+            try
+            {
+                bool enableLimit = RegistryConfig.ReadInt("BatteryLimit") == 1;
+                int rgbMode = RegistryConfig.ReadInt("RGB_Mode") ?? 0;
+                int brightness = RegistryConfig.ReadInt("Brightness") ?? 100;
+                int rgbSpeed = RegistryConfig.ReadInt("RGB_Speed") ?? 50;
+                int[] zoneColors = new int[4];
+                for (int z = 0; z < 4; z++)
+                {
+                    zoneColors[z] = RegistryConfig.ReadInt($"ZoneColor_{z}") ?? unchecked((int)0xFF00E6B4);
+                }
+
+                using var wmiEarly = new WmiController();
+                wmiEarly.SetBatteryChargeLimit(enableLimit);
+
+                if (batteryOnly) return;
+
+                // Early boot keyboard lighting enforcement:
+                // Applies user's saved color to ACPI WMI and updates LightingProfile.ini with ActiveMode=2 (Static)
+                var zones = new Color[4];
+                for (int z = 0; z < 4; z++)
+                {
+                    zones[z] = Color.FromArgb(zoneColors[z]);
+                }
+                byte mappedEarlySpeed = (byte)Math.Clamp(Math.Round(rgbSpeed * 9.0 / 100.0), 1, 9);
+                wmiEarly.ApplyLightingSynchronous(zones, rgbMode, (byte)Math.Clamp(brightness, 0, 100), mappedEarlySpeed);
+
+                // Boot Sound and USB Power-off Charging enforcement
+                try
+                {
+                    int? bs = RegistryConfig.ReadInt("BootSound");
+                    if (bs.HasValue) wmiEarly.SetBootSound(bs.Value == 1);
+                    int? uc = RegistryConfig.ReadInt("UsbCharging");
+                    if (uc.HasValue) wmiEarly.SetUsbCharging(uc.Value == 1);
+                }
+                catch { }
+            }
+            catch { }
+        }
+
         [STAThread]
         static void Main(string[] args)
         {
@@ -59,99 +106,10 @@ namespace PredatorControlApp
             }
             catch { }
 
-            // Immediate ultra-fast hardware enforcement at boot:
-            // Reads user's persisted preferences from registry (HKLM machine mirror or HKCU)
-            // and immediately sets ACPI WMI registers + AcerLightingService profile
-            // within the first few milliseconds of execution before user logon.
-            try
-            {
-                bool enableLimit = false;
-                int rgbMode = 0;
-                int brightness = 100;
-                int rgbSpeed = 50;
-                int rgbR = 0, rgbG = 230, rgbB = 180;
-                int[] zoneColors = new int[4] { unchecked((int)0xFF00E6B4), unchecked((int)0xFF00E6B4), unchecked((int)0xFF00E6B4), unchecked((int)0xFF00E6B4) };
-
-                // 1. Check HKLM first (machine boot mirror, accessible to SYSTEM before user logon)
-                using (var hklmKey = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\PredatorControl"))
-                {
-                    if (hklmKey != null)
-                    {
-                        object? val = hklmKey.GetValue("BatteryLimit");
-                        if (val is int i) enableLimit = i == 1;
-                        else if (val != null && int.TryParse(val.ToString(), out int p)) enableLimit = p == 1;
-
-                        if (hklmKey.GetValue("RGB_Mode") is int rm) rgbMode = rm;
-                        if (hklmKey.GetValue("Brightness") is int br) brightness = br;
-                        if (hklmKey.GetValue("RGB_Speed") is int sp) rgbSpeed = sp;
-                        if (hklmKey.GetValue("RGB_R") is int r) rgbR = r;
-                        if (hklmKey.GetValue("RGB_G") is int g) rgbG = g;
-                        if (hklmKey.GetValue("RGB_B") is int b) rgbB = b;
-
-                        for (int z = 0; z < 4; z++)
-                        {
-                            if (hklmKey.GetValue($"ZoneColor_{z}") is int zc) zoneColors[z] = zc;
-                        }
-                    }
-                }
-
-                // 2. If not found in HKLM, check CurrentUser
-                if (!enableLimit)
-                {
-                    using var regKey = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"SOFTWARE\PredatorControl");
-                    if (regKey != null)
-                    {
-                        object? val = regKey.GetValue("BatteryLimit");
-                        if (val is int i) enableLimit = i == 1;
-                        else if (val != null && int.TryParse(val.ToString(), out int p)) enableLimit = p == 1;
-
-                        if (regKey.GetValue("RGB_Mode") is int rm) rgbMode = rm;
-                        if (regKey.GetValue("Brightness") is int br) brightness = br;
-                        if (regKey.GetValue("RGB_Speed") is int sp) rgbSpeed = sp;
-                        if (regKey.GetValue("RGB_R") is int r) rgbR = r;
-                        if (regKey.GetValue("RGB_G") is int g) rgbG = g;
-                        if (regKey.GetValue("RGB_B") is int b) rgbB = b;
-
-                        for (int z = 0; z < 4; z++)
-                        {
-                            if (regKey.GetValue($"ZoneColor_{z}") is int zc) zoneColors[z] = zc;
-                        }
-                    }
-                }
-
-                using var wmiEarly = new WmiController();
-                wmiEarly.SetBatteryChargeLimit(enableLimit);
-
-                // Early boot keyboard lighting enforcement:
-                // Applies user's saved color to ACPI WMI and updates LightingProfile.ini with ActiveMode=2 (Static)
-                // so AcerLightingService loads user color immediately upon service start instead of amber.
-                var zones = new Color[4];
-                for (int z = 0; z < 4; z++)
-                {
-                    zones[z] = Color.FromArgb(zoneColors[z]);
-                }
-                byte mappedEarlySpeed = (byte)Math.Clamp(Math.Round(rgbSpeed * 9.0 / 100.0), 1, 9);
-                wmiEarly.ApplyLightingSynchronous(zones, rgbMode, (byte)Math.Clamp(brightness, 0, 100), mappedEarlySpeed);
-
-                // Early boot Boot Sound and USB Power-off Charging enforcement
-                try
-                {
-                    using var bootKey = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"SOFTWARE\PredatorControl");
-                    if (bootKey != null)
-                    {
-                        if (bootKey.GetValue("BootSound") is int bs)
-                            wmiEarly.SetBootSound(bs == 1);
-                        if (bootKey.GetValue("UsbCharging") is int uc)
-                            wmiEarly.SetUsbCharging(uc == 1);
-                    }
-                }
-                catch { }
-            }
-            catch { }
-
             if (args.Length > 0 && args[0].Equals("--boot-limit", StringComparison.OrdinalIgnoreCase))
             {
-                return; // Fast headless battery charge enforcement mode
+                ApplyHardwarePreferences(batteryOnly: true); // Fast headless battery charge enforcement mode
+                return;
             }
 
             if (args.Length > 0 && args[0].Equals("--self-check", StringComparison.OrdinalIgnoreCase))
@@ -206,6 +164,9 @@ namespace PredatorControlApp
             {
                 return;
             }
+
+            // Only the primary instance writes hardware state (secondary IPC launches exit above).
+            ApplyHardwarePreferences();
 
             try
             {

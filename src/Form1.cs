@@ -412,7 +412,6 @@ namespace PredatorControlApp
                 ThemeManager.ThemeChanged -= OnThemeChanged;
                 try { _overlayForm?.Dispose(); } catch { }
                 try { NvmlGpuMonitor.Shutdown(); } catch { }
-                try { _wmi?.SetFanBehavior(0x01); } catch { }
             };
 
             ThemeManager.ThemeChanged += OnThemeChanged;
@@ -4648,6 +4647,7 @@ namespace PredatorControlApp
                 try { _gameSync?.Dispose(); } catch { }
                 try { _jelli?.Dispose(); } catch { }
                 try { _overlayForm?.Dispose(); } catch { }
+                try { _wmi?.SetFanBehavior(0x01); } catch { }
                 try { _wmi?.Dispose(); } catch { }
                 try { _ipc?.Dispose(); } catch { }
                 base.OnFormClosing(e);

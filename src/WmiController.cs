@@ -68,6 +68,7 @@ namespace PredatorControlApp
         public int PowerModeCount { get; init; }
         public string[] PowerModeLabels { get; init; } = Array.Empty<string>();
         public byte[] PowerModeValues { get; init; } = Array.Empty<byte>();
+        public static readonly HardwareCapabilities None = new();
     }
 
     [SupportedOSPlatform("windows")]
@@ -148,6 +149,17 @@ namespace PredatorControlApp
                 if (_cachedObj != null) return _cachedObj;
                 if (_cacheRebuilding) return null; // Skip rather than block during pre-warm
 
+                BuildCache();
+                return _cachedObj;
+            }
+        }
+
+        private void BuildCache()
+        {
+            lock (_lock)
+            {
+                if (_disposed) return;
+
                 try
                 {
                     // Direct fast-path if class was already discovered
@@ -162,7 +174,7 @@ namespace PredatorControlApp
                             {
                                 _cachedObj = obj;
                                 _consecutiveFailures = 0;
-                                return _cachedObj;
+                                return;
                             }
                         }
                         catch { }
@@ -191,8 +203,6 @@ namespace PredatorControlApp
                 {
                     _cachedObj = null;
                 }
-
-                return _cachedObj;
             }
         }
 
@@ -219,7 +229,7 @@ namespace PredatorControlApp
                 _cacheRebuilding = true;
                 Task.Run(() =>
                 {
-                    try { GetWmiObject(); } catch { }
+                    try { BuildCache(); } catch { }
                     finally { _cacheRebuilding = false; }
                 });
             }
@@ -523,7 +533,29 @@ namespace PredatorControlApp
         }
 
         private HardwareCapabilities? _cachedCapabilities;
-        public HardwareCapabilities Capabilities => _cachedCapabilities ??= ProbeCapabilities();
+        private static readonly object _probeLock = new();
+        public HardwareCapabilities Capabilities
+        {
+            get
+            {
+                lock (_probeLock)
+                {
+                    if (_cachedCapabilities != null)
+                        return _cachedCapabilities;
+
+                    try
+                    {
+                        var probed = ProbeCapabilities();
+                        _cachedCapabilities = probed;
+                        return probed;
+                    }
+                    catch
+                    {
+                        return HardwareCapabilities.None;
+                    }
+                }
+            }
+        }
 
         private HardwareCapabilities ProbeCapabilities()
         {
@@ -1242,9 +1274,10 @@ namespace PredatorControlApp
         /// [HARDWARE I/O]: Invokes ACPI WMI SetBatteryHealthControl(uFunctionStatus=1) or sets ASMSvc registry
         /// [EFFECT]      : Embedded Controller and battery charger IC cap charging circuit at 80% capacity
         /// </summary>
-        public bool SetBatteryChargeLimit(bool enable)
+        public bool SetBatteryChargeLimit(bool enable, bool startServices = false)
         {
             // 1. Primary: BIOS native ACPI WMI BatteryControl class (Predator & modern Nitro)
+            // Returns true ONLY when the ACPI call confirms success (uReturn == 0).
             try
             {
                 using var searcher = new ManagementObjectSearcher(@"root\WMI", "SELECT * FROM BatteryControl");
@@ -1268,12 +1301,12 @@ namespace PredatorControlApp
             }
             catch { }
 
-            // 2. Fallback for Nitro and Acer systems using ASMSvc / AcerCareCenter registry keys
+            // 2. Fallback for Nitro and Acer systems using ASMSvc / AcerCareCenter registry keys.
+            // Registry writes alone do NOT confirm the hardware limit, so this path returns false.
             try
             {
                 int stopCharging = enable ? 80 : 100;
                 int healthControl = enable ? 1 : 0;
-                bool regOk = false;
 
                 string[] paths = {
                     @"SOFTWARE\OEM\AcerCareCenter\Battery",
@@ -1293,28 +1326,31 @@ namespace PredatorControlApp
                             key.SetValue("HealthControl", healthControl, RegistryValueKind.DWord);
                             key.SetValue("BatteryLimit", healthControl, RegistryValueKind.DWord);
                             key.SetValue("LimitPercent", 80, RegistryValueKind.DWord);
-                            regOk = true;
                         }
                     }
                     catch { }
                 }
 
-                // If ASMSvc, AcerServiceSvc, or AcerDeviceEnablingService exists, ensure started
-                string[] svcs = { "ASMSvc", "AcerServiceSvc", "AcerDeviceEnablingServiceV2", "AcerDeviceEnablingService" };
-                foreach (var svc in svcs)
+                // Only start Acer services when explicitly requested by the caller
+                if (startServices)
                 {
-                    try
+                    string[] svcs = { "ASMSvc", "AcerServiceSvc", "AcerDeviceEnablingServiceV2", "AcerDeviceEnablingService" };
+                    foreach (var svc in svcs)
                     {
-                        using var sc = new ServiceController(svc);
-                        if (sc.Status == ServiceControllerStatus.Stopped || sc.Status == ServiceControllerStatus.Paused)
+                        try
                         {
-                            sc.Start();
+                            using var sc = new ServiceController(svc);
+                            if (sc.Status == ServiceControllerStatus.Stopped || sc.Status == ServiceControllerStatus.Paused)
+                            {
+                                sc.Start();
+                            }
                         }
+                        catch { }
                     }
-                    catch { }
                 }
 
-                if (regOk) return true;
+                Program.Report(new InvalidOperationException(
+                    $"Battery limit ({(enable ? "on" : "off")}) not confirmed by ACPI; registry fallback written only."), false);
             }
             catch { }
 
@@ -1577,12 +1613,22 @@ namespace PredatorControlApp
             {
                 try
                 {
-                    using var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut);
+                    using var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
                     pipe.Connect(150);
                     pipe.Write(packet, 0, packet.Length);
                     pipe.Flush();
                     byte[] resp = new byte[32];
-                    int read = pipe.Read(resp, 0, resp.Length);
+                    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+                    int read;
+                    try
+                    {
+                        read = pipe.ReadAsync(resp, 0, resp.Length, cts.Token).GetAwaiter().GetResult();
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        pipe.Close();
+                        return _backlight30s;
+                    }
                     if (read >= 13)
                     {
                         ulong val = BitConverter.ToUInt64(resp, 5);
@@ -1677,12 +1723,22 @@ namespace PredatorControlApp
             {
                 try
                 {
-                    using var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut);
+                    using var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
                     pipe.Connect(150);
                     pipe.Write(packet, 0, packet.Length);
                     pipe.Flush();
                     byte[] resp = new byte[16];
-                    int read = pipe.Read(resp, 0, resp.Length);
+                    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+                    int read;
+                    try
+                    {
+                        read = pipe.ReadAsync(resp, 0, resp.Length, cts.Token).GetAwaiter().GetResult();
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        pipe.Close();
+                        return false;
+                    }
                     if (read >= 7 && resp[read - 1] == 0)
                     {
                         anySuccess = true;

@@ -124,11 +124,21 @@ namespace PredatorControlApp
 
         private static void CheckPredatorKeyHook()
         {
-            Debug.Assert(PredatorKeyHook.IsPredatorKey(PredatorKeyHook.VK_LAUNCH_APP2, 0, 0), "VK_LAUNCH_APP2 must match Predator key");
-            Debug.Assert(PredatorKeyHook.IsModeKey(PredatorKeyHook.VK_F24, 0, 0), "VK_F24 must match Mode key");
-            Debug.Assert(PredatorKeyHook.IsModeKey(0, PredatorKeyHook.ACER_SCANCODE_MODE_KEY, 0), "Scan code 0x76 must match Mode key");
-            Debug.Assert(PredatorKeyHook.IsPredatorKey(0, PredatorKeyHook.ACER_SCANCODE_PREDATOR, 0), "Scan code 0x71 must match Predator key");
-            Debug.Assert(PredatorKeyHook.IsPredatorKey(0, PredatorKeyHook.ACER_SCANCODE_PREDATOR, PredatorKeyHook.LLKHF_EXTENDED), "Extended scan code 0x71 must match");
+            // Calculator key (VK_LAUNCH_APP2) and F24 must NOT match Predator/Mode key
+            Debug.Assert(!PredatorKeyHook.IsPredatorKey(PredatorKeyHook.VK_LAUNCH_APP2, 0, 0), "VK_LAUNCH_APP2 must not match Predator key");
+            Debug.Assert(!PredatorKeyHook.IsModeKey(PredatorKeyHook.VK_F24, 0, 0), "VK_F24 must not match Mode key");
+
+            // Scan codes alone (without VK) must not match
+            Debug.Assert(!PredatorKeyHook.IsModeKey(0, PredatorKeyHook.ACER_SCANCODE_MODE_KEY, 0), "Scan code 0x76 alone must not match Mode key");
+            Debug.Assert(!PredatorKeyHook.IsPredatorKey(0, PredatorKeyHook.ACER_SCANCODE_PREDATOR, 0), "Scan code 0x71 alone must not match Predator key");
+
+            // Valid VK + Scan Code pairs must match
+            Debug.Assert(PredatorKeyHook.IsModeKey(PredatorKeyHook.VK_OEM_PREDATOR, PredatorKeyHook.ACER_SCANCODE_MODE_KEY, 0), "VK_OEM_PREDATOR + Mode key scan code must match Mode key");
+            Debug.Assert(PredatorKeyHook.IsPredatorKey(PredatorKeyHook.VK_OEM_PREDATOR, PredatorKeyHook.ACER_SCANCODE_PREDATOR_ACTUAL, 0), "VK_OEM_PREDATOR + SC 0x75 must match Predator key");
+            Debug.Assert(PredatorKeyHook.IsPredatorKey(PredatorKeyHook.VK_OEM_PREDATOR, PredatorKeyHook.ACER_SCANCODE_PREDATOR_KEY, 0), "VK_OEM_PREDATOR + SC 0x71 must match Predator key");
+            Debug.Assert(PredatorKeyHook.IsPredatorKey(PredatorKeyHook.VK_LAUNCH_APP1, PredatorKeyHook.ACER_SCANCODE_NITRO_1, 0), "VK_LAUNCH_APP1 + SC 0x6E must match Nitro key");
+
+            // Unrelated keys must never match
             Debug.Assert(!PredatorKeyHook.IsPredatorKey(0x5B, 0x5B, 0), "Left Windows key must not match Predator key");
             Debug.Assert(!PredatorKeyHook.IsModeKey(0x5B, 0x5B, 0), "Left Windows key must not match Mode key");
             Debug.Assert(!PredatorKeyHook.IsPredatorKey(0x41, 0x1E, 0), "Key A must not match");

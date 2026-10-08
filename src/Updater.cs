@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Net.Http;
 using System.Reflection;
 using System.Runtime.InteropServices;
@@ -165,100 +165,215 @@ namespace PredatorControlApp
                 throw new InvalidOperationException("Update download refused: untrusted host '" + downloadUri.Host + "'.");
 
             string target = Environment.ProcessPath ?? Application.ExecutablePath;
-            string staged = Path.Combine(Path.GetTempPath(), "PredatorControl-update.exe");
 
-            using (var http = new HttpClient { Timeout = TimeSpan.FromMinutes(10) })
-            {
-                http.DefaultRequestHeaders.UserAgent.ParseAdd("PredatorControl");
-                using var src = await http.GetStreamAsync(info.DownloadUrl);
-                using var dst = File.Create(staged);
-                await src.CopyToAsync(dst);
-            }
-
-            if (new FileInfo(staged).Length < 100_000)
-                throw new IOException("Downloaded file looks truncated.");
-
-            if (string.IsNullOrEmpty(info.ChecksumUrl))
-            {
-                try { File.Delete(staged); } catch { }
-                throw new InvalidOperationException("Mandatory checksum verification failed: no checksum URL provided with update metadata. Staged file aborted.");
-            }
-
-            string checksumData;
-            using (var http = new HttpClient { Timeout = TimeSpan.FromMinutes(2) })
-            {
-                http.DefaultRequestHeaders.UserAgent.ParseAdd("PredatorControl");
-                checksumData = await http.GetStringAsync(info.ChecksumUrl);
-            }
-
-            string stagedHash;
-            using (var fs = File.OpenRead(staged))
-            using (var sha = System.Security.Cryptography.SHA256.Create())
-            {
-                stagedHash = BitConverter.ToString(sha.ComputeHash(fs)).Replace("-", "").ToLowerInvariant();
-            }
-
-            string? expectedHash = null;
-            string targetName = info.TargetFileName ?? Path.GetFileName(new Uri(info.DownloadUrl).LocalPath);
-            foreach (var line in checksumData.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
-            {
-                var parts = line.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
-                if (parts.Length >= 2)
-                {
-                    string lineHash = parts[0].Trim().ToLowerInvariant();
-                    string lineFile = parts[parts.Length - 1].Trim();
-                    if (lineFile.Equals(targetName, OIC))
-                    {
-                        expectedHash = lineHash;
-                        break;
-                    }
-                }
-            }
-
-            if (string.IsNullOrEmpty(expectedHash))
-            {
-                try { File.Delete(staged); } catch { }
-                throw new InvalidOperationException($"Mandatory checksum verification failed: no checksum found for '{targetName}' in release checksums. Staged file aborted.");
-            }
-
-            if (!stagedHash.Equals(expectedHash, StringComparison.OrdinalIgnoreCase))
-            {
-                try { File.Delete(staged); } catch { }
-                throw new InvalidOperationException($"Checksum verification failed: expected {expectedHash}, got {stagedHash}. Staged file aborted.");
-            }
+            // Unique staging directory, restricted to this user / SYSTEM / Administrators,
+            // so other local users or processes can't pre-create or swap the staged files.
+            string stageDir = CreateStagingDirectory();
+            string staged = Path.Combine(stageDir, "PredatorControl-update.exe");
+            string script = Path.Combine(stageDir, "apply-update.cmd");
 
             try
             {
-                using var key = Registry.CurrentUser.CreateSubKey(RegPath);
-                key.SetValue("UpdateNotes", info.Notes);
-                key.SetValue("UpdateNotesVersion", info.Version.ToString(3));
+                // Validate the checksum metadata before spending bandwidth on the download.
+                if (string.IsNullOrEmpty(info.ChecksumUrl))
+                    throw new InvalidOperationException("Mandatory checksum verification failed: no checksum URL provided with update metadata. Staged file aborted.");
+
+                string stagedHash;
+                // Download and hash through ONE exclusive handle so nothing can modify the file between download and verification.
+                using (var http = new HttpClient { Timeout = TimeSpan.FromMinutes(10) })
+                {
+                    http.DefaultRequestHeaders.UserAgent.ParseAdd("PredatorControl");
+                    using var src = await http.GetStreamAsync(info.DownloadUrl);
+                    using var dst = new FileStream(staged, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
+                    await src.CopyToAsync(dst);
+                    await dst.FlushAsync();
+
+                    if (dst.Length < 100_000)
+                        throw new IOException("Downloaded file looks truncated.");
+
+                    dst.Position = 0;
+                    using var sha = System.Security.Cryptography.SHA256.Create();
+                    stagedHash = Convert.ToHexString(await sha.ComputeHashAsync(dst)).ToLowerInvariant();
+                }
+
+                string checksumData;
+                using (var http = new HttpClient { Timeout = TimeSpan.FromMinutes(2) })
+                {
+                    http.DefaultRequestHeaders.UserAgent.ParseAdd("PredatorControl");
+                    checksumData = await http.GetStringAsync(info.ChecksumUrl);
+                }
+
+                string? expectedHash = null;
+                string targetName = info.TargetFileName ?? Path.GetFileName(new Uri(info.DownloadUrl).LocalPath);
+                foreach (var line in checksumData.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+                {
+                    var parts = line.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+                    if (parts.Length >= 2)
+                    {
+                        string lineHash = parts[0].Trim().ToLowerInvariant();
+                        // sha256sum marks binary-mode entries with a leading '*'
+                        string lineFile = parts[parts.Length - 1].Trim().TrimStart('*');
+                        if (lineFile.Equals(targetName, OIC))
+                        {
+                            expectedHash = lineHash;
+                            break;
+                        }
+                    }
+                }
+
+                if (string.IsNullOrEmpty(expectedHash))
+                    throw new InvalidOperationException($"Mandatory checksum verification failed: no checksum found for '{targetName}' in release checksums. Staged file aborted.");
+
+                if (!stagedHash.Equals(expectedHash, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException($"Checksum verification failed: expected {expectedHash}, got {stagedHash}. Staged file aborted.");
+
+                // The value is embedded in a batch script, so it must be strictly 64 hex characters.
+                if (!Regex.IsMatch(stagedHash, "^[0-9a-f]{64}$"))
+                    throw new InvalidOperationException("Checksum verification failed: unexpected hash format.");
+
+                try
+                {
+                    using var key = Registry.CurrentUser.CreateSubKey(RegPath);
+                    key.SetValue("UpdateNotes", info.Notes);
+                    key.SetValue("UpdateNotesVersion", info.Version.ToString(3));
+                }
+                catch { }
+
+                // Persistent backup of the version being replaced (kept after a successful update for manual rollback).
+                string backupDir = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "PredatorControl", "backup");
+                Directory.CreateDirectory(backupDir);
+                string backup = Path.Combine(backupDir, "PredatorControl.previous.exe");
+
+                File.WriteAllText(script, BuildUpdateScript(Environment.ProcessId, staged, target, backup, stageDir, stagedHash),
+                    new UTF8Encoding(false));
+
+                Process.Start(new ProcessStartInfo("cmd.exe", $"/c \"{script}\"")
+                {
+                    CreateNoWindow = true,
+                    UseShellExecute = false,
+                    WorkingDirectory = Path.GetTempPath()
+                });
+            }
+            catch
+            {
+                // Anything that fails before the script takes over: don't leave staged binaries behind.
+                try { Directory.Delete(stageDir, true); } catch { }
+                throw;
+            }
+        }
+
+        private static string CreateStagingDirectory()
+        {
+            string root = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "PredatorControl", "update");
+            Directory.CreateDirectory(root);
+
+            // Clear leftovers from previous attempts (best effort).
+            try
+            {
+                foreach (var old in Directory.GetDirectories(root))
+                    try { Directory.Delete(old, true); } catch { }
             }
             catch { }
 
-            int pid = Environment.ProcessId;
-            string script = Path.Combine(Path.GetTempPath(), "PredatorControl-update.cmd");
-            File.WriteAllText(script, $"""
+            string dir = Path.Combine(root, Guid.NewGuid().ToString("N"));
+            try
+            {
+                var sec = new System.Security.AccessControl.DirectorySecurity();
+                sec.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+                var inherit = System.Security.AccessControl.InheritanceFlags.ContainerInherit |
+                              System.Security.AccessControl.InheritanceFlags.ObjectInherit;
+                void Allow(System.Security.Principal.SecurityIdentifier sid) =>
+                    sec.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(
+                        sid, System.Security.AccessControl.FileSystemRights.FullControl, inherit,
+                        System.Security.AccessControl.PropagationFlags.None,
+                        System.Security.AccessControl.AccessControlType.Allow));
+
+                Allow(System.Security.Principal.WindowsIdentity.GetCurrent().User!);
+                Allow(new System.Security.Principal.SecurityIdentifier(System.Security.Principal.WellKnownSidType.LocalSystemSid, null));
+                Allow(new System.Security.Principal.SecurityIdentifier(System.Security.Principal.WellKnownSidType.BuiltinAdministratorsSid, null));
+
+                new DirectoryInfo(dir).Create(sec);
+            }
+            catch
+            {
+                // ACL hardening is best-effort; the directory is still unique and under the per-user profile.
+                Directory.CreateDirectory(dir);
+            }
+            return dir;
+        }
+
+        private static string BuildUpdateScript(int pid, string staged, string target, string backup, string stageDir, string sha256)
+        {
+            // '%' is special in batch files; none of these paths normally contain it, but escape to be safe.
+            static string E(string s) => s.Replace("%", "%%");
+
+            return """
                 @echo off
+                setlocal EnableExtensions
                 chcp 65001 >nul
+                set "PID=@@PID@@"
+                set "STAGED=@@STAGED@@"
+                set "TARGET=@@TARGET@@"
+                set "BACKUP=@@BACKUP@@"
+                set "STAGEDIR=@@STAGEDIR@@"
+                set "EXPECTED=@@HASH@@"
+
+                set /a WAITS=0
                 :wait
-                tasklist /fi "PID eq {pid}" /nh | find "{pid}" >nul
+                tasklist /fi "PID eq %PID%" /nh | find "%PID%" >nul
                 if not errorlevel 1 (
+                    set /a WAITS+=1
+                    if %WAITS% GEQ 60 goto fail
                     timeout /t 1 /nobreak >nul
                     goto wait
                 )
-                move /y "{staged}" "{target}" >nul
-                start "" "{target}"
-                (goto) 2>nul & del "%~f0"
-                """, new UTF8Encoding(false));
 
-            Process.Start(new ProcessStartInfo("cmd.exe", $"/c \"{script}\"")
-            {
-                CreateNoWindow = true,
-                UseShellExecute = false,
-                WorkingDirectory = Path.GetTempPath()
-            });
+                rem Re-verify the staged file immediately before it is used.
+                set "ACTUAL="
+                for /f "skip=1 tokens=* delims=" %%H in ('certutil -hashfile "%STAGED%" SHA256') do if not defined ACTUAL set "ACTUAL=%%H"
+                if not defined ACTUAL goto fail
+                set "ACTUAL=%ACTUAL: =%"
+                if /i not "%ACTUAL%"=="%EXPECTED%" goto fail
+
+                rem Keep a recoverable copy of the current version.
+                copy /y "%TARGET%" "%BACKUP%" >nul 2>&1
+                if errorlevel 1 goto fail
+
+                set /a TRIES=0
+                :swap
+                move /y "%STAGED%" "%TARGET%" >nul 2>&1
+                if not errorlevel 1 goto done
+                set /a TRIES+=1
+                if %TRIES% GEQ 15 goto restore
+                timeout /t 1 /nobreak >nul
+                goto swap
+
+                :restore
+                rem Replacement failed: make sure the original is intact, then relaunch it.
+                if not exist "%TARGET%" copy /y "%BACKUP%" "%TARGET%" >nul 2>&1
+                goto launch
+
+                :fail
+                rem Nothing was replaced; relaunch the existing version.
+                goto launch
+
+                :done
+                :launch
+                if exist "%TARGET%" start "" "%TARGET%"
+                cd /d "%TEMP%"
+                (goto) 2>nul & rd /s /q "%STAGEDIR%"
+                """
+                .Replace("@@PID@@", pid.ToString())
+                .Replace("@@STAGED@@", E(staged))
+                .Replace("@@TARGET@@", E(target))
+                .Replace("@@BACKUP@@", E(backup))
+                .Replace("@@STAGEDIR@@", E(stageDir))
+                .Replace("@@HASH@@", sha256);
         }
-
         #endregion
 
         #region Post-update notes

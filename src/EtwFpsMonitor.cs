@@ -1,3 +1,20 @@
+﻿// ====================================================================================================
+// PREDATOR CONTROL · KERNEL ETW FPS & FRAME TIME MONITOR
+// File: src/EtwFpsMonitor.cs
+//
+// 📖 C++ / SYSTEMS DEVELOPER ROSETTA STONE:
+// - C++ Equivalent : Direct Win32 Advapi32 ETW session consumer (StartTraceW, OpenTraceW, ProcessTrace).
+// - Subsystem Role : Measures real-time gaming FPS and 1% lows via kernel trace events (Microsoft-Windows-DxgKrnl).
+// - Zero Injection : Safe with Riot Vanguard, EasyAntiCheat, BattlEye (zero DLL injection or hooking).
+//
+// 🔄 C# -> C++ TYPE TRANSLATION REFERENCE:
+// - TRACEHANDLE (ulong)              => Win32 TRACEHANDLE (uint64_t)
+// - EVENT_RECORD*                    => PEVENT_RECORD (Windows Event Tracing record pointer)
+// - EventRecordCallback              => PEVENT_RECORD_CALLBACK (C function pointer for kernel event dispatch)
+// - QueryPerformanceCounter (QPC)    => QueryPerformanceCounter / std::chrono::high_resolution_clock
+// - RingBuffer                       => std::deque / circular array for rolling frame time averages
+// ====================================================================================================
+
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
@@ -178,8 +195,11 @@ namespace PredatorControlApp
 
         private const int RollingWindowSize = 360;
         private readonly long[] _frameTimes = new long[RollingWindowSize];
-        private volatile int _frameHead = 0;
-        private volatile int _framesFilled = 0;
+        private int _frameHead = 0;
+        private int _framesFilled = 0;
+        // Guards _frameTimes/_frameHead/_framesFilled. Critical sections are a handful of
+        // instructions (or a 2.9 KB copy), so the ETW callback stays lightweight.
+        private readonly object _frameLock = new();
 
         private EventRecordCallback? _callbackRef;
 
@@ -190,10 +210,14 @@ namespace PredatorControlApp
             {
                 if (_targetPid == value) return;
                 bool wasPaused = _targetPid == 0;
-                _targetPid = value;
-                _frameHead = 0;
-                _framesFilled = 0;
-                _dxgiActiveForCurrentPid = false;
+                lock (_frameLock)
+                {
+                    // Switch pid and reset the buffer as one atomic step relative to the callback and sampler.
+                    _targetPid = value;
+                    _frameHead = 0;
+                    _framesFilled = 0;
+                    _dxgiActiveForCurrentPid = false;
+                }
                 if (_sessionHandle == 0) return;
                 if (value == 0)
                     EnableTraceEx2(_sessionHandle, DxgKrnlProviderId, EVENT_CONTROL_CODE_DISABLE_PROVIDER, 0, 0, 0, 0, IntPtr.Zero);
@@ -335,19 +359,33 @@ namespace PredatorControlApp
             if (flip && _dxgiActiveForCurrentPid) return;
             if (IsWin10 && !flip) _dxgiActiveForCurrentPid = true;
 
-            _frameTimes[_frameHead] = record.EventHeader.TimeStamp;
-            _frameHead = (_frameHead + 1) % RollingWindowSize;
-            if (_framesFilled < RollingWindowSize) _framesFilled++;
+            lock (_frameLock)
+            {
+                // Re-check under the lock: the target may have been switched (and the buffer reset)
+                // after the unlocked fast-path check above; never write an old process's frame into the new buffer.
+                if (_targetPid != targetPid) return;
+
+                _frameTimes[_frameHead] = record.EventHeader.TimeStamp;
+                _frameHead = (_frameHead + 1) % RollingWindowSize;
+                if (_framesFilled < RollingWindowSize) _framesFilled++;
+            }
         }
 
         public double SampleFps()
         {
-            int filled = _framesFilled;
-            if (filled < 2) return 0;
+            // Take a consistent snapshot, then do the math outside the lock.
+            Span<long> snap = stackalloc long[RollingWindowSize];
+            int filled, head;
+            lock (_frameLock)
+            {
+                filled = _framesFilled;
+                head = _frameHead;
+                if (filled < 2) return 0;
+                _frameTimes.AsSpan().CopyTo(snap);
+            }
 
             long freq = Stopwatch.Frequency;
-            int head = _frameHead;
-            long newest = _frameTimes[(head - 1 + RollingWindowSize) % RollingWindowSize];
+            long newest = snap[(head - 1 + RollingWindowSize) % RollingWindowSize];
 
             if (Stopwatch.GetTimestamp() - newest > 4 * freq) return 0;
 
@@ -356,7 +394,7 @@ namespace PredatorControlApp
             long oldest = newest;
             for (int i = 2; i <= filled; i++)
             {
-                long t = _frameTimes[(head - i + RollingWindowSize) % RollingWindowSize];
+                long t = snap[(head - i + RollingWindowSize) % RollingWindowSize];
                 if (t < cutoff) break;
                 oldest = t;
                 count++;

@@ -65,6 +65,14 @@ internal sealed class JelliHostForm : Form
     [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
     private static extern bool SetDllDirectory(string lpPathName);
 
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern IntPtr LoadLibrary(string lpFileName);
+
+    static JelliHostForm()
+    {
+        EnsureWebView2Loader();
+    }
+
     internal static void EnsureWebView2Loader()
     {
         try
@@ -73,21 +81,60 @@ internal sealed class JelliHostForm : Form
             Directory.CreateDirectory(targetDir);
             string targetDll = Path.Combine(targetDir, "WebView2Loader.dll");
 
-            if (!File.Exists(targetDll))
+            var asm = typeof(JelliHostForm).Assembly;
+            byte[]? expectedHash = null;
+            byte[]? resourceBytes = null;
+
+            using (var stream = asm.GetManifestResourceStream("WebView2Loader.dll"))
             {
-                var asm = typeof(JelliHostForm).Assembly;
-                using var stream = asm.GetManifestResourceStream("WebView2Loader.dll");
                 if (stream != null)
                 {
-                    using var fs = new FileStream(targetDll, FileMode.Create, FileAccess.Write, FileShare.None);
-                    stream.CopyTo(fs);
+                    using var ms = new MemoryStream();
+                    stream.CopyTo(ms);
+                    resourceBytes = ms.ToArray();
+                    using var sha = System.Security.Cryptography.SHA256.Create();
+                    expectedHash = sha.ComputeHash(resourceBytes);
                 }
             }
 
-            if (File.Exists(targetDll))
+            if (expectedHash != null && resourceBytes != null)
             {
-                CoreWebView2Environment.SetLoaderDllFolderPath(targetDir);
-                SetDllDirectory(targetDir);
+                byte[]? fileHash = null;
+                if (File.Exists(targetDll))
+                {
+                    try
+                    {
+                        using var fs = File.OpenRead(targetDll);
+                        using var sha = System.Security.Cryptography.SHA256.Create();
+                        fileHash = sha.ComputeHash(fs);
+                    }
+                    catch { }
+                }
+
+                bool match = fileHash != null && fileHash.SequenceEqual(expectedHash);
+                if (!match)
+                {
+                    try
+                    {
+                        File.WriteAllBytes(targetDll, resourceBytes);
+                        using var fs = File.OpenRead(targetDll);
+                        using var sha = System.Security.Cryptography.SHA256.Create();
+                        var freshHash = sha.ComputeHash(fs);
+                        match = freshHash.SequenceEqual(expectedHash);
+                    }
+                    catch { match = false; }
+                }
+
+                if (match)
+                {
+                    CoreWebView2Environment.SetLoaderDllFolderPath(targetDir);
+                    SetDllDirectory(targetDir);
+                    LoadLibrary(targetDll);
+                }
+                else
+                {
+                    Program.Report(new InvalidOperationException("WebView2Loader.dll integrity check failed. Untrusted library was not loaded."), false);
+                }
             }
         }
         catch { }
@@ -103,7 +150,17 @@ internal sealed class JelliHostForm : Form
     internal async Task InitializeAsync(bool startSuspended = false)
     {
         EnsureWebView2Loader();
+        _ = Handle;
+        _ = _web.Handle;
         _gaming = startSuspended;
+
+        // Show the form off-screen before EnsureCoreWebView2Async.
+        // WebView2 CreateCoreWebView2ControllerAsync needs a visible HWND or it
+        // throws COMException 0x80070490 (Element not found) on boot.
+        SetBounds(-32000, -32000, 1, 1);
+        if (!Visible) Show();
+        await Task.Yield(); // pump message loop so HWND is visible to the OS
+
         string profile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PredatorControl", _persist ? "WebView2" : "WebView2-Test");
         var options = new CoreWebView2EnvironmentOptions
         {
@@ -139,7 +196,20 @@ internal sealed class JelliHostForm : Form
         core.Navigate(Origin);
         _state.Start();
         _rgb.Start();
-        await _connected.Task.WaitAsync(TimeSpan.FromSeconds(15));
+                // Give the Jelli React UI up to 45 s to send its first handshake.
+        // On slow boots the Chromium renderer can take longer than 15 s to warm up.
+        // A timeout here is non-fatal: Jelli is already rendering, it just hasn't
+        // called back yet - we let it settle rather than tearing everything down.
+        try
+        {
+            await _connected.Task.WaitAsync(TimeSpan.FromSeconds(45));
+        }
+        catch (TimeoutException)
+        {
+            // UI took too long but is likely still loading - log and continue.
+            Program.Report(new InvalidOperationException("Jelli handshake timed out after 45 s. Jelli may still load in the background."), false);
+        }
+        SetSurface(_surface);
         if (Environment.GetCommandLineArgs().Contains("--jelli-devtools")) core.OpenDevToolsWindow();
     }
 
@@ -200,6 +270,7 @@ internal sealed class JelliHostForm : Form
                     _ready = true;
                     _connected.TrySetResult();
                     result = _backend.State(_settings);
+                    SetSurface(_surface);
                     SendLayout();
                     if (!_gaming) { Show(); _cursor.Start(); }
                     break;

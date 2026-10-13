@@ -25,7 +25,7 @@ namespace PredatorControlApp
         private void InitializeComponent()
         {
             components = new System.ComponentModel.Container();
-            AutoScaleMode = AutoScaleMode.Dpi;
+            AutoScaleMode = AutoScaleMode.None;
         }
     }
 }

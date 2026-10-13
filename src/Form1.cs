@@ -1,16 +1,38 @@
+// ====================================================================================================
+// PREDATOR CONTROL · MAIN DASHBOARD, WIN32 MESSAGE DISPATCHER & UI HUB
+// File: src/Form1.cs
+//
+// 📖 C++ / SYSTEMS DEVELOPER ROSETTA STONE:
+// - C++ Equivalent : A native Win32 window class with custom WindowProc message loop (HWND, WndProc).
+// - Subsystem Role : Orchestrates UI events, telemetry timer dispatch, SCM services, and hardware methods.
+// - Win32 Messages : Handles WM_HOTKEY, WM_DPICHANGED, WM_POWERBROADCAST, WM_NCLBUTTONDOWN.
+//
+// 🔄 C# -> C++ TYPE TRANSLATION REFERENCE:
+// - this.Handle                      => HWND (Window Handle)
+// - Message m / WndProc(ref Message) => LRESULT CALLBACK WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+// - BeginInvoke / Invoke             => PostMessage / SendMessage to UI thread message queue
+// - System.Windows.Forms.Timer       => SetTimer / WM_TIMER callback
+// - Color                            => COLORREF / RGB(r, g, b)
+// ====================================================================================================
+
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Security.Principal;
 using System.Text;
 using Microsoft.Win32;
+using System.ServiceProcess;
 
 namespace PredatorControlApp
 {
     [SupportedOSPlatform("windows")]
     public partial class Form1 : Form
     {
-        #region Win32 Interop — DWM & Dark Mode
+        // ============================================================================================
+        // SECTION 1: WINDOW INITIALIZATION, DWM DARK MODE & NATIVE WIN32 MESSAGES
+        // ============================================================================================
+
+        #region Win32 Interop - DWM & Dark Mode
 
         [DllImport("dwmapi.dll")]
         private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
@@ -19,7 +41,7 @@ namespace PredatorControlApp
 
         #endregion
 
-        #region Win32 Interop — Window Dragging
+        #region Win32 Interop - Window Dragging
 
         public const int WM_NCLBUTTONDOWN = 0xA1;
         public const int HT_CAPTION = 0x2;
@@ -41,7 +63,7 @@ namespace PredatorControlApp
 
         #endregion
 
-        #region Win32 Interop — Hotkeys & Foreground
+        #region Win32 Interop - Hotkeys & Foreground
 
         [DllImport("user32.dll", SetLastError = true)]
         private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
@@ -99,12 +121,16 @@ namespace PredatorControlApp
 
         private int? _cpuTemp, _gpuTemp;
         private int? _cpuFanRpm, _gpuFanRpm;
+        private int? _prevCpuTemp, _prevGpuTemp, _prevCpuFanRpm, _prevGpuFanRpm, _prevAuxFanRpm;
+        private static readonly string[] _cachedTemps = Enumerable.Range(0, 130).Select(i => $"{i}\u00b0C").ToArray();
+        private static string FormatTemp(int? temp) => (temp.HasValue && temp.Value >= 0 && temp.Value < _cachedTemps.Length) ? _cachedTemps[temp.Value] : (temp.HasValue ? $"{temp.Value}\u00b0C" : "--\u00b0C");
         private DarkScrollPanel _contentPanel = null!;
         private Panel _pnlTitle = null!;
 
         private bool? _isPluggedIn;
         private bool? _pendingPluggedIn;
         private int _powerLineStableTicks;
+        private int _telemetryTickCount;
         private bool _isResyncing;
         private bool _isClosing;
         public static bool IsShuttingDown { get; private set; }
@@ -127,11 +153,14 @@ namespace PredatorControlApp
 
         private readonly List<Panel> _separators = new();
         private Label _lblTitle = null!, _lblCpuTemp = null!, _lblGpuTemp = null!;
+        private Label _lblCpuHdr = null!, _lblCpuFanHdr = null!, _lblFanHdr = null!;
         private Label _lblGpuHdr = null!, _lblGpuFanHdr = null!, _lblPowerHdr = null!;
         private Label _lblCpuRpm = null!, _lblGpuRpm = null!;
+        private Label? _lblAuxFanHdr, _lblAuxRpm;
         private Label _lblPowerStatus = null!, _lblFanStatus = null!;
         private Label _lblBrightHdr = null!, _lblSpeedHdr = null!;
         private Label _lblCpuFanSpeedHdr = null!, _lblGpuFanSpeedHdr = null!;
+        private Label? _lblAuxFanSpeedHdr;
         private Label _lblDisplayHdr = null!;
 
         private PredatorButton _btnQuiet = null!, _btnBalanced = null!, _btnPerform = null!,
@@ -140,7 +169,12 @@ namespace PredatorControlApp
         private PredatorButton _btnAutoFan = null!, _btnMaxFan = null!, _btnCustomFan = null!;
         private PredatorButton _btnFixedSpeed = null!, _btnFanCurve = null!;
         private PredatorButton? _activeCustomSubBtn;
-        private PredatorButton _btn60Hz = null!, _btnMaxHz = null!;
+        private Panel? _pnlCustomFan;
+        private bool _isCustomFanExpanded;
+        private int _customFanShiftHeight;
+        private PredatorButton _btn60Hz = null!;
+        private PredatorButton? _btnMaxHz;
+        private ToolStripMenuItem? _trayDisplayMax;
 
         // GPU Working Mode (MUX Switch)
         private Label _lblGpuModeHdr = null!;
@@ -148,7 +182,7 @@ namespace PredatorControlApp
         private PredatorButton _btnGpuDiscrete = null!;
         private PredatorButton _btnGpuAuto = null!;
         private PredatorButton? _activeGpuModeBtn;
-        private Label _lblGpuRestartNotice = null!;
+        private Label? _lblGpuRestartNotice;
         private int? _currentGpuMode;
         private int _gpuCapability = 7;
 
@@ -188,6 +222,7 @@ namespace PredatorControlApp
 
         private PredatorSlider _brightnessSlider = null!, _speedSlider = null!;
         private PredatorSlider _cpuFanSlider = null!, _gpuFanSlider = null!;
+        private PredatorSlider? _auxFanSlider;
 
         private FanCurveForm? _fanCurveForm;
         private bool _fanCurveEnabled;
@@ -195,6 +230,13 @@ namespace PredatorControlApp
         private List<Point> _gpuCurvePoints = new() { new(30,10), new(45,15), new(55,30), new(65,50), new(72,65), new(80,80), new(88,92), new(95,100) };
         private int _lastCurveCpuSpeed = -1;
         private int _lastCurveGpuSpeed = -1;
+        private int _lastCurveAuxSpeed = -1;
+        private int? _auxFanRpm;
+        private readonly Queue<int> _cpuTempHistory = new(3);
+        private readonly Queue<int> _gpuTempHistory = new(3);
+        private long _lastCpuDownstepTick = 0;
+        private long _lastGpuDownstepTick = 0;
+        private long _lastAuxDownstepTick = 0;
 
         private PredatorButton? _activePowerBtn, _activeFanBtn, _activeDisplayBtn;
         private bool _isUpdatingBattery;
@@ -203,9 +245,16 @@ namespace PredatorControlApp
         private Label _lblAcProfileHdr = null!, _lblBatteryProfileHdr = null!;
         internal static readonly byte[] AcProfileValues = { 0xFF, 0x00, 0x01, 0x04, 0x05 };
         internal static readonly byte[] BatteryProfileValues = { 0xFF, 0x00, 0x01, 0x06 };
+        internal static readonly byte[] NitroAcProfileValues = { 0xFF, 0x00, 0x01, 0x04 };
+        internal static readonly byte[] NitroBatteryProfileValues = { 0xFF, 0x00, 0x01 };
+
+        private PredatorToggle? _switchCoolBoost;
+        private Label? _lblCoolBoost;
+        private ToolStripMenuItem? _trayCoolBoost;
 
         private PredatorToggle _switchBatteryLimit = null!;
         private Label _lblBatteryStatus = null!;
+        private Label? _lblBatteryHealth;
 
         private GameSyncController _gameSync = null!;
         private PredatorToggle _switchGameSync = null!;
@@ -221,8 +270,8 @@ namespace PredatorControlApp
         private bool _updateCheckRunning;
 
         // Hardware Feature Controls
-        private PredatorToggle _switchLcdOverdrive = null!;
-        private Label _lblLcdOverdrive = null!;
+        private PredatorToggle? _switchLcdOverdrive;
+        private Label? _lblLcdOverdrive;
 
         private PredatorToggle _switchBacklight30s = null!;
         private Label _lblBacklight30s = null!;
@@ -231,7 +280,20 @@ namespace PredatorControlApp
         private Label? _lblJelliEnabled;
         private PredatorToggle? _switchJelliEnabled;
         private ToolStripMenuItem? _trayJelliToggle;
+        private Label? _lblOptimizeServices;
+        private PredatorToggle? _switchOptimizeServices;
+        private Label? _lblOptimizeCounter;
+        private PredatorButton? _btnAutoRepair;
         private Label _lblWinKeyLock = null!;
+
+        private PredatorToggle? _switchBootSound;
+        private Label? _lblBootSound;
+        private PredatorToggle? _switchUsbCharging;
+        private Label? _lblUsbCharging;
+        private PredatorToggle? _switchAutoCoolBoost;
+        private Label? _lblAutoCoolBoost;
+        private PredatorDropDown? _cboTurboAction;
+        private PredatorDropDown? _cboPredatorAction;
 
         private GameOverlayForm? _overlayForm;
         private ToolStripMenuItem? _trayOverlay;
@@ -248,7 +310,7 @@ namespace PredatorControlApp
         private ToolStripMenuItem _trayPowerQuiet = null!, _trayPowerBal = null!, _trayPowerPerf = null!,
                                   _trayPowerTurbo = null!, _trayPowerEco = null!;
         private ToolStripMenuItem _trayFanAuto = null!, _trayFanMax = null!, _trayFanCustom = null!;
-        private ToolStripMenuItem _trayDisplay60 = null!, _trayDisplayMax = null!;
+        private ToolStripMenuItem _trayDisplay60 = null!;
         private ToolStripMenuItem _trayGpuOptimus = null!, _trayGpuDiscrete = null!, _trayGpuAuto = null!;
         private ToolStripMenuItem _trayBatteryLimit80 = null!, _trayBatteryLimit100 = null!;
         private ToolStripMenuItem _trayBatteryMenu = null!;
@@ -290,7 +352,7 @@ namespace PredatorControlApp
 
             // Setup display refresh rate highlight based on internal display
             int currentHz = DisplayCcdController.GetCurrentRefreshRate(_internalDisplayGdiName);
-            if (currentHz <= 60)
+            if (currentHz <= 60 || _btnMaxHz == null || _trayDisplayMax == null)
             {
                 HighlightBtn(_btn60Hz, ref _activeDisplayBtn);
                 CheckTrayItem(_trayDisplay60, _trayDisplay60, _trayDisplayMax);
@@ -307,11 +369,15 @@ namespace PredatorControlApp
             try
             {
                 _predatorKeyHook = new PredatorKeyHook();
-                _predatorKeyHook.PredatorKeyPressed += ToggleApp;
+                _predatorKeyHook.PredatorKeyPressed += () =>
+                {
+                    if (InvokeRequired) BeginInvoke(new Action(HandlePredatorOrNitroKey));
+                    else HandlePredatorOrNitroKey();
+                };
                 _predatorKeyHook.ModeKeyPressed += () =>
                 {
-                    if (InvokeRequired) BeginInvoke(new Action(() => CyclePowerMode(true)));
-                    else CyclePowerMode(true);
+                    if (InvokeRequired) BeginInvoke(new Action(HandleTurboOrModeKey));
+                    else HandleTurboOrModeKey();
                 };
             }
             catch (Exception ex)
@@ -346,7 +412,6 @@ namespace PredatorControlApp
                 ThemeManager.ThemeChanged -= OnThemeChanged;
                 try { _overlayForm?.Dispose(); } catch { }
                 try { NvmlGpuMonitor.Shutdown(); } catch { }
-                try { _wmi?.SetFanBehavior(0x01); } catch { }
             };
 
             ThemeManager.ThemeChanged += OnThemeChanged;
@@ -376,28 +441,53 @@ namespace PredatorControlApp
                 Updater.ShowPendingNotes(this);
                 if (Environment.CommandLine.Contains("-hidden")) HideApp();
                 CheckPredatorSenseConflict();
-                OptimizeAcerServices();
+                UpdateBatteryHealthUI();
 
-                // Delayed settling guard: Acer services (AcerLightingService / AcerAgentService)
-                // complete their boot/logon initialization 1-4 seconds after user login.
-                // Re-assert user's saved RGB profile to prevent late-boot stomping back to Amber.
+                // H-3 / F-5: Run OEM service optimization only if enabled by user
+                if (IsServicesOptimizationEnabled())
+                    OptimizeAcerServices();
+
+                // Auto-Repair and ensure essential OEM services for detected chassis (Nitro & Predator)
+                _ = Task.Run(() =>
+                {
+                    try
+                    {
+                        OemServiceManager.AutoRepairForChassis(_wmi.ChassisFamily);
+                    }
+                    catch { }
+                });
+
+                // F-7 (v1.2.5): 4-point RGB watchdog to defeat AcerLightingService's late-boot INI override.
+                // AcerLightingService re-initializes 1-8 seconds after user logon and writes its factory
+                // preset (Amber Breathing) back to LightingProfile.ini. We re-assert the user's saved
+                // profile at 1s, 3s, 6s, and 10s to guarantee we win the race regardless of service timing.
                 _ = Task.Run(async () =>
                 {
-                    await Task.Delay(2500);
-                    if (!IsDisposed)
+                    int[] delays = { 1000, 3000, 6000, 10000 };
+                    foreach (int ms in delays)
                     {
+                        await Task.Delay(ms);
+                        if (IsDisposed) break;
                         BeginInvoke(() =>
                         {
-                            try { ApplyRgbModeFromDropdown(_rgbDropDown.SelectedIndex); } catch { }
-                        });
-                    }
-
-                    await Task.Delay(2500);
-                    if (!IsDisposed)
-                    {
-                        BeginInvoke(() =>
-                        {
-                            try { ApplyRgbModeFromDropdown(_rgbDropDown.SelectedIndex); } catch { }
+                            try
+                            {
+                                if (!IsDisposed)
+                                {
+                                    string active = RgbProfileManager.GetActiveProfile();
+                                    var profiles = RgbProfileManager.LoadProfiles();
+                                    var prof = profiles.FirstOrDefault(p => string.Equals(p.Name, active, StringComparison.OrdinalIgnoreCase));
+                                    if (prof != null)
+                                    {
+                                        ApplyRgbProfile(prof);
+                                    }
+                                    else if (_rgbDropDown != null)
+                                    {
+                                        ApplyRgbModeFromDropdown(_rgbDropDown.SelectedIndex);
+                                    }
+                                }
+                            }
+                            catch { }
                         });
                     }
                 });
@@ -439,77 +529,252 @@ namespace PredatorControlApp
             catch { }
         }
 
-        private static void OptimizeAcerServices()
+        private bool IsServicesOptimizationEnabled()
+        {
+            try
+            {
+                using var key = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\PredatorControl");
+                if (key != null && key.GetValue("ServicesOptimized") is int v)
+                    return v == 1;
+
+                var (installed, disabled, running, _) = GetBloatwareCounts();
+                return installed > 0 && disabled == installed && running == 0;
+            }
+            catch { return false; }
+        }
+
+        // ============================================================================================
+        // SECTION 3: SCM SERVICE MANAGER (BLOATWARE OPTIMIZATION & AUTO-REPAIR)
+        // ============================================================================================
+
+        private static void SetServicesOptimizationEnabled(bool enabled)
+        {
+            try
+            {
+                using var key = Registry.CurrentUser.CreateSubKey(@"SOFTWARE\PredatorControl");
+                key.SetValue("ServicesOptimized", enabled ? 1 : 0);
+            }
+            catch { }
+        }
+
+        internal static string[] GetBloatServices(AcerChassisFamily chassis)
+        {
+            var list = new List<string>
+            {
+                "AcerCCAgentSvis",             // Acer Care Center
+                "AcerQAAgentSvis",             // Acer Quick Access
+                "AcerDIAgentSvis"              // Acer Device Info Telemetry
+            };
+
+            // On Predator laptops, direct ACPI WMI handles battery and hardware control directly.
+            // ASMSvc, AcerServiceSvc, and AcerDeviceEnablingServiceV2 can be safely disabled.
+            if (chassis == AcerChassisFamily.Predator)
+            {
+                list.Add("ASMSvc");
+                list.Add("AcerServiceSvc");
+                list.Add("AcerDeviceEnablingServiceV2");
+                list.Add("AcerDeviceEnablingService");
+            }
+            // On Nitro laptops, ASMSvc, AcerServiceSvc, AcerDeviceEnablingServiceV2, and AcerDeviceEnablingService
+            // are HARDWARE-CRITICAL for the 80% battery threshold and EC sensor monitoring.
+            // They are protected and preserved so battery health limit and sensors work!
+
+            return list.ToArray();
+        }
+
+        private static readonly string[] AllKnownAcerServices =
+        {
+            "AcerCCAgentSvis", "AcerQAAgentSvis", "AcerDIAgentSvis",
+            "ASMSvc", "AcerServiceSvc", "AcerDeviceEnablingServiceV2", "AcerDeviceEnablingService"
+        };
+
+        private static void RunScmCommand(string exe, string args)
+        {
+            try
+            {
+                using var p = Process.Start(new ProcessStartInfo
+                {
+                    FileName = exe,
+                    Arguments = args,
+                    CreateNoWindow = true,
+                    UseShellExecute = false
+                });
+                p?.WaitForExit(3000);
+            }
+            catch { }
+        }
+
+        private static void SetServiceStartup(string serviceName, bool disable)
+        {
+            string mode = disable ? "disabled" : "auto";
+            RunScmCommand("sc.exe", $"config \"{serviceName}\" start= {mode}");
+            try
+            {
+                using var reg = Registry.LocalMachine.OpenSubKey($@"SYSTEM\CurrentControlSet\Services\{serviceName}", true);
+                reg?.SetValue("Start", disable ? 4 : 2, RegistryValueKind.DWord);
+            }
+            catch { }
+        }
+
+        private static void StopServiceSafe(string serviceName)
+        {
+            try
+            {
+                using var sc = new ServiceController(serviceName);
+                if (sc.Status != ServiceControllerStatus.Stopped && sc.Status != ServiceControllerStatus.StopPending)
+                {
+                    sc.Stop();
+                    sc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(2));
+                }
+            }
+            catch { }
+            RunScmCommand("net.exe", $"stop \"{serviceName}\" /y");
+        }
+
+        private static void StartServiceSafe(string serviceName)
+        {
+            try
+            {
+                using var sc = new ServiceController(serviceName);
+                if (sc.Status != ServiceControllerStatus.Running && sc.Status != ServiceControllerStatus.StartPending)
+                {
+                    sc.Start();
+                    sc.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(2));
+                }
+            }
+            catch { }
+            RunScmCommand("net.exe", $"start \"{serviceName}\"");
+        }
+
+        private (int installed, int disabled, int running, int stopped) GetBloatwareCounts()
+        {
+            int installed = 0;
+            int disabled = 0;
+            int running = 0;
+            int stopped = 0;
+
+            foreach (var svcName in GetBloatServices(_wmi.ChassisFamily))
+            {
+                try
+                {
+                    using var sc = new ServiceController(svcName);
+                    var status = sc.Status;
+                    installed++;
+
+                    bool isDisabled = false;
+                    try
+                    {
+                        isDisabled = (sc.StartType == ServiceStartMode.Disabled);
+                    }
+                    catch
+                    {
+                        using var reg = Registry.LocalMachine.OpenSubKey($@"SYSTEM\CurrentControlSet\Services\{svcName}");
+                        if (reg != null)
+                        {
+                            int s = (int)(reg.GetValue("Start", 2) ?? 2);
+                            isDisabled = (s == 4);
+                        }
+                    }
+
+                    if (isDisabled)
+                        disabled++;
+
+                    if (status == ServiceControllerStatus.Running)
+                        running++;
+                    else
+                        stopped++;
+                }
+                catch
+                {
+                    try
+                    {
+                        using var reg = Registry.LocalMachine.OpenSubKey($@"SYSTEM\CurrentControlSet\Services\{svcName}");
+                        if (reg != null)
+                        {
+                            installed++;
+                            int s = (int)(reg.GetValue("Start", 2) ?? 2);
+                            if (s == 4) disabled++;
+                            stopped++;
+                        }
+                    }
+                    catch { }
+                }
+            }
+
+            return (installed, disabled, running, stopped);
+        }
+
+        private void UpdateOptimizeCounter()
+        {
+            if (_lblOptimizeCounter == null || _lblOptimizeCounter.IsDisposed) return;
+            try
+            {
+                var (installed, disabled, running, stopped) = GetBloatwareCounts();
+                if (installed == 0)
+                {
+                    _lblOptimizeCounter.Text = "No Acer OEM services detected";
+                    _lblOptimizeCounter.ForeColor = Color.FromArgb(120, 120, 135);
+                }
+                else if (disabled == installed && running == 0)
+                {
+                    _lblOptimizeCounter.Text = $"{disabled} of {installed} bloatware services disabled & stopped";
+                    _lblOptimizeCounter.ForeColor = Color.FromArgb(0, 230, 180);
+                }
+                else if (disabled == 0 && running == installed)
+                {
+                    _lblOptimizeCounter.Text = $"0 of {installed} bloatware services disabled (all {running} running)";
+                    _lblOptimizeCounter.ForeColor = Color.FromArgb(120, 120, 135);
+                }
+                else
+                {
+                    _lblOptimizeCounter.Text = $"{disabled} of {installed} disabled ({running} running, {stopped} stopped)";
+                    _lblOptimizeCounter.ForeColor = Color.FromArgb(255, 189, 46);
+                }
+            }
+            catch { }
+        }
+
+        private void OptimizeAcerServices()
+        {
+            var chassis = _wmi.ChassisFamily;
+            Task.Run(() =>
+            {
+                try
+                {
+                    // Bloatware & telemetry services safe to disable for this chassis
+                    foreach (var svcName in GetBloatServices(chassis))
+                    {
+                        SetServiceStartup(svcName, disable: true);
+                        StopServiceSafe(svcName);
+                    }
+
+                    // Keep essential services on Automatic and running
+                    var essential = new List<string> { "AASSvc", "AcerLightingService" };
+                    if (chassis == AcerChassisFamily.Nitro)
+                    {
+                        essential.AddRange(new[] { "ASMSvc", "AcerServiceSvc", "AcerDeviceEnablingServiceV2", "AcerDeviceEnablingService" });
+                    }
+
+                    foreach (var svc in essential)
+                    {
+                        SetServiceStartup(svc, disable: false);
+                        StartServiceSafe(svc);
+                    }
+                }
+                catch { }
+            });
+        }
+
+        private static void RestoreAcerServices()
         {
             Task.Run(() =>
             {
                 try
                 {
-                    // Bloatware & telemetry services safe to disable
-                    string[] bloatServices =
+                    foreach (var svcName in AllKnownAcerServices)
                     {
-                        "AcerCCAgentSvis",             // Acer Care Center
-                        "AcerQAAgentSvis",             // Acer Quick Access
-                        "AcerDIAgentSvis",             // Acer Device Info Telemetry
-                        "ASMSvc",                      // Acer System Monitor Service
-                        "AcerServiceSvc",              // Acer Service Component Wrapper
-                        "AcerDeviceEnablingServiceV2"  // Acer Device Enabling Service V2
-                    };
-
-                    foreach (var svcName in bloatServices)
-                    {
-                        try
-                        {
-                            using var reg = Registry.LocalMachine.OpenSubKey($@"SYSTEM\CurrentControlSet\Services\{svcName}", true);
-                            if (reg != null)
-                            {
-                                int currentStart = (int)(reg.GetValue("Start", 2) ?? 2);
-                                if (currentStart != 4) // 4 = Disabled
-                                {
-                                    reg.SetValue("Start", 4, RegistryValueKind.DWord);
-                                    try
-                                    {
-                                        var psi = new ProcessStartInfo("net.exe", $"stop {svcName}")
-                                        {
-                                            CreateNoWindow = true,
-                                            UseShellExecute = false
-                                        };
-                                        Process.Start(psi)?.WaitForExit(3000);
-                                    }
-                                    catch { }
-                                }
-                            }
-                        }
-                        catch { }
-                    }
-
-                    // Keep essential services on Automatic (2)
-                    string[] essential = { "AASSvc", "AcerLightingService" };
-                    foreach (var svc in essential)
-                    {
-                        try
-                        {
-                            using var reg = Registry.LocalMachine.OpenSubKey($@"SYSTEM\CurrentControlSet\Services\{svc}", true);
-                            if (reg != null)
-                            {
-                                int currentStart = (int)(reg.GetValue("Start", 2) ?? 2);
-                                if (currentStart != 2) // 2 = Automatic
-                                    reg.SetValue("Start", 2, RegistryValueKind.DWord);
-                            }
-                        }
-                        catch { }
-                    }
-
-                    // Enforce High CPU Priority (3 = High) in Windows IFEO so the app automatically runs at High Priority
-                    string[] ifeoTargets = { "PredatorControlApp.exe", "PredatorControl-standalone.exe", "PredatorControl-win-x64.exe" };
-                    foreach (var exeName in ifeoTargets)
-                    {
-                        try
-                        {
-                            using var ifeoKey = Registry.LocalMachine.CreateSubKey($@"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\{exeName}\PerfOptions");
-                            ifeoKey?.SetValue("CpuPriorityClass", 3, RegistryValueKind.DWord);
-                        }
-                        catch { }
+                        SetServiceStartup(svcName, disable: false);
+                        StartServiceSafe(svcName);
                     }
                 }
                 catch { }
@@ -726,7 +991,7 @@ namespace PredatorControlApp
 
             else if (m.Msg == WM_DISPLAYCHANGE)
             {
-                // A monitor was connected or disconnected — refresh external monitor section
+                // A monitor was connected or disconnected - refresh external monitor section
                 BeginInvoke(new Action(RefreshExternalMonitorSection));
             }
 
@@ -753,6 +1018,7 @@ namespace PredatorControlApp
             BringToFront();
             _telemetryService?.SetPollingState(true);
             _telemetryService?.SetSensorMask(true);
+            UpdateOptimizeCounter();
         }
 
         public void HideApp()
@@ -779,6 +1045,7 @@ namespace PredatorControlApp
             BackColor = theme.FormBg;
             _pnlTitle.BackColor = theme.TitleBarBg;
             _contentPanel.BackColor = theme.FormBg;
+            if (_pnlCustomFan != null) _pnlCustomFan.BackColor = theme.FormBg;
 
             // Highlight current theme button
             var activeThemeBtn = theme.Mode switch
@@ -865,7 +1132,7 @@ namespace PredatorControlApp
                 };
                 _pnlExternalMonitors.Controls.Add(lbl);
 
-                // Hz dropdown — populated from supported rates from OS driver only
+                // Hz dropdown - populated from supported rates from OS driver only
                 var cbo = new PredatorDropDown
                 {
                     Location = new Point(contentW - dropW - btnW - gap, rowY),
@@ -919,12 +1186,14 @@ namespace PredatorControlApp
 
         #region Display Control
 
-        private void ApplyDisplayMode(int hz, PredatorButton btn)
+        private void ApplyDisplayMode(int hz, PredatorButton? btn)
         {
             if (!DisplayCcdController.SetRefreshRate(hz, _internalDisplayGdiName)) return;
 
+            if (btn == null) btn = _btn60Hz;
             HighlightBtn(btn, ref _activeDisplayBtn);
-            CheckTrayItem(hz <= 60 ? _trayDisplay60 : _trayDisplayMax, _trayDisplay60, _trayDisplayMax);
+            var targetTray = (hz <= 60 || _trayDisplayMax == null) ? _trayDisplay60 : _trayDisplayMax;
+            CheckTrayItem(targetTray, _trayDisplay60, _trayDisplayMax);
             SaveState("DisplayHz", hz);
         }
 
@@ -1021,6 +1290,12 @@ namespace PredatorControlApp
             _trayPowerPerf = new ToolStripMenuItem("Performance", null, (s, e) => ApplyPowerMode(0x04, _btnPerform, true));
             _trayPowerTurbo = new ToolStripMenuItem("Turbo", null, (s, e) => ApplyPowerMode(0x05, _btnTurbo, true));
             _trayPowerEco = new ToolStripMenuItem("Eco", null, (s, e) => ApplyPowerMode(0x06, _btnEco, true));
+            if (_wmi.Capabilities.ChassisFamily == AcerChassisFamily.Nitro)
+            {
+                _trayPowerBal.Text = "Default";
+                _trayPowerTurbo.Visible = false;
+                _trayPowerEco.Visible = false;
+            }
             powerMenu.DropDownItems.AddRange([_trayPowerQuiet, _trayPowerBal, _trayPowerPerf, _trayPowerTurbo, _trayPowerEco]);
 
             var fanMenu = new ToolStripMenuItem("  Fan Mode");
@@ -1028,11 +1303,29 @@ namespace PredatorControlApp
             _trayFanMax = new ToolStripMenuItem("Max", null, (s, e) => ApplyFanMode(0x02, _btnMaxFan));
             _trayFanCustom = new ToolStripMenuItem("Custom", null, (s, e) => ApplyFanMode(0x03, _btnCustomFan));
             fanMenu.DropDownItems.AddRange([_trayFanAuto, _trayFanMax, _trayFanCustom]);
+            if (_wmi.Capabilities.SupportsCoolBoost)
+            {
+                _trayCoolBoost = new ToolStripMenuItem("CoolBoost", null, (s, e) => ToggleCoolBoost())
+                {
+                    CheckOnClick = true,
+                    Checked = LoadState("CoolBoostEnabled", 0) == 1
+                };
+                fanMenu.DropDownItems.Add(_trayCoolBoost);
+            }
 
             var displayMenu = new ToolStripMenuItem("  Display (Internal)");
             _trayDisplay60 = new ToolStripMenuItem("60 Hz", null, (s, e) => ApplyDisplayMode(60, _btn60Hz));
-            _trayDisplayMax = new ToolStripMenuItem($"{_maxHz} Hz", null, (s, e) => ApplyDisplayMode(_maxHz, _btnMaxHz));
-            displayMenu.DropDownItems.AddRange([_trayDisplay60, _trayDisplayMax]);
+            if (_maxHz > 60)
+            {
+                _trayDisplayMax = new ToolStripMenuItem($"{_maxHz} Hz", null, (s, e) => ApplyDisplayMode(_maxHz, _btnMaxHz));
+                displayMenu.DropDownItems.AddRange([_trayDisplay60, _trayDisplayMax]);
+            }
+            else
+            {
+                _trayDisplayMax = null;
+                displayMenu.DropDownItems.Add(_trayDisplay60);
+            }
+
 
             var gpuMenu = new ToolStripMenuItem("  GPU Mode (MUX)");
             _trayGpuOptimus = new ToolStripMenuItem("Optimus (Hybrid)", null, (s, e) => ApplyGpuMode(AcerAgentClient.GPU_MODE_OPTIMUS, _btnGpuOptimus, "Optimus (Hybrid)"));
@@ -1061,9 +1354,9 @@ namespace PredatorControlApp
             _trayMenu.Items.Add(powerMenu);
             _trayMenu.Items.Add(fanMenu);
             _trayMenu.Items.Add(displayMenu);
-            _trayMenu.Items.Add(gpuMenu);
+            if (_wmi.Capabilities.SupportsGpuMux) _trayMenu.Items.Add(gpuMenu);
             _trayMenu.Items.Add(_trayBatteryMenu);
-            _trayMenu.Items.Add(rgbMenu);
+            if (_wmi.Capabilities.SupportsRgbLighting) _trayMenu.Items.Add(rgbMenu);
 
             var hardwareMenu = new ToolStripMenuItem("  Hardware Features");
             var trayWinKey = new ToolStripMenuItem("Lock Windows Key", null, (s, e) =>
@@ -1077,7 +1370,7 @@ namespace PredatorControlApp
             hardwareMenu.DropDownItems.AddRange([trayWinKey, trayLcdOverdrive]);
             _trayMenu.Items.Add(hardwareMenu);
 
-            _trayJelliToggle = new ToolStripMenuItem("  Jelli Desktop Companion", null, (s, e) => SetJelliEnabled(!_jelliFallback))
+            _trayJelliToggle = new ToolStripMenuItem("  Jelli Desktop Companion", null, (s, e) => SetJelliEnabled(!(_trayJelliToggle?.Checked ?? !_jelliFallback)))
             {
                 Checked = !_jelliFallback
             };
@@ -1121,14 +1414,14 @@ namespace PredatorControlApp
             BackColor = theme.FormBg;
             ForeColor = Color.White;
 
-            int initialW = S(460);
+            int initialW = S(470);
             int workH = Screen.PrimaryScreen?.WorkingArea.Height ?? S(1000);
             ClientSize = new Size(initialW, Math.Max(S(500), Math.Min(S(980), workH - 40)));
 
             FormBorderStyle = FormBorderStyle.Sizable;
             ControlBox = false;
             Text = string.Empty;
-            MinimumSize = new Size(S(420), S(520));
+            MinimumSize = new Size(S(460), S(520));
             MaximumSize = new Size(S(700), S(1200));
             StartPosition = FormStartPosition.CenterScreen;
             try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
@@ -1173,7 +1466,7 @@ namespace PredatorControlApp
 
             var lblClose = new Label
             {
-                Text = "●",
+                Text = "\u25CF",
                 ForeColor = Color.FromArgb(255, 95, 86),
                 Font = new Font("Arial", 12f),
                 AutoSize = true,
@@ -1184,7 +1477,7 @@ namespace PredatorControlApp
             };
             var lblMin = new Label
             {
-                Text = "●",
+                Text = "\u25CF",
                 ForeColor = Color.FromArgb(255, 189, 46),
                 Font = new Font("Arial", 12f),
                 AutoSize = true,
@@ -1220,25 +1513,57 @@ namespace PredatorControlApp
             y = S(16);
 
             // TELEMETRY SENSORS
-            MakeLabel("CPU:", pad, y, FontBody, Color.FromArgb(120, 120, 135));
-            _lblCpuTemp = MakeLabel("--°C", pad + S(34), y, FontBodyBold, Color.White);
+            _lblCpuHdr = MakeLabel("CPU:", pad, y, FontBody, Color.FromArgb(120, 120, 135));
+            _lblCpuHdr.AutoSize = true;
+            _lblCpuTemp = MakeLabel("--\u00b0C", _lblCpuHdr.Right + S(6), y, FontBodyBold, Color.White);
+            _lblCpuTemp.AutoSize = true;
 
-            _lblGpuHdr = MakeLabel("GPU:", ClientSize.Width / 2 + S(10), y, FontBody, Color.FromArgb(120, 120, 135));
-            _lblGpuTemp = MakeLabel("--°C", ClientSize.Width / 2 + S(46), y, FontBodyBold, Color.White);
-
-            y += S(24);
-            MakeLabel("CPU FAN:", pad, y, FontBody, Color.FromArgb(120, 120, 135));
-            _lblCpuRpm = MakeLabel("-- RPM", pad + S(64), y, FontBodyBold, Color.White);
-
-            _lblGpuFanHdr = MakeLabel("GPU FAN:", ClientSize.Width / 2 + S(10), y, FontBody, Color.FromArgb(120, 120, 135));
-            _lblGpuRpm = MakeLabel("-- RPM", ClientSize.Width / 2 + S(74), y, FontBodyBold, Color.White);
+            int midX = ClientSize.Width / 2;
+            _lblGpuHdr = MakeLabel("GPU:", midX + S(10), y, FontBody, Color.FromArgb(120, 120, 135));
+            _lblGpuHdr.AutoSize = true;
+            _lblGpuTemp = MakeLabel("--\u00b0C", _lblGpuHdr.Right + S(6), y, FontBodyBold, Color.White);
+            _lblGpuTemp.AutoSize = true;
 
             y += S(24);
-            MakeLabel("Fan speed:", pad, y, FontBody, Color.FromArgb(120, 120, 135));
-            _lblFanStatus = MakeLabel("Auto", pad + S(74), y, FontBodyBold, Color.White);
+            _lblCpuFanHdr = MakeLabel("CPU FAN:", pad, y, FontBody, Color.FromArgb(120, 120, 135));
+            _lblCpuFanHdr.AutoSize = true;
+            _lblCpuRpm = MakeLabel("-- RPM", _lblCpuFanHdr.Right + S(6), y, FontBodyBold, Color.White);
+            _lblCpuRpm.AutoSize = true;
 
-            _lblPowerHdr = MakeLabel("Power:", ClientSize.Width / 2 + S(10), y, FontBody, Color.FromArgb(120, 120, 135));
-            _lblPowerStatus = MakeLabel("Checking...", ClientSize.Width / 2 + S(56), y, FontBodyBold, Color.White);
+            _lblGpuFanHdr = MakeLabel("GPU FAN:", midX + S(10), y, FontBody, Color.FromArgb(120, 120, 135));
+            _lblGpuFanHdr.AutoSize = true;
+            _lblGpuRpm = MakeLabel("-- RPM", _lblGpuFanHdr.Right + S(6), y, FontBodyBold, Color.White);
+            _lblGpuRpm.AutoSize = true;
+
+            if (_wmi.HasAuxFan)
+            {
+                y += S(20);
+                _lblAuxFanHdr = MakeLabel("AUX FAN:", pad, y, FontBody, Color.FromArgb(120, 120, 135));
+                _lblAuxFanHdr.AutoSize = true;
+                _lblAuxRpm = MakeLabel("-- RPM", _lblAuxFanHdr.Right + S(6), y, FontBodyBold, Color.White);
+                _lblAuxRpm.AutoSize = true;
+            }
+
+            y += S(24);
+            _lblFanHdr = MakeLabel("Fan speed:", pad, y, FontBody, Color.FromArgb(120, 120, 135));
+            _lblFanHdr.AutoSize = true;
+            _lblFanStatus = MakeLabel("Auto", _lblFanHdr.Right + S(6), y, FontBodyBold, Color.White);
+            _lblFanStatus.AutoSize = true;
+
+            _lblPowerHdr = MakeLabel("Power:", midX + S(10), y, FontBody, Color.FromArgb(120, 120, 135));
+            _lblPowerHdr.AutoSize = true;
+            _lblPowerStatus = MakeLabel("Checking...", _lblPowerHdr.Right + S(6), y, FontBodyBold, Color.White);
+            _lblPowerStatus.AutoSize = true;
+
+            _lblCpuHdr.SizeChanged += (s, e) => RepositionTelemetryLabels();
+            _lblCpuFanHdr.SizeChanged += (s, e) => RepositionTelemetryLabels();
+            _lblFanHdr.SizeChanged += (s, e) => RepositionTelemetryLabels();
+            _lblGpuHdr.SizeChanged += (s, e) => RepositionTelemetryLabels();
+            _lblGpuFanHdr.SizeChanged += (s, e) => RepositionTelemetryLabels();
+            _lblPowerHdr.SizeChanged += (s, e) => RepositionTelemetryLabels();
+            if (_lblAuxFanHdr != null)
+                _lblAuxFanHdr.SizeChanged += (s, e) => RepositionTelemetryLabels();
+            RepositionTelemetryLabels();
 
             y += S(30);
             AddSeparator(y);
@@ -1265,7 +1590,8 @@ namespace PredatorControlApp
             MakeSectionHeader("POWER MODE", pad, y);
 
             y += S(24);
-            int btnW = (contentW - 4 * gap) / 5;
+            bool isNitro = _wmi.Capabilities.ChassisFamily == AcerChassisFamily.Nitro;
+            int btnW = isNitro ? (contentW - 2 * gap) / 3 : (contentW - 4 * gap) / 5;
             string balancedText = _wmi.ChassisFamily == AcerChassisFamily.Nitro ? "Default" : "Balanced";
             _btnQuiet = MakeButton("Quiet", pad, y, btnW, btnH);
             _btnBalanced = MakeButton(balancedText, pad + (btnW + gap), y, btnW, btnH);
@@ -1278,6 +1604,11 @@ namespace PredatorControlApp
             _btnPerform.Click += (s, e) => ApplyPowerMode(0x04, _btnPerform);
             _btnTurbo.Click += (s, e) => ApplyPowerMode(0x05, _btnTurbo);
             _btnEco.Click += (s, e) => ApplyPowerMode(0x06, _btnEco);
+            if (isNitro)
+            {
+                _btnTurbo.Visible = false;
+                _btnEco.Visible = false;
+            }
 
             y += btnH + S(14);
             int profileDropW = (contentW - gap) / 2;
@@ -1286,12 +1617,18 @@ namespace PredatorControlApp
 
             y += S(20);
             _cboAcProfile = new PredatorDropDown { Location = new Point(pad, y), Size = new Size(profileDropW, S(30)) };
-            _cboAcProfile.Items.AddRange(["Don't Change", "Quiet", "Balanced", "Perf", "Turbo"]);
+            if (isNitro)
+                _cboAcProfile.Items.AddRange(["Don't Change", "Quiet", "Default", "Perf"]);
+            else
+                _cboAcProfile.Items.AddRange(["Don't Change", "Quiet", "Balanced", "Perf", "Turbo"]);
             _cboAcProfile.SelectedIndex = 0;
             _contentPanel.Controls.Add(_cboAcProfile);
 
             _cboBatteryProfile = new PredatorDropDown { Location = new Point(pad + profileDropW + gap, y), Size = new Size(profileDropW, S(30)) };
-            _cboBatteryProfile.Items.AddRange(["Don't Change", "Quiet", "Balanced", "Eco"]);
+            if (isNitro)
+                _cboBatteryProfile.Items.AddRange(["Don't Change", "Quiet", "Default"]);
+            else
+                _cboBatteryProfile.Items.AddRange(["Don't Change", "Quiet", "Balanced", "Eco"]);
             _cboBatteryProfile.SelectedIndex = 0;
             _contentPanel.Controls.Add(_cboBatteryProfile);
 
@@ -1321,29 +1658,58 @@ namespace PredatorControlApp
             _btnCustomFan.Click += (s, e) => ApplyFanMode(0x03, _btnCustomFan);
 
             y += btnH + S(12);
-            int fanSliderW = (contentW - gap) / 2;
-            _lblCpuFanSpeedHdr = MakeLabel("CPU FAN: 50%", pad, y, FontSectionHeader, Color.FromArgb(120, 120, 135));
-            _lblGpuFanSpeedHdr = MakeLabel("GPU FAN: 50%", pad + fanSliderW + gap, y, FontSectionHeader, Color.FromArgb(120, 120, 135));
-            _lblCpuFanSpeedHdr.Visible = false;
-            _lblGpuFanSpeedHdr.Visible = false;
 
-            y += S(24);
-            _cpuFanSlider = new PredatorSlider
+            // Custom fan controls grouped inside collapsible _pnlCustomFan
+            int fanSliderW = _wmi.HasAuxFan ? (contentW - gap * 2) / 3 : (contentW - gap) / 2;
+            int subBtnW = (contentW - gap) / 2;
+            int customH = S(22) + S(28) + S(8) + btnH;
+            _customFanShiftHeight = customH + S(12);
+
+            _pnlCustomFan = new Panel
             {
                 Location = new Point(pad, y),
+                Size = new Size(contentW, customH),
+                Visible = false,
+                BackColor = ThemeManager.Current.FormBg
+            };
+            _contentPanel.Controls.Add(_pnlCustomFan);
+
+            _lblCpuFanSpeedHdr = MakeLabelIn(_pnlCustomFan, "CPU FAN: 50%", 0, 0, FontSectionHeader, Color.FromArgb(120, 120, 135));
+            _lblGpuFanSpeedHdr = MakeLabelIn(_pnlCustomFan, "GPU FAN: 50%", fanSliderW + gap, 0, FontSectionHeader, Color.FromArgb(120, 120, 135));
+
+            _cpuFanSlider = new PredatorSlider
+            {
+                Location = new Point(0, S(22)),
                 Size = new Size(fanSliderW, S(28)),
                 Minimum = 10, Maximum = 100, Value = 50,
-                Visible = false
             };
             _gpuFanSlider = new PredatorSlider
             {
-                Location = new Point(pad + fanSliderW + gap, y),
+                Location = new Point(fanSliderW + gap, S(22)),
                 Size = new Size(fanSliderW, S(28)),
                 Minimum = 10, Maximum = 100, Value = 50,
-                Visible = false
             };
-            _contentPanel.Controls.Add(_cpuFanSlider);
-            _contentPanel.Controls.Add(_gpuFanSlider);
+            _pnlCustomFan.Controls.Add(_cpuFanSlider);
+            _pnlCustomFan.Controls.Add(_gpuFanSlider);
+
+            if (_wmi.HasAuxFan)
+            {
+                _lblAuxFanSpeedHdr = MakeLabelIn(_pnlCustomFan, "AUX FAN: 50%", (fanSliderW + gap) * 2, 0, FontSectionHeader, Color.FromArgb(120, 120, 135));
+                _auxFanSlider = new PredatorSlider
+                {
+                    Location = new Point((fanSliderW + gap) * 2, S(22)),
+                    Size = new Size(fanSliderW, S(28)),
+                    Minimum = 10, Maximum = 100, Value = 50,
+                };
+                _pnlCustomFan.Controls.Add(_auxFanSlider);
+
+                _auxFanSlider.ValueChanged += (s, e) => { if (_lblAuxFanSpeedHdr != null) _lblAuxFanSpeedHdr.Text = $"AUX FAN: {_auxFanSlider.Value}%"; };
+                _auxFanSlider.ValueCommitted += (s, e) =>
+                {
+                    _wmi.SetAuxFanSpeed((byte)_auxFanSlider.Value);
+                    SaveState("FanSpeedAux", _auxFanSlider.Value);
+                };
+            }
 
             _cpuFanSlider.ValueChanged += (s, e) => _lblCpuFanSpeedHdr.Text = $"CPU FAN: {_cpuFanSlider.Value}%";
             _gpuFanSlider.ValueChanged += (s, e) => _lblGpuFanSpeedHdr.Text = $"GPU FAN: {_gpuFanSlider.Value}%";
@@ -1359,18 +1725,16 @@ namespace PredatorControlApp
                 SaveState("FanSpeedGpu", _gpuFanSlider.Value);
             };
 
-            y += S(28) + S(8);
-            int subBtnW = (contentW - gap) / 2;
-            _btnFixedSpeed = MakeButton("Fixed Speed", pad, y, subBtnW, btnH);
-            _btnFanCurve = MakeButton("Curve", pad + subBtnW + gap, y, subBtnW, btnH);
-            _btnFixedSpeed.Visible = false;
-            _btnFanCurve.Visible = false;
+            int subBtnY = S(22) + S(28) + S(8);
+            _btnFixedSpeed = MakeButtonIn(_pnlCustomFan, "Fixed Speed", 0, subBtnY, subBtnW, btnH);
+            _btnFanCurve = MakeButtonIn(_pnlCustomFan, "Curve", subBtnW + gap, subBtnY, subBtnW, btnH);
 
             _btnFixedSpeed.Click += (s, e) =>
             {
                 _fanCurveEnabled = false;
                 _lastCurveCpuSpeed = -1;
                 _lastCurveGpuSpeed = -1;
+                _lastCurveAuxSpeed = -1;
                 HighlightBtn(_btnFixedSpeed, ref _activeCustomSubBtn);
                 SaveState("FanCurveEnabled", 0);
 
@@ -1379,6 +1743,11 @@ namespace PredatorControlApp
 
                 _cpuFanSlider.Enabled = true;
                 _gpuFanSlider.Enabled = true;
+                if (_auxFanSlider != null)
+                {
+                    _auxFanSlider.Enabled = true;
+                    _wmi.SetAuxFanSpeed((byte)_auxFanSlider.Value);
+                }
 
                 _wmi.SetCpuFanSpeed((byte)_cpuFanSlider.Value);
                 _wmi.SetGpuFanSpeed((byte)_gpuFanSlider.Value);
@@ -1389,50 +1758,97 @@ namespace PredatorControlApp
                 HighlightBtn(_btnFanCurve, ref _activeCustomSubBtn);
                 _cpuFanSlider.Enabled = false;
                 _gpuFanSlider.Enabled = false;
+                if (_auxFanSlider != null) _auxFanSlider.Enabled = false;
                 OpenFanCurveEditor();
             };
 
-            // DISPLAY REFRESH RATE
-            y += btnH + S(20);
+            // Acer CoolBoost: placed directly under fan buttons (shifts down when Custom is expanded)
+            if (_wmi.Capabilities.SupportsCoolBoost)
+            {
+                int coolH = S(30);
+                _lblCoolBoost = MakeLabel("Acer CoolBoost", pad, y, FontBody, Color.FromArgb(120, 120, 135));
+                CenterV(_lblCoolBoost, y, coolH);
+
+                _switchCoolBoost = new PredatorToggle
+                {
+                    Location = new Point(ClientSize.Width - pad - S(48), y),
+                    Size = new Size(S(48), coolH),
+                    Checked = LoadState("CoolBoostEnabled", 0) == 1
+                };
+                _contentPanel.Controls.Add(_switchCoolBoost);
+
+                _switchCoolBoost.CheckedChanged += (s, e) =>
+                {
+                    bool enable = _switchCoolBoost.Checked;
+                    SaveState("CoolBoostEnabled", enable ? 1 : 0);
+                    if (_trayCoolBoost != null) _trayCoolBoost.Checked = enable;
+                    Task.Run(() =>
+                    {
+                        try { _wmi.SetCoolBoost(enable); } catch { }
+                    });
+                };
+                y += coolH + S(14);
+            }
+
+            // NOTEBOOK DISPLAY REFRESH RATE
+            y += S(6);
             string displayTitle = "NOTEBOOK DISPLAY REFRESH RATE";
             _lblDisplayHdr = MakeLabel(displayTitle, pad, y, FontSectionHeader, Color.FromArgb(120, 120, 135));
 
             y += S(24);
-            int dispBtnW = (contentW - gap) / 2;
-            _btn60Hz = MakeButton("60 Hz", pad, y, dispBtnW, btnH);
-            _btnMaxHz = MakeButton($"{_maxHz} Hz (Max)", pad + dispBtnW + gap, y, dispBtnW, btnH);
+            if (_maxHz <= 60)
+            {
+                _btn60Hz = MakeButton("60 Hz", pad, y, contentW, btnH);
+                _btnMaxHz = null;
+                _btn60Hz.Click += (s, e) => ApplyDisplayMode(60, _btn60Hz);
+            }
+            else
+            {
+                int dispBtnW = (contentW - gap) / 2;
+                _btn60Hz = MakeButton("60 Hz", pad, y, dispBtnW, btnH);
+                _btnMaxHz = MakeButton($"{_maxHz} Hz (Max)", pad + dispBtnW + gap, y, dispBtnW, btnH);
 
-            _btn60Hz.Click += (s, e) => ApplyDisplayMode(60, _btn60Hz);
-            _btnMaxHz.Click += (s, e) => ApplyDisplayMode(_maxHz, _btnMaxHz);
+                _btn60Hz.Click += (s, e) => ApplyDisplayMode(60, _btn60Hz);
+                _btnMaxHz.Click += (s, e) => ApplyDisplayMode(_maxHz, _btnMaxHz);
+            }
 
             y += btnH + S(12);
             int switchH = S(30);
-            _lblLcdOverdrive = MakeLabel("LCD Overdrive (3ms Response Boost)", pad, y, FontBody, Color.FromArgb(120, 120, 135));
-            CenterV(_lblLcdOverdrive, y, switchH);
-
-            _switchLcdOverdrive = new PredatorToggle
+            if (_wmi.Capabilities.SupportsLcdOverdrive)
             {
-                Location = new Point(ClientSize.Width - pad - S(48), y),
-                Size = new Size(S(48), switchH)
-            };
-            _contentPanel.Controls.Add(_switchLcdOverdrive);
+                _lblLcdOverdrive = MakeLabel("LCD Overdrive (3ms Response Boost)", pad, y, FontBody, Color.FromArgb(120, 120, 135));
+                CenterV(_lblLcdOverdrive, y, switchH);
 
-            _switchLcdOverdrive.CheckedChanged += (s, e) =>
-            {
-                bool enable = _switchLcdOverdrive.Checked;
-                SaveState("LcdOverdrive", enable ? 1 : 0);
-                Task.Run(() =>
+                _switchLcdOverdrive = new PredatorToggle
                 {
-                    try { _wmi.SetLcdOverdrive(enable); } catch { }
-                });
-            };
+                    Location = new Point(ClientSize.Width - pad - S(48), y),
+                    Size = new Size(S(48), switchH)
+                };
+                _contentPanel.Controls.Add(_switchLcdOverdrive);
 
-            y += switchH + S(16);
+                _switchLcdOverdrive.CheckedChanged += (s, e) =>
+                {
+                    bool enable = _switchLcdOverdrive.Checked;
+                    SaveState("LcdOverdrive", enable ? 1 : 0);
+                    Task.Run(() =>
+                    {
+                        try { _wmi.SetLcdOverdrive(enable); } catch { }
+                    });
+                };
+                y += switchH + S(16);
+            }
+            else
+            {
+                y += S(10);
+            }
+
             AddSeparator(y);
 
             // GPU WORKING MODE (MUX SWITCH)
-            y += S(18);
-            _lblGpuModeHdr = MakeLabel("GPU WORKING MODE (MUX SWITCH)", pad, y, FontSectionHeader, Color.FromArgb(120, 120, 135));
+            // MUX
+            if (_wmi.Capabilities.SupportsGpuMux)
+            {
+                _lblGpuModeHdr = MakeLabel("GPU WORKING MODE (MUX SWITCH)", pad, y, FontSectionHeader, Color.FromArgb(120, 120, 135));
 
             y += S(24);
             int gpuBtnW = (contentW - 2 * gap) / 3;
@@ -1452,7 +1868,8 @@ namespace PredatorControlApp
             _lblGpuRestartNotice = MakeLabel("Requires system restart to take effect in firmware", pad, y, FontBody, Color.FromArgb(120, 120, 135));
 
             y += S(22);
-            AddSeparator(y);
+                AddSeparator(y);
+            }
 
             // EXTERNAL DISPLAY(S)
             y += S(18);
@@ -1492,7 +1909,26 @@ namespace PredatorControlApp
 
             _switchBatteryLimit.CheckedChanged += (s, e) => ApplyBatteryLimit(_switchBatteryLimit.Checked);
 
-            y += switchH + S(12);
+            y += switchH + S(6);
+            _lblBatteryHealth = MakeLabel("Battery Diagnostics: Calculating...", pad, y, FontBody, Color.FromArgb(120, 120, 135));
+            _lblBatteryHealth.AutoSize = true;
+            _lblBatteryHealth.MaximumSize = new Size(contentW, 0);
+            _contentPanel.Controls.Add(_lblBatteryHealth);
+
+            // Populate battery health diagnostics immediately if available, or asynchronously on startup
+            UpdateBatteryHealthUI();
+
+            y += S(22);
+            int batBtnW = S(210), batBtnH = S(28);
+            var btnBatteryReport = MakeButton("📊  View Full Battery Report", pad, y, batBtnW, batBtnH);
+            btnBatteryReport.Click += (s, e) =>
+            {
+                BatteryHealthMonitor.OpenBatteryReport();
+                UpdateBatteryHealthUI(forceRefresh: true);
+            };
+            _contentPanel.Controls.Add(btnBatteryReport);
+
+            y += batBtnH + S(6);
             _lblStartupStatus = MakeLabel("Start with Windows", pad, y, FontBody, Color.FromArgb(120, 120, 135));
             CenterV(_lblStartupStatus, y, switchH);
 
@@ -1526,7 +1962,41 @@ namespace PredatorControlApp
 
             // KEYBOARD RGB LIGHTING (3-ZONE / 4-ZONE & MODES)
             y += switchH + S(28);
-            MakeSectionHeader("KEYBOARD RGB LIGHTING", pad, y);
+            if (!_wmi.Capabilities.SupportsRgbLighting)
+            {
+                MakeSectionHeader("KEYBOARD BACKLIGHT", pad, y);
+                y += S(24);
+                MakeLabel("Monochrome Red Backlight Detected (Single-Color)", pad, y, FontBody, Color.FromArgb(140, 140, 155));
+                y += S(24);
+
+                _lblBrightHdr = MakeLabel("KEYBOARD BRIGHTNESS: 100%", pad, y, FontSectionHeader, Color.FromArgb(120, 120, 135));
+                y += S(24);
+                _brightnessSlider = new PredatorSlider { Location = new Point(pad, y), Size = new Size(contentW, S(28)), Minimum = 0, Maximum = 100, Value = 100 };
+                _contentPanel.Controls.Add(_brightnessSlider);
+
+                _brightnessSlider.ValueChanged += (s, e) =>
+                {
+                    _lblBrightHdr.Text = $"KEYBOARD BRIGHTNESS: {_brightnessSlider.Value}%";
+                    DebounceHelper.Debounce("BacklightBrightnessLive", () =>
+                    {
+                        _wmi.SetBrightness((byte)_brightnessSlider.Value);
+                    }, 40);
+                };
+                _brightnessSlider.ValueCommitted += (s, e) =>
+                {
+                    _wmi.SetBrightness((byte)_brightnessSlider.Value);
+                    SaveState("Brightness", _brightnessSlider.Value);
+                };
+
+                _rgbDropDown = new PredatorDropDown();
+                foreach (var name in RgbModeNames) _rgbDropDown.Items.Add(name);
+                _rgbDropDown.SelectedIndex = 0;
+                _cboRgbProfiles = new PredatorDropDown();
+                _speedSlider = new PredatorSlider();
+            }
+            else
+            {
+                MakeSectionHeader("KEYBOARD RGB LIGHTING", pad, y);
 
             y += S(24);
             int dropH = S(34);
@@ -1570,7 +2040,7 @@ namespace PredatorControlApp
             }
 
             y += S(28) + S(12);
-            _btnCustomColor = MakeButton("🎨  Custom Color...", pad, y, contentW, btnH);
+            _btnCustomColor = MakeButton("\uD83C\uDFA8  Custom Color...", pad, y, contentW, btnH);
             _btnCustomColor.Click += (s, e) =>
             {
                 if (_selectedZone >= 0 && _selectedZone < 4)
@@ -1660,7 +2130,8 @@ namespace PredatorControlApp
                 ApplyRgbModeFromDropdown(mode);
             };
 
-            UpdateRgbControlsState(_rgbDropDown.SelectedIndex);
+                UpdateRgbControlsState(_rgbDropDown.SelectedIndex);
+            }
 
             y += S(28) + S(12);
             _lblBacklight30s = MakeLabel("Backlight 30-Sec Idle Sleep", pad, y, FontBody, Color.FromArgb(120, 120, 135));
@@ -1726,7 +2197,7 @@ namespace PredatorControlApp
 
             // Dedicated Overlay Options & Settings button in the empty space below mode buttons
             y += btnH + S(8);
-            _btnOverlaySettings = MakeButton("⚙ Overlay Options", pad, y, contentW, S(28));
+            _btnOverlaySettings = MakeButton("\u2699 Overlay Options", pad, y, contentW, S(28));
             _btnOverlaySettings.Click += (s, e) => OpenOverlaySettings();
             _contentPanel.Controls.Add(_btnOverlaySettings);
 
@@ -1775,6 +2246,116 @@ namespace PredatorControlApp
                     SetJelliEnabled(_switchJelliEnabled.Checked);
             };
 
+            // Boot Sound (Startup Chime)
+            if (_wmi.Supports(AcerFeature.BootSound))
+            {
+                y += switchH + S(12);
+                _lblBootSound = MakeLabel("Startup Animation & Sound", pad, y, FontBody, Color.FromArgb(120, 120, 135));
+                CenterV(_lblBootSound, y, switchH);
+
+                _switchBootSound = new PredatorToggle
+                {
+                    Location = new Point(ClientSize.Width - pad - S(48), y),
+                    Size = new Size(S(48), switchH),
+                    Checked = _wmi.GetBootSound()
+                };
+                _contentPanel.Controls.Add(_switchBootSound);
+
+                var tipBoot = new ToolTip();
+                tipBoot.SetToolTip(_lblBootSound, "Startup Animation & Sound:\nControls the boot logo animation and sound chime on startup (POST Animation & Sound in BIOS).");
+                tipBoot.SetToolTip(_switchBootSound, "Startup Animation & Sound:\nControls the boot logo animation and sound chime on startup (POST Animation & Sound in BIOS).");
+
+                _switchBootSound.CheckedChanged += (s, e) =>
+                {
+                    bool enable = _switchBootSound.Checked;
+                    SaveState("BootSound", enable ? 1 : 0);
+                    Task.Run(() => { try { _wmi.SetBootSound(enable); } catch { } });
+                };
+            }
+
+            // Power-off USB Charging
+            if (_wmi.Supports(AcerFeature.UsbCharging))
+            {
+                y += switchH + S(12);
+                _lblUsbCharging = MakeLabel("Power-off USB Charging", pad, y, FontBody, Color.FromArgb(120, 120, 135));
+                CenterV(_lblUsbCharging, y, switchH);
+
+                _switchUsbCharging = new PredatorToggle
+                {
+                    Location = new Point(ClientSize.Width - pad - S(48), y),
+                    Size = new Size(S(48), switchH),
+                    Checked = _wmi.GetUsbCharging()
+                };
+                _contentPanel.Controls.Add(_switchUsbCharging);
+
+                var tipUsb = new ToolTip();
+                tipUsb.SetToolTip(_lblUsbCharging, "Power-off USB Charging:\nKeeps the USB port with the battery/lightning icon powered when the laptop is off or sleeping to charge external devices (phone, earbuds, etc.).");
+                tipUsb.SetToolTip(_switchUsbCharging, "Power-off USB Charging:\nKeeps the USB port with the battery/lightning icon powered when the laptop is off or sleeping to charge external devices (phone, earbuds, etc.).");
+
+                _switchUsbCharging.CheckedChanged += (s, e) =>
+                {
+                    bool enable = _switchUsbCharging.Checked;
+                    SaveState("UsbCharging", enable ? 1 : 0);
+                    Task.Run(() => { try { _wmi.SetUsbCharging(enable); } catch { } });
+                };
+            }
+
+            // Auto-CoolBoost Sync
+            if (_wmi.Supports(AcerFeature.CoolBoost))
+            {
+                y += switchH + S(12);
+                _lblAutoCoolBoost = MakeLabel("Auto-CoolBoost on Performance / Turbo", pad, y, FontBody, Color.FromArgb(120, 120, 135));
+                CenterV(_lblAutoCoolBoost, y, switchH);
+
+                _switchAutoCoolBoost = new PredatorToggle
+                {
+                    Location = new Point(ClientSize.Width - pad - S(48), y),
+                    Size = new Size(S(48), switchH),
+                    Checked = LoadState("AutoCoolBoost", 1) == 1
+                };
+                _contentPanel.Controls.Add(_switchAutoCoolBoost);
+
+                _switchAutoCoolBoost.CheckedChanged += (s, e) =>
+                {
+                    SaveState("AutoCoolBoost", _switchAutoCoolBoost.Checked ? 1 : 0);
+                };
+            }
+
+            // Hardware Key Action Customization
+            y += switchH + S(16);
+            MakeLabel("HARDWARE KEY ACTIONS:", pad, y, FontSectionHeader, Color.FromArgb(120, 120, 135));
+
+            y += S(22);
+            int keyDropW = (contentW - gap) / 2;
+            var lblTurboKey = MakeLabel("Turbo / Mode Key:", pad, y, FontBody, Color.FromArgb(140, 140, 155));
+            var lblPredatorKey = MakeLabel(_wmi.ChassisFamily == AcerChassisFamily.Nitro ? "Nitro 'N' Key:" : "Predator Key:", pad + keyDropW + gap, y, FontBody, Color.FromArgb(140, 140, 155));
+
+            y += S(20);
+            _cboTurboAction = new PredatorDropDown
+            {
+                Location = new Point(pad, y),
+                Size = new Size(keyDropW, S(30))
+            };
+            _cboTurboAction.Items.Add("Cycle Power Modes");
+            _cboTurboAction.Items.Add("Toggle Max Fans");
+            _cboTurboAction.Items.Add("Instant Turbo Mode");
+            _cboTurboAction.SelectedIndex = Math.Clamp(LoadState("TurboKeyAction", 0), 0, 2);
+            _cboTurboAction.SelectedIndexChanged += (s, e) => SaveState("TurboKeyAction", _cboTurboAction.SelectedIndex);
+            _contentPanel.Controls.Add(_cboTurboAction);
+
+            _cboPredatorAction = new PredatorDropDown
+            {
+                Location = new Point(pad + keyDropW + gap, y),
+                Size = new Size(keyDropW, S(30))
+            };
+            _cboPredatorAction.Items.Add("Toggle Window");
+            _cboPredatorAction.Items.Add("Toggle In-Game HUD");
+            _cboPredatorAction.Items.Add("Toggle Max Fans");
+            _cboPredatorAction.SelectedIndex = Math.Clamp(LoadState("PredatorKeyAction", 0), 0, 2);
+            _cboPredatorAction.SelectedIndexChanged += (s, e) => SaveState("PredatorKeyAction", _cboPredatorAction.SelectedIndex);
+            _contentPanel.Controls.Add(_cboPredatorAction);
+            y += S(30) + S(10);
+
             // GAME SYNC
             y += switchH + S(22);
             AddSeparator(y);
@@ -1796,11 +2377,11 @@ namespace PredatorControlApp
             _switchGameSync.CheckedChanged += (s, e) =>
             {
                 _gameSync.IsEnabled = _switchGameSync.Checked;
-                _lblGameSyncStatus.Text = _switchGameSync.Checked ? "Active — Monitoring" : "Disabled";
+                _lblGameSyncStatus.Text = _switchGameSync.Checked ? "Active \u2014 Monitoring" : "Disabled";
             };
 
             y += syncSwitchH + S(10);
-            _btnConfigureGames = MakeButton("🎮  Configure Executables", pad, y, contentW, btnH);
+            _btnConfigureGames = MakeButton("\uD83C\uDFAE  Configure Executables", pad, y, contentW, btnH);
             _btnConfigureGames.Click += (s, e) =>
             {
                 using var form = new GameSyncForm(_gameSync, _maxHz);
@@ -1819,12 +2400,95 @@ namespace PredatorControlApp
             var lblVersion = MakeLabel($"Version {Updater.CurrentText}", pad, y, FontBody, Color.FromArgb(120, 120, 135));
             CenterV(lblVersion, y, updBtnH);
 
-            _btnCheckUpdates = MakeButton("⬇  Check for Updates", ClientSize.Width - pad - updBtnW, y, updBtnW, updBtnH);
+            _btnCheckUpdates = MakeButton("\u2B07  Check for Updates", ClientSize.Width - pad - updBtnW, y, updBtnW, updBtnH);
             _btnCheckUpdates.Click += async (s, e) => await CheckForUpdatesAsync();
 
-                        LoadRgbProfilesIntoUi();
+            // OPTIMIZE SERVICES (F-5)
+            y += updBtnH + S(24);
+            AddSeparator(y);
 
-            _contentPanel.AutoScrollMinSize = new Size(0, y + updBtnH + S(50));
+            y += S(20);
+            MakeSectionHeader("SYSTEM OPTIMIZATION", pad, y);
+
+            y += S(24);
+            int optSwitchH = S(30);
+            _lblOptimizeServices = MakeLabel("Optimize Acer Services (Disable OEM Bloatware)", pad, y, FontBody, Color.FromArgb(120, 120, 135));
+            CenterV(_lblOptimizeServices, y, optSwitchH);
+
+            _switchOptimizeServices = new PredatorToggle
+            {
+                Location = new Point(ClientSize.Width - pad - S(48), y),
+                Size = new Size(S(48), optSwitchH),
+                Checked = IsServicesOptimizationEnabled()
+            };
+            _contentPanel.Controls.Add(_switchOptimizeServices);
+
+            y += optSwitchH + S(2);
+            _lblOptimizeCounter = MakeLabel(string.Empty, pad, y, FontBody, Color.FromArgb(120, 120, 135));
+            UpdateOptimizeCounter();
+
+            y += S(24);
+            int repairBtnW = S(240), repairBtnH = S(30);
+            _btnAutoRepair = MakeButton("\uD83D\uDEE0  Auto-Repair OEM Services", pad, y, repairBtnW, repairBtnH);
+            _btnAutoRepair.Click += async (s, e) =>
+            {
+                _btnAutoRepair.Enabled = false;
+                _btnAutoRepair.Text = "\u23F3  Repairing...";
+                if (_lblOptimizeCounter != null)
+                {
+                    _lblOptimizeCounter.Text = "Scanning DriverStore and repairing OEM services...";
+                    _lblOptimizeCounter.ForeColor = Color.FromArgb(255, 189, 46);
+                }
+
+                await Task.Run(() =>
+                {
+                    try
+                    {
+                        OemServiceManager.AutoRepairForChassis(_wmi.ChassisFamily, msg =>
+                        {
+                            try
+                            {
+                                if (!IsDisposed && _lblOptimizeCounter != null)
+                                    BeginInvoke(() => _lblOptimizeCounter.Text = msg);
+                            }
+                            catch { }
+                        }, forcePrompt: true);
+                    }
+                    catch { }
+                });
+
+                if (!IsDisposed)
+                {
+                    _btnAutoRepair.Enabled = true;
+                    _btnAutoRepair.Text = "\uD83D\uDEE0  Auto-Repair OEM Services";
+                    UpdateOptimizeCounter();
+                }
+            };
+
+            _switchOptimizeServices.CheckedChanged += (s, e) =>
+            {
+                bool enabled = _switchOptimizeServices.Checked;
+                SetServicesOptimizationEnabled(enabled);
+                if (enabled)
+                {
+                    OptimizeAcerServices();
+                }
+                else
+                {
+                    RestoreAcerServices();
+                }
+                UpdateOptimizeCounter();
+                Task.Delay(1500).ContinueWith(_ =>
+                {
+                    try { if (!IsDisposed) BeginInvoke(new Action(UpdateOptimizeCounter)); } catch { }
+                });
+            };
+
+            LoadRgbProfilesIntoUi();
+
+            _contentPanel.AutoScrollMinSize = new Size(0, y + repairBtnH + S(50));
+            PerformCustomLayout();
+            UpdateScrollMinSize();
         }
 
         private void SelectZone(int zoneIndex)
@@ -1987,141 +2651,271 @@ namespace PredatorControlApp
             lbl.Location = new Point(lbl.Left, controlY + (controlH - lbl.Height) / 2);
         }
 
-        protected override void OnResize(EventArgs e)
+        private void RepositionTelemetryLabels()
         {
-            base.OnResize(e);
+            if (_contentPanel == null || _lblCpuHdr == null) return;
+            int pad = S(24);
+            int midX = ClientSize.Width / 2;
 
-            if (_contentPanel != null && _lblTitle != null)
+            _lblCpuHdr.Left = pad;
+            if (_lblCpuTemp != null)
+                _lblCpuTemp.Left = Math.Max(_lblCpuHdr.Right + S(6), pad + S(42));
+
+            _lblCpuFanHdr.Left = pad;
+            if (_lblCpuRpm != null)
+                _lblCpuRpm.Left = Math.Max(_lblCpuFanHdr.Right + S(6), pad + S(74));
+
+            if (_lblAuxFanHdr != null)
             {
-                int pad = S(24);
-                int gap = S(6);
-                int contentW = Math.Max(S(350), ClientSize.Width - pad * 2);
+                _lblAuxFanHdr.Left = pad;
+                if (_lblAuxRpm != null)
+                    _lblAuxRpm.Left = Math.Max(_lblAuxFanHdr.Right + S(6), pad + S(74));
+            }
 
-                // Update separators
-                foreach (var sep in _separators)
-                    sep.Width = contentW;
+            _lblFanHdr.Left = pad;
+            if (_lblFanStatus != null)
+                _lblFanStatus.Left = Math.Max(_lblFanHdr.Right + S(6), pad + S(80));
 
-                // Telemetry right-column items
-                int midX = ClientSize.Width / 2;
-                if (_lblGpuHdr != null) _lblGpuHdr.Left = midX + S(10);
-                if (_lblGpuTemp != null) _lblGpuTemp.Left = midX + S(46);
-                if (_lblGpuFanHdr != null) _lblGpuFanHdr.Left = midX + S(10);
-                if (_lblGpuRpm != null) _lblGpuRpm.Left = midX + S(74);
-                if (_lblPowerHdr != null) _lblPowerHdr.Left = midX + S(10);
-                if (_lblPowerStatus != null) _lblPowerStatus.Left = midX + S(56);
+            if (_lblGpuHdr != null) _lblGpuHdr.Left = midX + S(10);
+            if (_lblGpuTemp != null && _lblGpuHdr != null)
+                _lblGpuTemp.Left = Math.Max(_lblGpuHdr.Right + S(6), midX + S(46));
 
-                // Theme switcher buttons
-                int themeBtnW = (contentW - 2 * gap) / 3;
-                if (_btnThemeTeal != null) _btnThemeTeal.Width = themeBtnW;
-                if (_btnThemeCrimson != null) { _btnThemeCrimson.Left = pad + themeBtnW + gap; _btnThemeCrimson.Width = themeBtnW; }
-                if (_btnThemeOled != null) { _btnThemeOled.Left = pad + (themeBtnW + gap) * 2; _btnThemeOled.Width = themeBtnW; }
+            if (_lblGpuFanHdr != null) _lblGpuFanHdr.Left = midX + S(10);
+            if (_lblGpuRpm != null && _lblGpuFanHdr != null)
+                _lblGpuRpm.Left = Math.Max(_lblGpuFanHdr.Right + S(6), midX + S(74));
 
-                // Power mode buttons
+            if (_lblPowerHdr != null) _lblPowerHdr.Left = midX + S(10);
+            if (_lblPowerStatus != null && _lblPowerHdr != null)
+                _lblPowerStatus.Left = Math.Max(_lblPowerHdr.Right + S(6), midX + S(58));
+        }
+
+        private void PerformCustomLayout()
+        {
+            if (_contentPanel == null || _lblTitle == null) return;
+
+            int pad = S(24);
+            int gap = S(6);
+            int contentW = Math.Max(S(280), ClientSize.Width - pad * 2);
+
+            // Update separators
+            foreach (var sep in _separators)
+            {
+                sep.Left = pad;
+                sep.Width = contentW;
+            }
+
+            // Telemetry sensors layout
+            RepositionTelemetryLabels();
+
+            // Theme switcher buttons
+            int themeBtnW = (contentW - 2 * gap) / 3;
+            if (_btnThemeTeal != null) { _btnThemeTeal.Left = pad; _btnThemeTeal.Width = themeBtnW; }
+            if (_btnThemeCrimson != null) { _btnThemeCrimson.Left = pad + themeBtnW + gap; _btnThemeCrimson.Width = themeBtnW; }
+            if (_btnThemeOled != null) { _btnThemeOled.Left = pad + (themeBtnW + gap) * 2; _btnThemeOled.Width = contentW - (_btnThemeOled.Left - pad); }
+
+            // Power mode buttons
+            bool isNitro = _wmi.Capabilities.ChassisFamily == AcerChassisFamily.Nitro;
+            if (isNitro)
+            {
+                int btnW = (contentW - 2 * gap) / 3;
+                if (_btnQuiet != null) { _btnQuiet.Left = pad; _btnQuiet.Width = btnW; }
+                if (_btnBalanced != null) { _btnBalanced.Left = pad + (btnW + gap); _btnBalanced.Width = btnW; }
+                if (_btnPerform != null) { _btnPerform.Left = pad + (btnW + gap) * 2; _btnPerform.Width = contentW - (_btnPerform.Left - pad); }
+                if (_btnTurbo != null) _btnTurbo.Visible = false;
+                if (_btnEco != null) _btnEco.Visible = false;
+            }
+            else
+            {
                 int btnW = (contentW - 4 * gap) / 5;
-                if (_btnQuiet != null) _btnQuiet.Width = btnW;
+                if (_btnQuiet != null) { _btnQuiet.Left = pad; _btnQuiet.Width = btnW; }
                 if (_btnBalanced != null) { _btnBalanced.Left = pad + (btnW + gap); _btnBalanced.Width = btnW; }
                 if (_btnPerform != null) { _btnPerform.Left = pad + (btnW + gap) * 2; _btnPerform.Width = btnW; }
-                if (_btnTurbo != null) { _btnTurbo.Left = pad + (btnW + gap) * 3; _btnTurbo.Width = btnW; }
-                if (_btnEco != null) { _btnEco.Left = pad + (btnW + gap) * 4; _btnEco.Width = btnW; }
+                if (_btnTurbo != null) { _btnTurbo.Left = pad + (btnW + gap) * 3; _btnTurbo.Width = btnW; _btnTurbo.Visible = true; }
+                if (_btnEco != null) { _btnEco.Left = pad + (btnW + gap) * 4; _btnEco.Width = contentW - (_btnEco.Left - pad); _btnEco.Visible = true; }
+            }
 
-                // AC / Battery Profile dropdowns
-                int profileDropW = (contentW - gap) / 2;
-                if (_lblBatteryProfileHdr != null) _lblBatteryProfileHdr.Left = pad + profileDropW + gap;
-                if (_cboAcProfile != null) _cboAcProfile.Width = profileDropW;
-                if (_cboBatteryProfile != null) { _cboBatteryProfile.Left = pad + profileDropW + gap; _cboBatteryProfile.Width = profileDropW; }
+            // AC / Battery Profile dropdowns
+            int profileDropW = (contentW - gap) / 2;
+            if (_cboAcProfile != null) { _cboAcProfile.Left = pad; _cboAcProfile.Width = profileDropW; }
+            if (_lblBatteryProfileHdr != null) _lblBatteryProfileHdr.Left = pad + profileDropW + gap;
+            if (_cboBatteryProfile != null) { _cboBatteryProfile.Left = pad + profileDropW + gap; _cboBatteryProfile.Width = contentW - profileDropW - gap; }
 
-                // Fan mode buttons
-                int fanBtnW = (contentW - 2 * gap) / 3;
-                if (_btnAutoFan != null) _btnAutoFan.Width = fanBtnW;
-                if (_btnMaxFan != null) { _btnMaxFan.Left = pad + (fanBtnW + gap); _btnMaxFan.Width = fanBtnW; }
-                if (_btnCustomFan != null) { _btnCustomFan.Left = pad + (fanBtnW + gap) * 2; _btnCustomFan.Width = fanBtnW; }
+            // Fan mode buttons
+            int fanBtnW = (contentW - 2 * gap) / 3;
+            if (_btnAutoFan != null) { _btnAutoFan.Left = pad; _btnAutoFan.Width = fanBtnW; }
+            if (_btnMaxFan != null) { _btnMaxFan.Left = pad + (fanBtnW + gap); _btnMaxFan.Width = fanBtnW; }
+            if (_btnCustomFan != null) { _btnCustomFan.Left = pad + (fanBtnW + gap) * 2; _btnCustomFan.Width = contentW - (_btnCustomFan.Left - pad); }
 
-                // Fan sliders
-                int fanSliderW = (contentW - gap) / 2;
-                if (_lblGpuFanSpeedHdr != null) _lblGpuFanSpeedHdr.Left = pad + fanSliderW + gap;
-                if (_cpuFanSlider != null) _cpuFanSlider.Width = fanSliderW;
-                if (_gpuFanSlider != null) { _gpuFanSlider.Left = pad + fanSliderW + gap; _gpuFanSlider.Width = fanSliderW; }
+            // Fan sliders & sub buttons inside _pnlCustomFan
+            if (_pnlCustomFan != null)
+            {
+                _pnlCustomFan.Left = pad;
+                _pnlCustomFan.Width = contentW;
+                if (_wmi.HasAuxFan)
+                {
+                    int fanSliderW = (contentW - gap * 2) / 3;
+                    if (_lblGpuFanSpeedHdr != null) _lblGpuFanSpeedHdr.Left = fanSliderW + gap;
+                    if (_cpuFanSlider != null) _cpuFanSlider.Width = fanSliderW;
+                    if (_gpuFanSlider != null) { _gpuFanSlider.Left = fanSliderW + gap; _gpuFanSlider.Width = fanSliderW; }
+                    if (_lblAuxFanSpeedHdr != null) _lblAuxFanSpeedHdr.Left = (fanSliderW + gap) * 2;
+                    if (_auxFanSlider != null) { _auxFanSlider.Left = (fanSliderW + gap) * 2; _auxFanSlider.Width = contentW - (_auxFanSlider.Left); }
+                }
+                else
+                {
+                    int fanSliderW = (contentW - gap) / 2;
+                    if (_lblGpuFanSpeedHdr != null) _lblGpuFanSpeedHdr.Left = fanSliderW + gap;
+                    if (_cpuFanSlider != null) _cpuFanSlider.Width = fanSliderW;
+                    if (_gpuFanSlider != null) { _gpuFanSlider.Left = fanSliderW + gap; _gpuFanSlider.Width = contentW - fanSliderW - gap; }
+                }
 
                 // Custom fan sub buttons
                 int subBtnW = (contentW - gap) / 2;
-                if (_btnFixedSpeed != null) _btnFixedSpeed.Width = subBtnW;
-                if (_btnFanCurve != null) { _btnFanCurve.Left = pad + subBtnW + gap; _btnFanCurve.Width = subBtnW; }
-
-                // Display refresh rate buttons
-                int dispBtnW = (contentW - gap) / 2;
-                if (_btn60Hz != null) _btn60Hz.Width = dispBtnW;
-                if (_btnMaxHz != null) { _btnMaxHz.Left = pad + dispBtnW + gap; _btnMaxHz.Width = dispBtnW; }
-
-                // GPU Working Mode (MUX Switch) buttons
-                int gpuBtnW = (contentW - 2 * gap) / 3;
-                if (_btnGpuOptimus != null) _btnGpuOptimus.Width = gpuBtnW;
-                if (_btnGpuDiscrete != null) { _btnGpuDiscrete.Left = pad + gpuBtnW + gap; _btnGpuDiscrete.Width = gpuBtnW; }
-                if (_btnGpuAuto != null) { _btnGpuAuto.Left = pad + (gpuBtnW + gap) * 2; _btnGpuAuto.Width = gpuBtnW; }
-
-                // LCD Overdrive & Backlight 30s Switches
-                if (_switchLcdOverdrive != null) _switchLcdOverdrive.Left = ClientSize.Width - pad - S(48);
-                if (_switchBacklight30s != null) _switchBacklight30s.Left = ClientSize.Width - pad - S(48);
-
-                // Battery Limit & Startup Switches
-                if (_switchBatteryLimit != null) _switchBatteryLimit.Left = ClientSize.Width - pad - S(48);
-                if (_switchStartWithWindows != null) _switchStartWithWindows.Left = ClientSize.Width - pad - S(48);
-
-                // System & Hardware Controls
-                if (_switchWinKeyLock != null) _switchWinKeyLock.Left = ClientSize.Width - pad - S(48);
-                if (_switchJelliEnabled != null) _switchJelliEnabled.Left = ClientSize.Width - pad - S(48);
-
-                // Gaming Overlay controls
-                if (_switchOverlay != null) _switchOverlay.Left = ClientSize.Width - pad - S(48);
-                int overlayModeBtnW = (contentW - 3 * gap) / 4;
-                if (_btnOverlayLight != null) { _btnOverlayLight.Left = pad; _btnOverlayLight.Width = overlayModeBtnW; }
-                if (_btnOverlayDefault != null) { _btnOverlayDefault.Left = pad + overlayModeBtnW + gap; _btnOverlayDefault.Width = overlayModeBtnW; }
-                if (_btnOverlayFull != null) { _btnOverlayFull.Left = pad + (overlayModeBtnW + gap) * 2; _btnOverlayFull.Width = overlayModeBtnW; }
-                if (_btnOverlayComplete != null) { _btnOverlayComplete.Left = pad + (overlayModeBtnW + gap) * 3; _btnOverlayComplete.Width = overlayModeBtnW; }
-                if (_btnOverlaySettings != null) { _btnOverlaySettings.Left = pad; _btnOverlaySettings.Width = contentW; }
-
-                // Keyboard RGB controls
-                if (_rgbDropDown != null) _rgbDropDown.Width = contentW;
-
-                // Keyboard 4-Zone controls
-                int zoneBtnW = (contentW - 4 * gap) / 5;
-                if (_btnAllZones != null)
-                {
-                    _btnAllZones.Left = pad;
-                    _btnAllZones.Width = zoneBtnW;
-                }
-                for (int z = 0; z < 4; z++)
-                {
-                    if (_btnZones[z] != null)
-                    {
-                        _btnZones[z].Left = pad + (zoneBtnW + gap) * (z + 1);
-                        _btnZones[z].Width = zoneBtnW;
-                    }
-                }
-
-                int preW = (contentW - 5 * gap) / 6;
-                for (int i = 0; i < 6; i++)
-                {
-                    if (_btnPresetColors[i] != null)
-                    {
-                        _btnPresetColors[i].Left = pad + (preW + gap) * i;
-                        _btnPresetColors[i].Width = preW;
-                    }
-                }
-
-                if (_btnCustomColor != null) _btnCustomColor.Width = contentW;
-
-                int sliderW = (contentW - gap * 4) / 2;
-                if (_brightnessSlider != null) _brightnessSlider.Width = sliderW;
-                if (_lblSpeedHdr != null) _lblSpeedHdr.Left = midX + S(10);
-                if (_speedSlider != null) { _speedSlider.Left = midX + S(10); _speedSlider.Width = sliderW; }
-
-                // Game Sync & Updates
-                if (_switchGameSync != null) _switchGameSync.Left = ClientSize.Width - pad - S(48);
-                if (_btnConfigureGames != null) _btnConfigureGames.Width = contentW;
-                if (_btnCheckUpdates != null) _btnCheckUpdates.Left = ClientSize.Width - pad - _btnCheckUpdates.Width;
-
-                _contentPanel.Invalidate(true);
+                if (_btnFixedSpeed != null) { _btnFixedSpeed.Left = 0; _btnFixedSpeed.Width = subBtnW; }
+                if (_btnFanCurve != null) { _btnFanCurve.Left = subBtnW + gap; _btnFanCurve.Width = contentW - subBtnW - gap; }
             }
+
+            // Display refresh rate buttons
+            if (_maxHz <= 60 || _btnMaxHz == null)
+            {
+                if (_btn60Hz != null)
+                {
+                    _btn60Hz.Left = pad;
+                    _btn60Hz.Width = contentW;
+                }
+            }
+            else
+            {
+                int dispBtnW = (contentW - gap) / 2;
+                if (_btn60Hz != null) { _btn60Hz.Left = pad; _btn60Hz.Width = dispBtnW; }
+                if (_btnMaxHz != null) { _btnMaxHz.Left = pad + dispBtnW + gap; _btnMaxHz.Width = contentW - dispBtnW - gap; }
+            }
+
+            // GPU Working Mode (MUX Switch) buttons
+            int gpuBtnW = (contentW - 2 * gap) / 3;
+            if (_btnGpuOptimus != null) { _btnGpuOptimus.Left = pad; _btnGpuOptimus.Width = gpuBtnW; }
+            if (_btnGpuDiscrete != null) { _btnGpuDiscrete.Left = pad + gpuBtnW + gap; _btnGpuDiscrete.Width = gpuBtnW; }
+            if (_btnGpuAuto != null) { _btnGpuAuto.Left = pad + (gpuBtnW + gap) * 2; _btnGpuAuto.Width = contentW - (_btnGpuAuto.Left - pad); }
+
+            // External monitor rows
+            if (_pnlExternalMonitors != null && _pnlExternalMonitors.Visible)
+            {
+                _pnlExternalMonitors.Left = pad;
+                _pnlExternalMonitors.Width = contentW;
+                int extDropW = S(110);
+                int extBtnW = S(70);
+                int extGap = S(6);
+                foreach (Control c in _pnlExternalMonitors.Controls)
+                {
+                    if (c is PredatorButton pb && pb.Text == "Apply")
+                    {
+                        pb.Left = contentW - extBtnW;
+                        pb.Width = extBtnW;
+                    }
+                    else if (c is PredatorDropDown pdd)
+                    {
+                        pdd.Left = contentW - extDropW - extBtnW - extGap;
+                        pdd.Width = extDropW;
+                    }
+                    else if (c is Label lbl)
+                    {
+                        lbl.Left = 0;
+                        lbl.Width = Math.Max(10, contentW - extDropW - extBtnW - extGap * 2);
+                    }
+                }
+            }
+
+            // Responsive Toggle Switches (aligned to pad + contentW)
+            int switchRight = pad + contentW;
+            void PlaceToggle(PredatorToggle? sw)
+            {
+                if (sw != null) sw.Left = switchRight - sw.Width;
+            }
+
+            PlaceToggle(_switchCoolBoost);
+            PlaceToggle(_switchLcdOverdrive);
+            PlaceToggle(_switchBacklight30s);
+            PlaceToggle(_switchBatteryLimit);
+            PlaceToggle(_switchStartWithWindows);
+            PlaceToggle(_switchWinKeyLock);
+            PlaceToggle(_switchJelliEnabled);
+            PlaceToggle(_switchBootSound);
+            PlaceToggle(_switchUsbCharging);
+            PlaceToggle(_switchAutoCoolBoost);
+            PlaceToggle(_switchOptimizeServices);
+            PlaceToggle(_switchOverlay);
+            PlaceToggle(_switchGameSync);
+
+            if (_lblBatteryHealth != null)
+            {
+                _lblBatteryHealth.Left = pad;
+                _lblBatteryHealth.MaximumSize = new Size(contentW, 0);
+            }
+
+            // Keyboard Shortcuts dropdowns
+            if (_cboTurboAction != null && _cboPredatorAction != null)
+            {
+                int keyDropW = (contentW - gap) / 2;
+                _cboTurboAction.Left = pad;
+                _cboTurboAction.Width = keyDropW;
+                _cboPredatorAction.Left = pad + keyDropW + gap;
+                _cboPredatorAction.Width = contentW - keyDropW - gap;
+            }
+
+            // Gaming Overlay controls
+            int overlayModeBtnW = (contentW - 3 * gap) / 4;
+            if (_btnOverlayLight != null) { _btnOverlayLight.Left = pad; _btnOverlayLight.Width = overlayModeBtnW; }
+            if (_btnOverlayDefault != null) { _btnOverlayDefault.Left = pad + overlayModeBtnW + gap; _btnOverlayDefault.Width = overlayModeBtnW; }
+            if (_btnOverlayFull != null) { _btnOverlayFull.Left = pad + (overlayModeBtnW + gap) * 2; _btnOverlayFull.Width = overlayModeBtnW; }
+            if (_btnOverlayComplete != null) { _btnOverlayComplete.Left = pad + (overlayModeBtnW + gap) * 3; _btnOverlayComplete.Width = contentW - (_btnOverlayComplete.Left - pad); }
+            if (_btnOverlaySettings != null) { _btnOverlaySettings.Left = pad; _btnOverlaySettings.Width = contentW; }
+
+            // Keyboard RGB controls
+            if (_rgbDropDown != null) { _rgbDropDown.Left = pad; _rgbDropDown.Width = contentW; }
+
+            // Keyboard 4-Zone controls
+            int zoneBtnW = (contentW - 4 * gap) / 5;
+            if (_btnAllZones != null) { _btnAllZones.Left = pad; _btnAllZones.Width = zoneBtnW; }
+            for (int z = 0; z < 4; z++)
+            {
+                if (_btnZones[z] != null)
+                {
+                    _btnZones[z].Left = pad + (zoneBtnW + gap) * (z + 1);
+                    _btnZones[z].Width = (z == 3) ? (contentW - (_btnZones[z].Left - pad)) : zoneBtnW;
+                }
+            }
+
+            int preW = (contentW - 5 * gap) / 6;
+            for (int i = 0; i < 6; i++)
+            {
+                if (_btnPresetColors[i] != null)
+                {
+                    _btnPresetColors[i].Left = pad + (preW + gap) * i;
+                    _btnPresetColors[i].Width = (i == 5) ? (contentW - (_btnPresetColors[i].Left - pad)) : preW;
+                }
+            }
+
+            if (_btnCustomColor != null) { _btnCustomColor.Left = pad; _btnCustomColor.Width = contentW; }
+
+            int midX = ClientSize.Width / 2;
+            int sliderW = _wmi.Capabilities.SupportsRgbLighting ? (contentW - gap * 4) / 2 : contentW;
+            if (_brightnessSlider != null) { _brightnessSlider.Left = pad; _brightnessSlider.Width = sliderW; }
+            if (_lblSpeedHdr != null) _lblSpeedHdr.Left = midX + S(10);
+            if (_speedSlider != null) { _speedSlider.Left = midX + S(10); _speedSlider.Width = sliderW; }
+
+            if (_btnAutoRepair != null) { _btnAutoRepair.Left = pad; _btnAutoRepair.Width = contentW; }
+
+            // Game Sync & Updates
+            if (_btnConfigureGames != null) { _btnConfigureGames.Left = pad; _btnConfigureGames.Width = contentW; }
+            if (_btnCheckUpdates != null) _btnCheckUpdates.Left = pad + contentW - _btnCheckUpdates.Width;
+
+            UpdateScrollMinSize();
+            _contentPanel.Invalidate(true);
+        }
+
+        protected override void OnResize(EventArgs e)
+        {
+            base.OnResize(e);
+            PerformCustomLayout();
 
             if (WindowState == FormWindowState.Minimized)
             {
@@ -2130,6 +2924,91 @@ namespace PredatorControlApp
             else if (WindowState == FormWindowState.Normal)
             {
                 _telemetryService?.SetPollingState(true);
+            }
+        }
+
+        protected override void OnDpiChanged(DpiChangedEventArgs e)
+        {
+            if (_contentPanel != null)
+            {
+                _contentPanel.AutoScrollPosition = new Point(0, 0);
+            }
+            base.OnDpiChanged(e);
+            _dpiScale = e.DeviceDpiNew / 96f;
+            _contentPanel?.SetDpiScale(_dpiScale);
+
+            if (!e.SuggestedRectangle.IsEmpty)
+            {
+                Bounds = e.SuggestedRectangle;
+            }
+
+            MinimumSize = new Size(S(460), S(520));
+            MaximumSize = new Size(S(700), S(1200));
+            if (Width < S(460)) Width = S(460);
+
+            FitFormToCurrentScreen();
+            PerformCustomLayout();
+            UpdateScrollMinSize();
+            _contentPanel?.Invalidate(true);
+        }
+
+        protected override void OnLocationChanged(EventArgs e)
+        {
+            base.OnLocationChanged(e);
+            float currentDpiScale = DeviceDpi / 96f;
+            if (Math.Abs(currentDpiScale - _dpiScale) > 0.01f)
+            {
+                _dpiScale = currentDpiScale;
+                _contentPanel?.SetDpiScale(_dpiScale);
+                MinimumSize = new Size(S(460), S(520));
+                MaximumSize = new Size(S(700), S(1200));
+                if (Width < S(460)) Width = S(460);
+                FitFormToCurrentScreen();
+                PerformCustomLayout();
+                UpdateScrollMinSize();
+                _contentPanel?.Invalidate(true);
+            }
+        }
+
+        protected override void OnResizeEnd(EventArgs e)
+        {
+            base.OnResizeEnd(e);
+            FitFormToCurrentScreen();
+            PerformCustomLayout();
+            UpdateScrollMinSize();
+        }
+
+        private void FitFormToCurrentScreen()
+        {
+            try
+            {
+                var screen = Screen.FromControl(this);
+                if (screen != null && Height > screen.WorkingArea.Height)
+                {
+                    Height = Math.Max(S(500), screen.WorkingArea.Height - 40);
+                    if (Top < screen.WorkingArea.Top) Top = screen.WorkingArea.Top;
+                }
+            }
+            catch { }
+        }
+
+        private void UpdateScrollMinSize()
+        {
+            if (_contentPanel == null || _contentPanel.IsDisposed) return;
+            int maxBottom = 0;
+            int dispY = _contentPanel.DisplayRectangle.Y;
+            foreach (Control c in _contentPanel.Controls)
+            {
+                if (c.Visible)
+                {
+                    int unscrolledBottom = (c.Top - dispY) + c.Height;
+                    if (unscrolledBottom > maxBottom)
+                        maxBottom = unscrolledBottom;
+                }
+            }
+            if (maxBottom > 0)
+            {
+                _contentPanel.AutoScrollMinSize = new Size(0, maxBottom + S(40));
             }
         }
 
@@ -2155,6 +3034,23 @@ namespace PredatorControlApp
 
             byte nextMode;
             PredatorButton nextBtn;
+
+            if (_wmi.Capabilities.ChassisFamily == AcerChassisFamily.Nitro)
+            {
+                if (!isPlugged)
+                {
+                    if (currentMode == 0x00) { nextMode = 0x01; nextBtn = _btnBalanced; }
+                    else { nextMode = 0x00; nextBtn = _btnQuiet; }
+                }
+                else
+                {
+                    if (currentMode == 0x00) { nextMode = 0x01; nextBtn = _btnBalanced; }
+                    else if (currentMode == 0x01) { nextMode = 0x04; nextBtn = _btnPerform; }
+                    else { nextMode = 0x00; nextBtn = _btnQuiet; }
+                }
+                ApplyPowerMode(nextMode, nextBtn, showOsd);
+                return;
+            }
 
             if (!isPlugged)
             {
@@ -2205,8 +3101,34 @@ namespace PredatorControlApp
             ApplyPowerMode(nextMode, nextBtn, showOsd);
         }
 
+
+        private static bool _warnedUntestedChassis;
+
+        private void CheckUntestedChassisWarning()
+        {
+            if (_warnedUntestedChassis) return;
+            _warnedUntestedChassis = true;
+
+            try
+            {
+                var id = WmiController.GetSystemIdentity();
+                if (!id.IsAcerGaming)
+                {
+                    Program.Report(new InvalidOperationException($"Untested chassis hardware control accessed: Manufacturer='{id.Manufacturer}', Model='{id.Model}', BIOS='{id.BiosVersion}'"), false);
+                    MessageBox.Show(
+                        this,
+                        $"Notice: This system was not identified as a supported Acer Predator or Nitro gaming laptop.\n\nModel: {id.Model}\nBIOS: {id.BiosVersion}\n\nHardware controls (power, fans, RGB) are unverified for this model. Proceed with caution.",
+                        "Predator Control · Compatibility Notice",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
+                }
+            }
+            catch { }
+        }
+
         private void ApplyPowerMode(byte mode, PredatorButton btn, bool showOsd = false)
         {
+            CheckUntestedChassisWarning();
             _wmi.SetPowerMode(mode);
             HighlightBtn(btn, ref _activePowerBtn);
             SaveState("Power", mode);
@@ -2235,10 +3157,146 @@ namespace PredatorControlApp
                 bool isPlugged = _isPluggedIn.GetValueOrDefault(SystemInformation.PowerStatus.PowerLineStatus == PowerLineStatus.Online);
                 OSDOverlayForm.ShowMode(mode, !isPlugged);
             }
+
+            // Auto-CoolBoost Sync
+            if (IsAutoCoolBoostEnabled() && _wmi.Capabilities.SupportsCoolBoost)
+            {
+                if (mode == 0x04 || mode == 0x05) // Performance or Turbo
+                {
+                    if (_switchCoolBoost != null && !_switchCoolBoost.Checked)
+                    {
+                        _switchCoolBoost.Checked = true;
+                    }
+                    else if (_switchCoolBoost == null)
+                    {
+                        _wmi.SetCoolBoost(true);
+                    }
+                }
+                else if (mode == 0x00 || mode == 0x06) // Quiet or Eco
+                {
+                    if (_switchCoolBoost != null && _switchCoolBoost.Checked)
+                    {
+                        _switchCoolBoost.Checked = false;
+                    }
+                    else if (_switchCoolBoost == null)
+                    {
+                        _wmi.SetCoolBoost(false);
+                    }
+                }
+            }
+        }
+
+        private bool IsAutoCoolBoostEnabled() => LoadState("AutoCoolBoost", 1) == 1;
+
+        private void HandleTurboOrModeKey()
+        {
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(HandleTurboOrModeKey));
+                return;
+            }
+            int action = LoadState("TurboKeyAction", 0);
+            switch (action)
+            {
+                case 1:
+                    ToggleMaxFans();
+                    break;
+                case 2:
+                    if (_wmi.Capabilities.ChassisFamily == AcerChassisFamily.Nitro)
+                        ApplyPowerMode(0x04, _btnPerform, true);
+                    else
+                        ApplyPowerMode(0x05, _btnTurbo, true);
+                    break;
+                default:
+                    CyclePowerMode(true);
+                    break;
+            }
+        }
+
+        private void HandlePredatorOrNitroKey()
+        {
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(HandlePredatorOrNitroKey));
+                return;
+            }
+            int action = LoadState("PredatorKeyAction", 0);
+            switch (action)
+            {
+                case 1:
+                    ToggleGameOverlay();
+                    break;
+                case 2:
+                    ToggleMaxFans();
+                    break;
+                default:
+                    ToggleApp();
+                    break;
+            }
+        }
+
+        private void ToggleMaxFans()
+        {
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(ToggleMaxFans));
+                return;
+            }
+            if (_activeFanBtn == _btnMaxFan)
+            {
+                ApplyFanMode(0x01, _btnAutoFan);
+            }
+            else
+            {
+                ApplyFanMode(0x02, _btnMaxFan);
+            }
+        }
+
+        private void ToggleCoolBoost()
+        {
+            if (_switchCoolBoost != null)
+            {
+                _switchCoolBoost.Checked = !_switchCoolBoost.Checked;
+            }
+            else
+            {
+                bool newState = !(_trayCoolBoost?.Checked ?? false);
+                if (_trayCoolBoost != null) _trayCoolBoost.Checked = newState;
+                SaveState("CoolBoostEnabled", newState ? 1 : 0);
+                Task.Run(() => { try { _wmi.SetCoolBoost(newState); } catch { } });
+            }
+        }
+
+        private void UpdateCustomFanLayout(bool isCustom)
+        {
+            if (_isCustomFanExpanded == isCustom || _pnlCustomFan == null) return;
+            _isCustomFanExpanded = isCustom;
+
+            int delta = isCustom ? _customFanShiftHeight : -_customFanShiftHeight;
+            int threshold = _pnlCustomFan.Top;
+
+            _contentPanel.SuspendLayout();
+            try
+            {
+                _pnlCustomFan.Visible = isCustom;
+                foreach (Control c in _contentPanel.Controls)
+                {
+                    if (c != _pnlCustomFan && c.Top >= threshold)
+                    {
+                        c.Top += delta;
+                    }
+                }
+                _contentPanel.AutoScrollMinSize = new Size(0, _contentPanel.AutoScrollMinSize.Height + delta);
+            }
+            finally
+            {
+                _contentPanel.ResumeLayout(true);
+            }
         }
 
         private void ApplyFanMode(byte mode, PredatorButton btn)
         {
+            CheckUntestedChassisWarning();
             _wmi.SetFanBehavior(mode);
             HighlightBtn(btn, ref _activeFanBtn);
             SaveState("Fan", mode);
@@ -2259,25 +3317,7 @@ namespace PredatorControlApp
             CheckTrayItem(trayFan, _trayFanAuto, _trayFanMax, _trayFanCustom);
 
             bool isCustom = mode == 0x03;
-            if (isCustom && _btnCustomFan != null)
-            {
-                int fanTop = _btnCustomFan.Bottom + S(12);
-                if (_lblCpuFanSpeedHdr != null) _lblCpuFanSpeedHdr.Top = fanTop;
-                if (_lblGpuFanSpeedHdr != null) _lblGpuFanSpeedHdr.Top = fanTop;
-                int sliderTop = fanTop + S(24);
-                if (_cpuFanSlider != null) _cpuFanSlider.Top = sliderTop;
-                if (_gpuFanSlider != null) _gpuFanSlider.Top = sliderTop;
-                int subBtnTop = sliderTop + S(28) + S(8);
-                if (_btnFixedSpeed != null) _btnFixedSpeed.Top = subBtnTop;
-                if (_btnFanCurve != null) _btnFanCurve.Top = subBtnTop;
-            }
-
-            if (_lblCpuFanSpeedHdr != null) _lblCpuFanSpeedHdr.Visible = isCustom;
-            if (_lblGpuFanSpeedHdr != null) _lblGpuFanSpeedHdr.Visible = isCustom;
-            if (_cpuFanSlider != null) _cpuFanSlider.Visible = isCustom;
-            if (_gpuFanSlider != null) _gpuFanSlider.Visible = isCustom;
-            if (_btnFixedSpeed != null) _btnFixedSpeed.Visible = isCustom;
-            if (_btnFanCurve != null) _btnFanCurve.Visible = isCustom;
+            UpdateCustomFanLayout(isCustom);
 
             if (isCustom)
             {
@@ -2422,8 +3462,82 @@ namespace PredatorControlApp
             }
         }
 
+        private void UpdateBatteryHealthUI(bool forceRefresh = false)
+        {
+            if (_lblBatteryHealth == null || _lblBatteryHealth.IsDisposed) return;
+
+            // 1. If cached info is available, apply immediately on UI thread without waiting
+            var cached = BatteryHealthMonitor.CachedInfo;
+            if (cached != null && !forceRefresh)
+            {
+                ApplyBatteryHealthToLabel(cached);
+                return;
+            }
+
+            // 2. Fetch asynchronously in background, then marshal safely to UI thread
+            Task.Run(async () =>
+            {
+                try
+                {
+                    var info = await BatteryHealthMonitor.GetBatteryHealthAsync(forceRefresh);
+                    SafeInvoke(() =>
+                    {
+                        if (info != null)
+                        {
+                            ApplyBatteryHealthToLabel(info);
+                        }
+                        else if (_lblBatteryHealth != null && !_lblBatteryHealth.IsDisposed)
+                        {
+                            _lblBatteryHealth.Text = "Battery diagnostics: AC power only / report unavailable";
+                            _lblBatteryHealth.ForeColor = Color.FromArgb(120, 120, 135);
+                        }
+                    });
+                }
+                catch (Exception ex)
+                {
+                    Program.Report(ex, false);
+                }
+            });
+        }
+
+        private void ApplyBatteryHealthToLabel(BatteryHealthInfo info)
+        {
+            if (_lblBatteryHealth == null || _lblBatteryHealth.IsDisposed) return;
+            string cyclesText = info.CycleCount > 0 ? $" • {info.CycleCount} Cycles" : "";
+            double healthPct = Math.Max(0.0, Math.Round(100.0 - info.WearLevelPercent, 1));
+            _lblBatteryHealth.Text = $"Health: {healthPct:0.#}% (Wear: {info.WearLevelPercent:0.#}%) • {info.FullChargeCapacityMWh:N0} / {info.DesignCapacityMWh:N0} mWh{cyclesText}";
+            _lblBatteryHealth.ForeColor = healthPct >= 80 ? Color.FromArgb(0, 204, 150) : (healthPct >= 60 ? Color.FromArgb(255, 189, 46) : Color.FromArgb(255, 85, 85));
+        }
+
+        private void SafeInvoke(Action action)
+        {
+            if (IsDisposed) return;
+            if (InvokeRequired)
+            {
+                if (IsHandleCreated)
+                {
+                    try { BeginInvoke(action); } catch { }
+                }
+                else
+                {
+                    EventHandler? handler = null;
+                    handler = (s, e) =>
+                    {
+                        HandleCreated -= handler;
+                        try { BeginInvoke(action); } catch { }
+                    };
+                    HandleCreated += handler;
+                }
+            }
+            else
+            {
+                action();
+            }
+        }
+
         private void ApplyRgbModeFromDropdown(int mode)
         {
+            CheckUntestedChassisWarning();
             UpdateRgbControlsState(mode);
 
             byte bright = (byte)_brightnessSlider.Value;
@@ -2577,7 +3691,7 @@ namespace PredatorControlApp
             }
 
             if (profile.RefreshRate > 0)
-                ApplyDisplayMode(profile.RefreshRate, profile.RefreshRate <= 60 ? _btn60Hz : _btnMaxHz);
+                ApplyDisplayMode(profile.RefreshRate, (profile.RefreshRate <= 60 || _btnMaxHz == null) ? _btn60Hz : _btnMaxHz);
 
             if (profile.BatteryLimit >= 0)
                 ApplyBatteryLimit(profile.BatteryLimit == 1);
@@ -2664,7 +3778,7 @@ namespace PredatorControlApp
             }
 
             if (snap.RefreshRate > 0)
-                ApplyDisplayMode(snap.RefreshRate, snap.RefreshRate <= 60 ? _btn60Hz : _btnMaxHz);
+                ApplyDisplayMode(snap.RefreshRate, (snap.RefreshRate <= 60 || _btnMaxHz == null) ? _btn60Hz : _btnMaxHz);
 
             ApplyBatteryLimit(snap.BatteryLimit == 1);
 
@@ -2719,7 +3833,8 @@ namespace PredatorControlApp
                 catch { }
 
                 // Mirror hardware states to HKLM so boot-time task can enforce them before user logon
-                if (name is "BatteryLimit" or "Power" or "Fan" or "RGB_Mode" or "RGB_R" or "RGB_G" or "RGB_B" or "Brightness" or "RGB_Speed"
+                if (name is "BatteryLimit" or "Power" or "Fan" or "CoolBoostEnabled" or "RGB_Mode" or "RGB_R" or "RGB_G" or "RGB_B" or "Brightness" or "RGB_Speed"
+                    or "BootSound" or "UsbCharging" or "AutoCoolBoost" or "TurboKeyAction" or "PredatorKeyAction" or "FanSpeedAux"
                     || name.StartsWith("ZoneColor_"))
                 {
                     try
@@ -2745,12 +3860,30 @@ namespace PredatorControlApp
             return Math.Clamp(v, min, max);
         }
 
+        private static int LoadState(string name, int fallback = 0)
+        {
+            try
+            {
+                using var key = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\PredatorControl");
+                if (key != null)
+                {
+                    object? raw = key.GetValue(name);
+                    if (raw is int i) return i;
+                    if (raw != null && int.TryParse(raw.ToString(), out int p)) return p;
+                }
+            }
+            catch { }
+            return fallback;
+        }
+
         private void LoadMemory()
         {
             try
             {
                 using var key = Registry.CurrentUser.CreateSubKey(@"SOFTWARE\PredatorControl");
                 int savedPower = GetInt(key, "Power", 0x01, 0x00, 0xFF);
+                if (_wmi.Capabilities.ChassisFamily == AcerChassisFamily.Nitro && (savedPower == 0x05 || savedPower == 0x06))
+                    savedPower = 0x01;
                 int savedFan = GetInt(key, "Fan", 0x01, 0x00, 0xFF);
                 int savedRgbMode = GetInt(key, "RGB_Mode", 0, 0, 8);
                 int savedBrightness = GetInt(key, "Brightness", 100, 0, 100);
@@ -2781,6 +3914,7 @@ namespace PredatorControlApp
 
                 int savedFanSpeedCpu = GetInt(key, "FanSpeedCpu", 50, 10, 100);
                 int savedFanSpeedGpu = GetInt(key, "FanSpeedGpu", 50, 10, 100);
+                int savedFanSpeedAux = GetInt(key, "FanSpeedAux", 50, 10, 100);
 
                 var (fanMode, fanBtn) = savedFan switch
                 {
@@ -2799,6 +3933,8 @@ namespace PredatorControlApp
                     _fanCurveEnabled = true;
 
                 ApplyFanMode(fanMode, fanBtn);
+                if (_wmi.Capabilities.SupportsCoolBoost && GetInt(key, "CoolBoostEnabled", 0, 0, 1) == 1)
+                    Task.Run(() => { try { _wmi.SetCoolBoost(true); } catch { } });
 
                 if (fanMode == 0x03)
                 {
@@ -2814,6 +3950,16 @@ namespace PredatorControlApp
                         _gpuFanSlider.Value = Math.Clamp(gpuSpeed, 10, 100);
                         _lblCpuFanSpeedHdr.Text = $"CPU FAN: {cpuSpeed}%";
                         _lblGpuFanSpeedHdr.Text = $"GPU FAN: {gpuSpeed}%";
+
+                        if (_wmi.HasAuxFan && _auxFanSlider != null)
+                        {
+                            int maxTemp = Math.Max(_cpuTemp ?? 45, _gpuTemp ?? 45);
+                            int auxSpeed = InterpolateCurve(_gpuCurvePoints, maxTemp);
+                            _wmi.SetAuxFanSpeed((byte)auxSpeed);
+                            _lastCurveAuxSpeed = auxSpeed;
+                            _auxFanSlider.Value = Math.Clamp(auxSpeed, 10, 100);
+                            if (_lblAuxFanSpeedHdr != null) _lblAuxFanSpeedHdr.Text = $"AUX FAN: {auxSpeed}%";
+                        }
                     }
                     else
                     {
@@ -2822,6 +3968,32 @@ namespace PredatorControlApp
                         _lblCpuFanSpeedHdr.Text = $"CPU FAN: {savedFanSpeedCpu}%";
                         _lblGpuFanSpeedHdr.Text = $"GPU FAN: {savedFanSpeedGpu}%";
                         _wmi.SetFanSpeed((byte)savedFanSpeedCpu, (byte)savedFanSpeedGpu);
+
+                        if (_wmi.HasAuxFan && _auxFanSlider != null)
+                        {
+                            _auxFanSlider.Value = savedFanSpeedAux;
+                            if (_lblAuxFanSpeedHdr != null) _lblAuxFanSpeedHdr.Text = $"AUX FAN: {savedFanSpeedAux}%";
+                            _wmi.SetAuxFanSpeed((byte)savedFanSpeedAux);
+                        }
+                    }
+                }
+
+                if (_switchBootSound != null && _wmi.Supports(AcerFeature.BootSound))
+                {
+                    int savedBoot = LoadState("BootSound", -1);
+                    if (savedBoot >= 0)
+                    {
+                        _switchBootSound.Checked = savedBoot == 1;
+                        Task.Run(() => { try { _wmi.SetBootSound(savedBoot == 1); } catch { } });
+                    }
+                }
+                if (_switchUsbCharging != null && _wmi.Supports(AcerFeature.UsbCharging))
+                {
+                    int savedUsb = LoadState("UsbCharging", -1);
+                    if (savedUsb >= 0)
+                    {
+                        _switchUsbCharging.Checked = savedUsb == 1;
+                        Task.Run(() => { try { _wmi.SetUsbCharging(savedUsb == 1); } catch { } });
                     }
                 }
 
@@ -2846,6 +4018,18 @@ namespace PredatorControlApp
 
                 int clampedMode = Math.Clamp(savedRgbMode, 0, 8);
                 ApplyRgbModeFromDropdown(clampedMode);
+
+                // Restore active RGB profile if in Static mode
+                if (clampedMode == 0)
+                {
+                    string activeProfName = RgbProfileManager.GetActiveProfile();
+                    var allProfiles = RgbProfileManager.LoadProfiles();
+                    var activeProf = allProfiles.FirstOrDefault(p => string.Equals(p.Name, activeProfName, StringComparison.OrdinalIgnoreCase));
+                    if (activeProf != null)
+                    {
+                        ApplyRgbProfile(activeProf);
+                    }
+                }
 
                 var activeColor = Color.FromArgb(savedR, savedG, savedB);
                 if (_btnCustomColor != null)
@@ -2962,7 +4146,19 @@ namespace PredatorControlApp
                     try
                     {
                         int cap = await _wmi.GetGpuModeCapabilityAsync();
-                        _gpuCapability = cap;
+                        if (cap > 0)
+                        {
+                            _gpuCapability = cap;
+                        }
+                        else if (_wmi.Capabilities.SupportsGpuMux)
+                        {
+                            _gpuCapability = 7;
+                        }
+                        else
+                        {
+                            _gpuCapability = 0;
+                        }
+
                         int? liveMode = await _wmi.GetGpuModeAsync();
 
                         void UpdateGpuUi()
@@ -2973,6 +4169,11 @@ namespace PredatorControlApp
                             {
                                 _btnGpuAuto.Visible = false;
                                 if (_trayGpuAuto != null) _trayGpuAuto.Visible = false;
+                            }
+                            else if (_btnGpuAuto != null)
+                            {
+                                _btnGpuAuto.Visible = true;
+                                if (_trayGpuAuto != null) _trayGpuAuto.Visible = true;
                             }
 
                             if ((_gpuCapability & 2) == 0)
@@ -2989,6 +4190,22 @@ namespace PredatorControlApp
                                 if (_lblGpuRestartNotice != null)
                                 {
                                     _lblGpuRestartNotice.Text = "Physical MUX switch not present on this model (Optimus Only)";
+                                }
+                            }
+                            else
+                            {
+                                if (_btnGpuDiscrete != null)
+                                {
+                                    _btnGpuDiscrete.Enabled = true;
+                                    _btnGpuDiscrete.Text = "Discrete GPU";
+                                }
+                                if (_trayGpuDiscrete != null)
+                                {
+                                    _trayGpuDiscrete.Enabled = true;
+                                }
+                                if (_lblGpuRestartNotice != null && _lblGpuRestartNotice.Text.Contains("Physical MUX"))
+                                {
+                                    _lblGpuRestartNotice.Text = "Requires system restart to take effect in firmware";
                                 }
                             }
 
@@ -3127,6 +4344,10 @@ namespace PredatorControlApp
             return ticks >= 2 ? pluggedIn : current;
         }
 
+        // ============================================================================================
+        // SECTION 4: 1Hz ZERO-ALLOCATION TELEMETRY LOOP & SENSOR GAUGE UPDATES
+        // ============================================================================================
+
         private void OnTelemetryReceived(TelemetrySnapshot snap)
         {
             _jelliTelemetry = snap;
@@ -3143,23 +4364,49 @@ namespace PredatorControlApp
             _gpuTemp = snap.GpuTemp;
             _cpuFanRpm = snap.CpuFanRpm;
             _gpuFanRpm = snap.GpuFanRpm;
+            _auxFanRpm = snap.AuxFanRpm;
 
-            // Audit: check .HasValue and never format as "CPU: °C"
-            _lblCpuTemp.Text = _cpuTemp.HasValue ? $"{_cpuTemp.Value}°C" : "--°C";
-            _lblGpuTemp.Text = _gpuTemp.HasValue ? $"{_gpuTemp.Value}°C" : "--°C";
-            _lblCpuTemp.ForeColor = TempColor(_cpuTemp ?? 0);
-            _lblGpuTemp.ForeColor = TempColor(_gpuTemp ?? 0);
+            // Zero-allocation cached debounced telemetry updates (no GC allocations on idle)
+            if (_prevCpuTemp != _cpuTemp)
+            {
+                _lblCpuTemp.Text = FormatTemp(_cpuTemp);
+                _lblCpuTemp.ForeColor = TempColor(_cpuTemp ?? 0);
+                _prevCpuTemp = _cpuTemp;
+            }
+            if (_prevGpuTemp != _gpuTemp)
+            {
+                _lblGpuTemp.Text = FormatTemp(_gpuTemp);
+                _lblGpuTemp.ForeColor = TempColor(_gpuTemp ?? 0);
+                _prevGpuTemp = _gpuTemp;
+            }
 
-            _lblCpuRpm.Text = _cpuFanRpm.HasValue ? $"{_cpuFanRpm.Value} RPM" : "-- RPM";
-            _lblGpuRpm.Text = _gpuFanRpm.HasValue ? $"{_gpuFanRpm.Value} RPM" : "-- RPM";
+            if (_prevCpuFanRpm != _cpuFanRpm)
+            {
+                _lblCpuRpm.Text = _cpuFanRpm.HasValue ? $"{_cpuFanRpm.Value} RPM" : "-- RPM";
+                _prevCpuFanRpm = _cpuFanRpm;
+            }
+            if (_prevGpuFanRpm != _gpuFanRpm)
+            {
+                _lblGpuRpm.Text = _gpuFanRpm.HasValue ? $"{_gpuFanRpm.Value} RPM" : "-- RPM";
+                _prevGpuFanRpm = _gpuFanRpm;
+            }
+            if (_lblAuxRpm != null && _prevAuxFanRpm != _auxFanRpm)
+            {
+                _lblAuxRpm.Text = _auxFanRpm.HasValue ? $"{_auxFanRpm.Value} RPM" : "-- RPM";
+                _prevAuxFanRpm = _auxFanRpm;
+            }
 
-            _trayIcon.Text = $"Predator Control\nCPU: {(_cpuTemp.HasValue ? $"{_cpuTemp.Value}°C" : "--°C")}  GPU: {(_gpuTemp.HasValue ? $"{_gpuTemp.Value}°C" : "--°C")}";
+            _trayIcon.Text = $"Predator Control\nCPU: {FormatTemp(_cpuTemp)}  GPU: {FormatTemp(_gpuTemp)}";
 
             if (_fanCurveForm != null && !_fanCurveForm.IsDisposed)
                 _fanCurveForm.UpdateTemps(_cpuTemp ?? 0, _gpuTemp ?? 0);
 
             if (_overlayForm != null && !_overlayForm.IsDisposed && _overlayForm.Visible)
                 _overlayForm.UpdateSnapshot(snap);
+
+            _telemetryTickCount++;
+            if (_telemetryTickCount % 30 == 0)
+                UpdateBatteryHealthUI(forceRefresh: false);
 
             ApplyFanCurve();
         }
@@ -3170,8 +4417,43 @@ namespace PredatorControlApp
             if (GetCurrentFanByte() != 0x03) return;
             if ((_cpuTemp ?? 0) <= 0 && (_gpuTemp ?? 0) <= 0) return;
 
-            int cpuSpeed = InterpolateCurve(_cpuCurvePoints, _cpuTemp ?? 0);
-            int gpuSpeed = InterpolateCurve(_gpuCurvePoints, _gpuTemp ?? 0);
+            // Rolling 3-sample average for temperature inputs to avoid micro-spikes
+            if (_cpuTemp.HasValue && _cpuTemp.Value > 0)
+            {
+                _cpuTempHistory.Enqueue(_cpuTemp.Value);
+                if (_cpuTempHistory.Count > 3) _cpuTempHistory.Dequeue();
+            }
+            if (_gpuTemp.HasValue && _gpuTemp.Value > 0)
+            {
+                _gpuTempHistory.Enqueue(_gpuTemp.Value);
+                if (_gpuTempHistory.Count > 3) _gpuTempHistory.Dequeue();
+            }
+
+            int avgCpuTemp = _cpuTempHistory.Count > 0 ? (int)Math.Round(_cpuTempHistory.Average()) : (_cpuTemp ?? 0);
+            int avgGpuTemp = _gpuTempHistory.Count > 0 ? (int)Math.Round(_gpuTempHistory.Average()) : (_gpuTemp ?? 0);
+
+            int targetCpuSpeed = InterpolateCurve(_cpuCurvePoints, avgCpuTemp);
+            int targetGpuSpeed = InterpolateCurve(_gpuCurvePoints, avgGpuTemp);
+
+            long now = Environment.TickCount64;
+
+            // CPU Fan Hysteresis: instant ramp-up when hot, 3s hold time before stepping down
+            int cpuSpeed = targetCpuSpeed;
+            if (targetCpuSpeed < _lastCurveCpuSpeed)
+            {
+                if (now - _lastCpuDownstepTick < 3000)
+                {
+                    cpuSpeed = _lastCurveCpuSpeed; // Hold current speed
+                }
+                else
+                {
+                    _lastCpuDownstepTick = now;
+                }
+            }
+            else
+            {
+                _lastCpuDownstepTick = now;
+            }
 
             if (cpuSpeed != _lastCurveCpuSpeed)
             {
@@ -3182,6 +4464,24 @@ namespace PredatorControlApp
                 _lblCpuFanSpeedHdr.Text = $"CPU FAN: {cpuSpeed}%";
             }
 
+            // GPU Fan Hysteresis: instant ramp-up when hot, 3s hold time before stepping down
+            int gpuSpeed = targetGpuSpeed;
+            if (targetGpuSpeed < _lastCurveGpuSpeed)
+            {
+                if (now - _lastGpuDownstepTick < 3000)
+                {
+                    gpuSpeed = _lastCurveGpuSpeed; // Hold current speed
+                }
+                else
+                {
+                    _lastGpuDownstepTick = now;
+                }
+            }
+            else
+            {
+                _lastGpuDownstepTick = now;
+            }
+
             if (gpuSpeed != _lastCurveGpuSpeed)
             {
                 _wmi.SetGpuFanSpeed((byte)gpuSpeed);
@@ -3189,6 +4489,43 @@ namespace PredatorControlApp
 
                 _gpuFanSlider.Value = Math.Clamp(gpuSpeed, 10, 100);
                 _lblGpuFanSpeedHdr.Text = $"GPU FAN: {gpuSpeed}%";
+            }
+
+            // 3rd Aux Fan: follows the maximum thermal load between CPU and GPU
+            if (_wmi.HasAuxFan)
+            {
+                int maxTemp = Math.Max(avgCpuTemp, avgGpuTemp);
+                int targetAuxSpeed = InterpolateCurve(_gpuCurvePoints, maxTemp);
+                int auxSpeed = targetAuxSpeed;
+
+                if (targetAuxSpeed < _lastCurveAuxSpeed)
+                {
+                    if (now - _lastAuxDownstepTick < 3000)
+                    {
+                        auxSpeed = _lastCurveAuxSpeed;
+                    }
+                    else
+                    {
+                        _lastAuxDownstepTick = now;
+                    }
+                }
+                else
+                {
+                    _lastAuxDownstepTick = now;
+                }
+
+                if (auxSpeed != _lastCurveAuxSpeed)
+                {
+                    _wmi.SetAuxFanSpeed((byte)auxSpeed);
+                    _lastCurveAuxSpeed = auxSpeed;
+
+                    if (_auxFanSlider != null)
+                    {
+                        _auxFanSlider.Value = Math.Clamp(auxSpeed, 10, 100);
+                        if (_lblAuxFanSpeedHdr != null)
+                            _lblAuxFanSpeedHdr.Text = $"AUX FAN: {auxSpeed}%";
+                    }
+                }
             }
         }
 
@@ -3213,6 +4550,38 @@ namespace PredatorControlApp
 
         private void ApplyPowerRules(bool pluggedIn)
         {
+            if (_wmi.Capabilities.ChassisFamily == AcerChassisFamily.Nitro)
+            {
+                if (pluggedIn)
+                {
+                    _btnPerform.Enabled = true;
+                    _trayPowerPerf.Enabled = true;
+
+                    int acIdx = _cboAcProfile.SelectedIndex;
+                    if (acIdx > 0 && acIdx < NitroAcProfileValues.Length)
+                    {
+                        byte mode = NitroAcProfileValues[acIdx];
+                        ApplyPowerMode(mode, PowerByteToBtn(mode));
+                    }
+                }
+                else
+                {
+                    _btnPerform.Enabled = false;
+                    _trayPowerPerf.Enabled = false;
+
+                    int batIdx = _cboBatteryProfile.SelectedIndex;
+                    if (batIdx > 0 && batIdx < NitroBatteryProfileValues.Length)
+                    {
+                        byte mode = NitroBatteryProfileValues[batIdx];
+                        ApplyPowerMode(mode, PowerByteToBtn(mode));
+                    }
+                    else if (_activePowerBtn == _btnPerform)
+                    {
+                        ApplyPowerMode(0x01, _btnBalanced);
+                    }
+                }
+                return;
+            }
             if (pluggedIn)
             {
                 _btnPerform.Enabled = true;
@@ -3311,6 +4680,7 @@ namespace PredatorControlApp
                 try { _gameSync?.Dispose(); } catch { }
                 try { _jelli?.Dispose(); } catch { }
                 try { _overlayForm?.Dispose(); } catch { }
+                try { _wmi?.SetFanBehavior(0x01); } catch { }
                 try { _wmi?.Dispose(); } catch { }
                 try { _ipc?.Dispose(); } catch { }
                 base.OnFormClosing(e);
@@ -3407,11 +4777,15 @@ namespace PredatorControlApp
 
         internal void SaveCurrentRgbProfile()
         {
-            string currentName = _cboRgbProfiles?.SelectedText ?? "";
+            string currentName = "";
+            if (_cboRgbProfiles != null && _cboRgbProfiles.SelectedIndex >= 0 && _cboRgbProfiles.SelectedIndex < _cboRgbProfiles.Items.Count)
+            {
+                currentName = _cboRgbProfiles.Items[_cboRgbProfiles.SelectedIndex]?.ToString() ?? "";
+            }
             if (string.IsNullOrWhiteSpace(currentName)) currentName = RgbProfileManager.GetActiveProfile();
             if (string.IsNullOrWhiteSpace(currentName)) currentName = "Custom Profile";
-            if (string.IsNullOrWhiteSpace(currentName)) currentName = "Custom Profile";
             RgbProfileManager.AddOrUpdateProfile(currentName, _currentZoneColors, _brightnessSlider?.Value ?? 100);
+            RgbProfileManager.SetActiveProfile(currentName);
             LoadRgbProfilesIntoUi();
 
             if (_btnSaveRgbProfile != null)
@@ -3584,21 +4958,6 @@ namespace PredatorControlApp
         private static string BuildStartupTaskXml()
         {
             string exePath = Environment.ProcessPath ?? Application.ExecutablePath;
-            if (exePath.Contains("PredatorSense", StringComparison.OrdinalIgnoreCase) ||
-                exePath.Contains("Prerequisites", StringComparison.OrdinalIgnoreCase) ||
-                exePath.Contains("NitroSense", StringComparison.OrdinalIgnoreCase))
-            {
-                string[] candidates =
-                {
-                    @"C:\Users\youse\Downloads\PredatorControl\PredatorControl-standalone.exe",
-                    @"C:\Users\youse\Downloads\PredatorControl-standalone.exe",
-                    @"C:\Users\youse\Downloads\PredatorControl-Unpacked\PredatorControlApp.exe"
-                };
-                foreach (var c in candidates)
-                {
-                    if (File.Exists(c)) { exePath = c; break; }
-                }
-            }
             string workingDir = Path.GetDirectoryName(exePath) ?? "";
             string exe = System.Security.SecurityElement.Escape(exePath);
             string dir = System.Security.SecurityElement.Escape(workingDir);
@@ -3641,7 +5000,7 @@ namespace PredatorControlApp
     <RunOnlyIfIdle>false</RunOnlyIfIdle>
     <WakeToRun>false</WakeToRun>
     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
-    <Priority>2</Priority>
+    <Priority>5</Priority>
   </Settings>
   <Actions Context=""Author"">
     <Exec>
@@ -3656,21 +5015,6 @@ namespace PredatorControlApp
         private static string BuildBootTaskXml()
         {
             string exePath = Environment.ProcessPath ?? Application.ExecutablePath;
-            if (exePath.Contains("PredatorSense", StringComparison.OrdinalIgnoreCase) ||
-                exePath.Contains("Prerequisites", StringComparison.OrdinalIgnoreCase) ||
-                exePath.Contains("NitroSense", StringComparison.OrdinalIgnoreCase))
-            {
-                string[] candidates =
-                {
-                    @"C:\Users\youse\Downloads\PredatorControl\PredatorControl-standalone.exe",
-                    @"C:\Users\youse\Downloads\PredatorControl-standalone.exe",
-                    @"C:\Users\youse\Downloads\PredatorControl-Unpacked\PredatorControlApp.exe"
-                };
-                foreach (var c in candidates)
-                {
-                    if (File.Exists(c)) { exePath = c; break; }
-                }
-            }
             string workingDir = Path.GetDirectoryName(exePath) ?? "";
             string exe = System.Security.SecurityElement.Escape(exePath);
             string dir = System.Security.SecurityElement.Escape(workingDir);
@@ -3703,7 +5047,7 @@ namespace PredatorControlApp
     <Enabled>true</Enabled>
     <Hidden>true</Hidden>
     <ExecutionTimeLimit>PT30S</ExecutionTimeLimit>
-    <Priority>1</Priority>
+    <Priority>6</Priority>
   </Settings>
   <Actions Context=""Author"">
     <Exec>
@@ -3799,7 +5143,7 @@ namespace PredatorControlApp
         private async Task PromptUpdateAsync(UpdateInfo info)
         {
             bool accepted = Updater.ShowNotes(this, "Update available",
-                $"Version {info.Version.ToString(3)} is available — you have v{Updater.CurrentText}",
+                $"Version {info.Version.ToString(3)} is available \u2014 you have v{Updater.CurrentText}",
                 info.Notes, confirm: true);
 
             if (!accepted) return;
@@ -3807,7 +5151,7 @@ namespace PredatorControlApp
             try
             {
                 _btnCheckUpdates.Enabled = false;
-                _btnCheckUpdates.Text = "Downloading update…";
+                _btnCheckUpdates.Text = "Downloading update\u2026";
                 await Updater.ApplyAsync(info);
 
                 _isClosing = true;
@@ -3816,7 +5160,7 @@ namespace PredatorControlApp
             catch (Exception ex)
             {
                 _btnCheckUpdates.Enabled = true;
-                _btnCheckUpdates.Text = $"⬇  Check for Updates  (v{Updater.CurrentText})";
+                _btnCheckUpdates.Text = $"\u2B07  Check for Updates  (v{Updater.CurrentText})";
                 MessageBox.Show(this, $"Update failed:\n{ex.Message}",
                     "Predator Control", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }

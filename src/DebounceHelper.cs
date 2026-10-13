@@ -1,11 +1,15 @@
-using System.Collections.Concurrent;
-
 namespace PredatorControlApp
 {
     public static class DebounceHelper
     {
-        private static readonly ConcurrentDictionary<string, CancellationTokenSource> _timers = new();
-        private static readonly ConcurrentDictionary<string, Action> _pendingActions = new();
+        private sealed class Entry
+        {
+            public readonly CancellationTokenSource Cts = new();
+            public readonly Action Action;
+            public Entry(Action action) { Action = action; }
+        }
+
+        private static readonly Dictionary<string, Entry> _entries = new();
         private static readonly object _syncLock = new();
 
         /// <summary>
@@ -14,33 +18,41 @@ namespace PredatorControlApp
         /// </summary>
         public static void Debounce(string key, Action action, int delayMs = 300)
         {
+            var entry = new Entry(action);
+            // Capture the token before publishing the entry: a later Debounce() call may dispose the CTS.
+            var token = entry.Cts.Token;
+            Entry? previous;
+
             lock (_syncLock)
             {
-                if (_timers.TryRemove(key, out var existingCts))
+                _entries.TryGetValue(key, out previous);
+                _entries[key] = entry;
+            }
+
+            if (previous != null)
+                CancelAndDispose(previous);
+
+            _ = Task.Delay(delayMs, token).ContinueWith(t =>
+            {
+                if (!t.IsCompletedSuccessfully) return;
+
+                Action? toRun = null;
+                lock (_syncLock)
                 {
-                    try { existingCts.Cancel(); existingCts.Dispose(); } catch { }
+                    // Only fire if this exact request is still the current one for the key.
+                    if (_entries.TryGetValue(key, out var current) && ReferenceEquals(current, entry))
+                    {
+                        _entries.Remove(key);
+                        toRun = entry.Action;
+                    }
                 }
 
-                _pendingActions[key] = action;
+                if (toRun == null) return; // superseded or flushed; whoever replaced us owns disposal
 
-                var cts = new CancellationTokenSource();
-                _timers[key] = cts;
-
-                _ = Task.Delay(delayMs, cts.Token).ContinueWith(t =>
-                {
-                    if (t.IsCompletedSuccessfully && !cts.Token.IsCancellationRequested)
-                    {
-                        lock (_syncLock)
-                        {
-                            _timers.TryRemove(key, out _);
-                            if (_pendingActions.TryRemove(key, out var act))
-                            {
-                                try { act(); } catch { }
-                            }
-                        }
-                    }
-                }, TaskScheduler.Default);
-            }
+                try { entry.Cts.Dispose(); } catch { }
+                // Run outside the lock so slow actions don't block other debounce calls.
+                try { toRun(); } catch { }
+            }, TaskScheduler.Default);
         }
 
         /// <summary>
@@ -48,20 +60,24 @@ namespace PredatorControlApp
         /// </summary>
         public static void FlushAll()
         {
+            List<Entry> pending;
             lock (_syncLock)
             {
-                foreach (var kvp in _timers)
-                {
-                    try { kvp.Value.Cancel(); kvp.Value.Dispose(); } catch { }
-                }
-                _timers.Clear();
-
-                foreach (var kvp in _pendingActions)
-                {
-                    try { kvp.Value(); } catch { }
-                }
-                _pendingActions.Clear();
+                pending = new List<Entry>(_entries.Values);
+                _entries.Clear();
             }
+
+            foreach (var e in pending)
+            {
+                CancelAndDispose(e);
+                try { e.Action(); } catch { }
+            }
+        }
+
+        private static void CancelAndDispose(Entry e)
+        {
+            try { e.Cts.Cancel(); } catch { }
+            try { e.Cts.Dispose(); } catch { }
         }
     }
 }

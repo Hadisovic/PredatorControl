@@ -4,7 +4,7 @@
 
 # 🪼 Predator Control
 
-[![Version](https://img.shields.io/badge/version-1.3.4-00E5FF?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Hadisovic/PredatorControl/releases)
+[![Version](https://img.shields.io/badge/version-1.3.5-00E5FF?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Hadisovic/PredatorControl/releases)
 [![Jelli UI](https://img.shields.io/badge/Jelli%20UI-Live%20%F0%9F%AA%BC-FF69B4?style=for-the-badge&logo=sparkles&logoColor=white)](#-jelli-ui)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-00B4CC?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/Hadisovic/PredatorControl)
 [![Framework](https://img.shields.io/badge/.NET-10.0%20Windows-512BD4?style=for-the-badge&logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/)
@@ -38,6 +38,15 @@ Direct ACPI WMI hardware control, **~18–25 MB RAM** (Classic UI) / **~45–65 
     </tr>
   </table>
 </div>
+
+---
+
+> [!NOTE]
+> ### 🚀 What's New in v1.3.5: GPU MUX Switch Restoration & Clean Switcher
+> - **GPU MUX Switch Fix**: Fully restored physical GPU MUX switch controls (`Optimus / Hybrid`, `Discrete GPU Only`, and `Auto / Advanced Optimus`) for Acer Predator laptops (including Helios 16 and Helios Neo 16 / PHN16-71).
+> - **Telemetry-Independent Probing**: Fixed capability detection fallback so disabling Acer background bloatware services no longer causes false "Physical MUX switch not present" warnings.
+> - **Full UI Synchronization**: MUX controls are fully synced across the Classic WinForms dashboard, system tray menu, and modern Jelli creature companion UI.
+> - **Clean Version Switcher**: Included `clean_switch_version.bat` and `tools/Switch-PredatorVersion.ps1` to easily terminate background instances, clean state, and switch between versions cleanly.
 
 ---
 

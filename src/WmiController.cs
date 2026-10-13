@@ -521,6 +521,10 @@ namespace PredatorControlApp
             if (chassis == AcerChassisFamily.Predator)
                 f |= AcerFeature.BootSound;
 
+            // GPU MUX: Predator chassis; exact modes are refined at runtime from the Acer Agent capability bitmask
+            if (chassis == AcerChassisFamily.Predator)
+                f |= AcerFeature.GpuMux;
+
             // USB Charging when powered off: supported on Predator and Nitro models
             f |= AcerFeature.UsbCharging;
 
@@ -1418,7 +1422,22 @@ namespace PredatorControlApp
         /// </summary>
         public async Task<int> GetGpuModeCapabilityAsync()
         {
-            return await AcerAgentClient.GetGpuModeCapabilityAsync();
+            try
+            {
+                int cap = await AcerAgentClient.GetGpuModeCapabilityAsync();
+                if (cap > 0) return cap;
+            }
+            catch { }
+
+            // Hardware capability probe fallback:
+            // If the chassis is a Predator laptop with physical MUX (PH16, PHN16, PT, etc.):
+            if (Capabilities.SupportsGpuMux)
+            {
+                // Physical MUX supports Optimus (1), Discrete (2), and Auto (4) -> bitmask 7
+                return 7;
+            }
+
+            return 0;
         }
 
         /// <summary>

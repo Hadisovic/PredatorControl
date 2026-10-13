@@ -227,7 +227,22 @@ namespace PredatorControlApp
                 }
             }
             catch { }
-            return 0; // Default to 0 (No hardware MUX capability) when service is unavailable or unsupported
+
+            // Secondary check: Query current GPU_MODE from service.
+            // On models like PHN16-71, Acer OEM service answers packet 20 with {"data": {"mode": 1}, "result": "0"}.
+            // If the service can query or report GPU_MODE, MUX switching is functional.
+            try
+            {
+                int? currentMode = await GetGpuModeAsync();
+                if (currentMode.HasValue)
+                {
+                    // Modes: 0=Optimus (1), 1=Discrete (2), 2=Auto (4) -> 1 | 2 | 4 = 7
+                    return 7;
+                }
+            }
+            catch { }
+
+            return 0; // Default to 0 when service is unavailable or unsupported
         }
 
         /// <summary>

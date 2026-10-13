@@ -4146,7 +4146,19 @@ namespace PredatorControlApp
                     try
                     {
                         int cap = await _wmi.GetGpuModeCapabilityAsync();
-                        _gpuCapability = cap;
+                        if (cap > 0)
+                        {
+                            _gpuCapability = cap;
+                        }
+                        else if (_wmi.Capabilities.SupportsGpuMux)
+                        {
+                            _gpuCapability = 7;
+                        }
+                        else
+                        {
+                            _gpuCapability = 0;
+                        }
+
                         int? liveMode = await _wmi.GetGpuModeAsync();
 
                         void UpdateGpuUi()
@@ -4157,6 +4169,11 @@ namespace PredatorControlApp
                             {
                                 _btnGpuAuto.Visible = false;
                                 if (_trayGpuAuto != null) _trayGpuAuto.Visible = false;
+                            }
+                            else if (_btnGpuAuto != null)
+                            {
+                                _btnGpuAuto.Visible = true;
+                                if (_trayGpuAuto != null) _trayGpuAuto.Visible = true;
                             }
 
                             if ((_gpuCapability & 2) == 0)
@@ -4173,6 +4190,22 @@ namespace PredatorControlApp
                                 if (_lblGpuRestartNotice != null)
                                 {
                                     _lblGpuRestartNotice.Text = "Physical MUX switch not present on this model (Optimus Only)";
+                                }
+                            }
+                            else
+                            {
+                                if (_btnGpuDiscrete != null)
+                                {
+                                    _btnGpuDiscrete.Enabled = true;
+                                    _btnGpuDiscrete.Text = "Discrete GPU";
+                                }
+                                if (_trayGpuDiscrete != null)
+                                {
+                                    _trayGpuDiscrete.Enabled = true;
+                                }
+                                if (_lblGpuRestartNotice != null && _lblGpuRestartNotice.Text.Contains("Physical MUX"))
+                                {
+                                    _lblGpuRestartNotice.Text = "Requires system restart to take effect in firmware";
                                 }
                             }
 

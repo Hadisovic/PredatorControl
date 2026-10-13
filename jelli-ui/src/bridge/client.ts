@@ -4,7 +4,8 @@ type Actions = {
   move: {data: {x: number; y: number}; result: void}; savePosition: {data: null; result: void};
   control: {data: {id: string; value: unknown}; result: void}; settings: {data: Preferences; result: void};
   color: {data: {r: number; g: number; b: number}; result: void}; overlay: {data: boolean; result: void};
-  legacy: {data: null; result: void}; exit: {data: null; result: void}
+  legacy: {data: null; result: void}; exit: {data: null; result: void};
+  'overlay.settings': {data: null; result: void}
 }
 type Message = {version: number; type: string; id?: string; data?: unknown; error?: string}
 interface WebView { postMessage: (message: unknown) => void; addEventListener: (type: 'message', handler: (e: MessageEvent<Message>) => void) => void }

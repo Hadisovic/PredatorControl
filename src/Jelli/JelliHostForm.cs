@@ -62,6 +62,84 @@ internal sealed class JelliHostForm : Form
     [DllImport("dwmapi.dll", PreserveSig = true)]
     private static extern int DwmExtendFrameIntoClientArea(nint window, ref Margins margins);
 
+    [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+    private static extern bool SetDllDirectory(string lpPathName);
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern IntPtr LoadLibrary(string lpFileName);
+
+    static JelliHostForm()
+    {
+        EnsureWebView2Loader();
+    }
+
+    internal static void EnsureWebView2Loader()
+    {
+        try
+        {
+            string targetDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PredatorControl");
+            Directory.CreateDirectory(targetDir);
+            string targetDll = Path.Combine(targetDir, "WebView2Loader.dll");
+
+            var asm = typeof(JelliHostForm).Assembly;
+            byte[]? expectedHash = null;
+            byte[]? resourceBytes = null;
+
+            using (var stream = asm.GetManifestResourceStream("WebView2Loader.dll"))
+            {
+                if (stream != null)
+                {
+                    using var ms = new MemoryStream();
+                    stream.CopyTo(ms);
+                    resourceBytes = ms.ToArray();
+                    using var sha = System.Security.Cryptography.SHA256.Create();
+                    expectedHash = sha.ComputeHash(resourceBytes);
+                }
+            }
+
+            if (expectedHash != null && resourceBytes != null)
+            {
+                byte[]? fileHash = null;
+                if (File.Exists(targetDll))
+                {
+                    try
+                    {
+                        using var fs = File.OpenRead(targetDll);
+                        using var sha = System.Security.Cryptography.SHA256.Create();
+                        fileHash = sha.ComputeHash(fs);
+                    }
+                    catch { }
+                }
+
+                bool match = fileHash != null && fileHash.SequenceEqual(expectedHash);
+                if (!match)
+                {
+                    try
+                    {
+                        File.WriteAllBytes(targetDll, resourceBytes);
+                        using var fs = File.OpenRead(targetDll);
+                        using var sha = System.Security.Cryptography.SHA256.Create();
+                        var freshHash = sha.ComputeHash(fs);
+                        match = freshHash.SequenceEqual(expectedHash);
+                    }
+                    catch { match = false; }
+                }
+
+                if (match)
+                {
+                    CoreWebView2Environment.SetLoaderDllFolderPath(targetDir);
+                    SetDllDirectory(targetDir);
+                    LoadLibrary(targetDll);
+                }
+                else
+                {
+                    Program.Report(new InvalidOperationException("WebView2Loader.dll integrity check failed. Untrusted library was not loaded."), false);
+                }
+            }
+        }
+        catch { }
+    }
+
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);
@@ -71,9 +149,23 @@ internal sealed class JelliHostForm : Form
 
     internal async Task InitializeAsync(bool startSuspended = false)
     {
+        EnsureWebView2Loader();
+        _ = Handle;
+        _ = _web.Handle;
         _gaming = startSuspended;
+
+        // Show the form off-screen before EnsureCoreWebView2Async.
+        // WebView2 CreateCoreWebView2ControllerAsync needs a visible HWND or it
+        // throws COMException 0x80070490 (Element not found) on boot.
+        SetBounds(-32000, -32000, 1, 1);
+        if (!Visible) Show();
+        await Task.Yield(); // pump message loop so HWND is visible to the OS
+
         string profile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PredatorControl", _persist ? "WebView2" : "WebView2-Test");
-        var options = new CoreWebView2EnvironmentOptions { AdditionalBrowserArguments = "--disable-gpu --js-flags=\"--max-old-space-size=16 --max-semi-space-size=1 --optimize-for-size\"" };
+        var options = new CoreWebView2EnvironmentOptions
+        {
+            AdditionalBrowserArguments = "--disable-gpu --js-flags=\"--max-old-space-size=16 --max-semi-space-size=1 --optimize-for-size\""
+        };
         var env = await CoreWebView2Environment.CreateAsync(userDataFolder: profile, options: options);
         await _web.EnsureCoreWebView2Async(env);
         var core = _web.CoreWebView2;
@@ -104,30 +196,59 @@ internal sealed class JelliHostForm : Form
         core.Navigate(Origin);
         _state.Start();
         _rgb.Start();
-        await _connected.Task.WaitAsync(TimeSpan.FromSeconds(15));
+                // Give the Jelli React UI up to 45 s to send its first handshake.
+        // On slow boots the Chromium renderer can take longer than 15 s to warm up.
+        // A timeout here is non-fatal: Jelli is already rendering, it just hasn't
+        // called back yet - we let it settle rather than tearing everything down.
+        try
+        {
+            await _connected.Task.WaitAsync(TimeSpan.FromSeconds(45));
+        }
+        catch (TimeoutException)
+        {
+            // UI took too long but is likely still loading - log and continue.
+            Program.Report(new InvalidOperationException("Jelli handshake timed out after 45 s. Jelli may still load in the background."), false);
+        }
+        SetSurface(_surface);
         if (Environment.GetCommandLineArgs().Contains("--jelli-devtools")) core.OpenDevToolsWindow();
     }
 
     private async void Recover()
     {
-        if (_disposed || _recovering) return;
+        if (_disposed || _recovering || Form1.IsShuttingDown || Environment.HasShutdownStarted) return;
         _recovering = true;
         _ready = false;
         _cursor.Stop();
         try {
             if (++_recoveries > 3) throw new InvalidOperationException("The Jelli renderer repeatedly stopped. Native controls are available from the tray.");
             await Task.Delay(1000);
-            if (!_disposed) _web.CoreWebView2.Reload();
+            if (!_disposed && !Form1.IsShuttingDown && !Environment.HasShutdownStarted && _web.CoreWebView2 != null)
+            {
+                _web.CoreWebView2.Reload();
+            }
         }
-        catch (Exception ex) { Hide(); _backend.Fallback(); Program.Report(ex, false); }
+        catch (Exception ex)
+        {
+            if (_disposed || Form1.IsShuttingDown || Environment.HasShutdownStarted) return;
+            Hide();
+            _backend.Fallback();
+            Program.Report(ex, false);
+        }
         finally { _recovering = false; }
     }
 
     private void Send(object message)
     {
-        if (!_ready || _disposed) return;
-        try { _web.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(message, JelliSettings.Json)); }
-        catch (InvalidOperationException) { Recover(); }
+        if (!_ready || _disposed || Form1.IsShuttingDown || Environment.HasShutdownStarted) return;
+        try
+        {
+            if (_web.CoreWebView2 != null)
+                _web.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(message, JelliSettings.Json));
+        }
+        catch (InvalidOperationException)
+        {
+            if (!_disposed && !Form1.IsShuttingDown && !Environment.HasShutdownStarted) Recover();
+        }
     }
     internal void PublishState()
     {
@@ -149,6 +270,7 @@ internal sealed class JelliHostForm : Form
                     _ready = true;
                     _connected.TrySetResult();
                     result = _backend.State(_settings);
+                    SetSurface(_surface);
                     SendLayout();
                     if (!_gaming) { Show(); _cursor.Start(); }
                     break;
@@ -175,9 +297,20 @@ internal sealed class JelliHostForm : Form
                 case "settings":
                     var updated = JelliSettings.Validate(request.Data.Deserialize<JelliSettings>(JelliSettings.Json) ?? throw new ArgumentException("Missing preferences."));
                     if (_settings.SyncRgb && !updated.SyncRgb) DisableSync();
+                    bool enabledChanged = _settings.JelliEnabled != updated.JelliEnabled;
                     _settings = updated with { X = _anchor.X, Y = _anchor.Y };
                     if (_persist) _settings.Save();
                     _backend.ConfigureOverlay(_settings);
+                    if (enabledChanged)
+                    {
+                        _backend.SetJelliEnabled(updated.JelliEnabled);
+                        if (!updated.JelliEnabled)
+                        {
+                            _cursor.Stop();
+                            Hide();
+                            break;
+                        }
+                    }
                     SetSurface(_surface);
                     PublishState();
                     break;
@@ -185,7 +318,12 @@ internal sealed class JelliHostForm : Form
                     _pendingColor = Color.FromArgb(request.Data.GetProperty("r").GetInt32(), request.Data.GetProperty("g").GetInt32(), request.Data.GetProperty("b").GetInt32());
                     break;
                 case "overlay": _backend.SetOverlayVisible(request.Data.GetBoolean()); break;
-                case "legacy": _backend.Fallback(); break;
+                case "overlay.settings": _backend.OpenOverlaySettings(); break;
+                case "legacy":
+                    _cursor.Stop();
+                    Hide();
+                    _backend.SetJelliEnabled(false);
+                    break;
                 case "exit": _backend.Exit(); break;
                 default: throw new ArgumentException("Unknown Jelli action.");
             }
@@ -282,11 +420,12 @@ internal sealed class JelliHostForm : Form
     {
         if (disposing && !_disposed) {
             _disposed = true;
+            _recovering = true;
             _connected.TrySetCanceled();
             SystemEvents.DisplaySettingsChanged -= OnDisplayChanged;
             _cursor.Dispose(); _state.Dispose(); _rgb.Dispose();
             try { SavePosition(); if (_colorWritten) _backend.RestoreColor(); } catch { }
-            _web.Dispose();
+            try { _web.Dispose(); } catch { }
         }
         base.Dispose(disposing);
     }

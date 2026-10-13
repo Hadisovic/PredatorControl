@@ -4,7 +4,7 @@ using System.Runtime.Versioning;
 
 namespace PredatorControlApp
 {
-    public record TelemetrySnapshot(
+    public readonly record struct TelemetrySnapshot(
         int? CpuTemp,
         int? GpuTemp,
         int? CpuFanRpm,
@@ -14,21 +14,116 @@ namespace PredatorControlApp
         int? GpuUsage = null,
         float? BatteryPercent = null,
         bool IsCharging = false,
-        float? GpuPowerW = null
+        float? GpuPowerW = null,
+        float? CpuPowerW = null,
+        float? VramUsedGb = null,
+        float? VramTotalGb = null,
+        float? RamUsedGb = null,
+        float? RamTotalGb = null,
+        int? AuxFanRpm = null
     );
 
     [SupportedOSPlatform("windows")]
     public sealed class TelemetryService : IDisposable
     {
-        [DllImport("kernel32.dll")]
-        private static extern bool SetProcessWorkingSetSize(IntPtr hProcess, nint dwMinimumWorkingSetSize, nint dwMaximumWorkingSetSize);
-
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool GetSystemTimes(out long idleTime, out long kernelTime, out long userTime);
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
+        private struct MEMORYSTATUSEX
+        {
+            public uint dwLength;
+            public uint dwMemoryLoad;
+            public ulong ullTotalPhys;
+            public ulong ullAvailPhys;
+            public ulong ullTotalPageFile;
+            public ulong ullAvailPageFile;
+            public ulong ullTotalVirtual;
+            public ulong ullAvailVirtual;
+            public ulong ullAvailExtendedVirtual;
+
+            public static MEMORYSTATUSEX Create()
+            {
+                var result = new MEMORYSTATUSEX();
+                result.dwLength = (uint)Marshal.SizeOf<MEMORYSTATUSEX>();
+                return result;
+            }
+        }
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        private static extern bool GlobalMemoryStatusEx(ref MEMORYSTATUSEX lpBuffer);
+
+        private static (float? ramUsedGb, float? ramTotalGb, int? ramPercent) GetMemoryStatus()
+        {
+            try
+            {
+                var mem = MEMORYSTATUSEX.Create();
+                if (GlobalMemoryStatusEx(ref mem))
+                {
+                    float totalGb = mem.ullTotalPhys / (1024f * 1024f * 1024f);
+                    float availGb = mem.ullAvailPhys / (1024f * 1024f * 1024f);
+                    float usedGb = Math.Max(0, totalGb - availGb);
+                    int percent = (int)Math.Clamp(mem.dwMemoryLoad, 0, 100);
+                    return (usedGb, totalGb, percent);
+                }
+            }
+            catch { }
+            return (null, null, null);
+        }
+
+        private static PerformanceCounter? _cpuPowerCounter;
+        private static bool _cpuPowerInitAttempted;
+
+        private static float? GetCpuPower()
+        {
+            if (!_cpuPowerInitAttempted)
+            {
+                _cpuPowerInitAttempted = true;
+                try
+                {
+                    _cpuPowerCounter = new PerformanceCounter("Energy Meter", "Power", "rapl_package0_pkg", true);
+                    _cpuPowerCounter.NextValue(); // Prime the initial reading
+                }
+                catch
+                {
+                    try
+                    {
+                        var cat = new PerformanceCounterCategory("Energy Meter");
+                        var instances = cat.GetInstanceNames();
+                        var pkgInst = instances.FirstOrDefault(i => i.Contains("pkg", StringComparison.OrdinalIgnoreCase));
+                        if (pkgInst != null)
+                        {
+                            _cpuPowerCounter = new PerformanceCounter("Energy Meter", "Power", pkgInst, true);
+                            _cpuPowerCounter.NextValue();
+                        }
+                    }
+                    catch
+                    {
+                        _cpuPowerCounter = null;
+                    }
+                }
+            }
+
+            if (_cpuPowerCounter != null)
+            {
+                try
+                {
+                    float mw = _cpuPowerCounter.NextValue();
+                    if (mw > 0)
+                    {
+                        return mw / 1000.0f; // mW to Watts
+                    }
+                }
+                catch { }
+            }
+
+            return null;
+        }
 
         private readonly WmiController _wmi;
         private readonly Action<TelemetrySnapshot> _onSnapshot;
         private readonly CancellationTokenSource _cts = new();
+        private Task _worker = Task.CompletedTask;
 
         private volatile int _pollIntervalMs = 1000;
         private volatile bool _isFastPolling = true;
@@ -51,11 +146,6 @@ namespace PredatorControlApp
         {
             _isFastPolling = isFast;
             UpdatePollInterval();
-
-            if (!isFast && !_isOverlayActive)
-            {
-                TrimWorkingSet();
-            }
         }
 
         public void SetOverlayActive(bool active)
@@ -83,18 +173,6 @@ namespace PredatorControlApp
                 return;
             }
             _includeGpu = includeGpu;
-        }
-
-        public static void TrimWorkingSet()
-        {
-            try
-            {
-                GC.Collect(2, GCCollectionMode.Optimized, false, false);
-                GC.WaitForPendingFinalizers();
-                using var process = Process.GetCurrentProcess();
-                SetProcessWorkingSetSize(process.Handle, -1, -1);
-            }
-            catch { }
         }
 
         private int? CalculateCpuUsage()
@@ -127,10 +205,11 @@ namespace PredatorControlApp
 
         private void StartWorkerLoop()
         {
-            Task.Run(async () =>
+            // Capture the token up front so the worker never touches _cts after Dispose().
+            var token = _cts.Token;
+            _worker = Task.Run(async () =>
             {
-                int idleTicks = 0;
-                while (!_cts.Token.IsCancellationRequested)
+                while (!token.IsCancellationRequested)
                 {
                     try
                     {
@@ -140,33 +219,49 @@ namespace PredatorControlApp
                         float batPercent = (float)Math.Round(power.BatteryLifePercent * 100f);
                         bool isCharging = (power.BatteryChargeStatus & BatteryChargeStatus.Charging) != 0;
 
-                        var (cpuTemp, gpuTemp, cpuRpm, gpuRpm, gpuPower) = _wmi.GetAllSensors(isPluggedIn, _includeGpu);
+                        var (cpuTemp, gpuTemp, cpuRpm, gpuRpm, auxRpm, gpuPower) = _wmi.GetAllSensors(isPluggedIn, _includeGpu);
 
                         int? cpuUsage = CalculateCpuUsage();
 
-                        // If GPU is active (reporting temp or RPM), estimate GPU usage based on temps and power
-                        // or calculate from performance counters
-                        int? gpuUsage = null;
-                        if (gpuTemp.HasValue && gpuTemp.Value > 0)
+                        // Query native NVIDIA NVML for real-time discrete GPU telemetry
+                        float? dgpuPowerW = null;
+                        int? nvmlGpuUsage = null;
+                        int? nvmlGpuTemp = null;
+                        float? vramUsedGb = null;
+                        float? vramTotalGb = null;
+
+                        if (_includeGpu && NvmlGpuMonitor.IsAvailable)
                         {
-                            if (gpuPower.HasValue && gpuPower.Value > 0)
+                            var nvml = NvmlGpuMonitor.Query();
+                            if (nvml.powerW.HasValue && nvml.powerW.Value > 0)
                             {
-                                // Typical Acer TGP is 140W max on RTX 4060/4070/4080
-                                gpuUsage = (int)Math.Clamp(Math.Round((gpuPower.Value / 140.0) * 100.0), 0, 100);
+                                dgpuPowerW = nvml.powerW.Value;
                             }
-                            else
+                            if (nvml.usagePercent.HasValue)
                             {
-                                // Proportional estimate when GPU is warm and active
-                                int baseline = 40;
-                                int maxTarget = 86;
-                                double ratio = (gpuTemp.Value - baseline) / (double)(maxTarget - baseline);
-                                gpuUsage = (int)Math.Clamp(Math.Round(ratio * 100.0), 0, 99);
+                                nvmlGpuUsage = nvml.usagePercent.Value;
                             }
+                            if (nvml.tempC.HasValue && nvml.tempC.Value > 0)
+                            {
+                                nvmlGpuTemp = nvml.tempC.Value;
+                            }
+                            vramUsedGb = nvml.vramUsedGb;
+                            vramTotalGb = nvml.vramTotalGb;
                         }
+
+                        float? effectiveGpuPower = dgpuPowerW ?? (gpuPower.HasValue && gpuPower.Value > 0 ? (float)gpuPower.Value : null);
+                        int? effectiveGpuTemp = (gpuTemp.HasValue && gpuTemp.Value > 0) ? gpuTemp : nvmlGpuTemp;
+
+                        // Utilization is only reported when a real measurement (NVML) exists.
+                        // Power and temperature stay separate readings; they are not turned into a fake percentage.
+                        int? gpuUsage = nvmlGpuUsage;
+
+                        float? cpuPowerW = GetCpuPower();
+                        var (ramUsedGb, ramTotalGb, _) = GetMemoryStatus();
 
                         var snapshot = new TelemetrySnapshot(
                             cpuTemp,
-                            gpuTemp,
+                            effectiveGpuTemp,
                             cpuRpm,
                             gpuRpm,
                             powerLine,
@@ -174,29 +269,24 @@ namespace PredatorControlApp
                             gpuUsage,
                             batPercent,
                             isCharging,
-                            gpuPower.HasValue ? (float)gpuPower.Value : null
+                            effectiveGpuPower,
+                            cpuPowerW,
+                            vramUsedGb,
+                            vramTotalGb,
+                            ramUsedGb,
+                            ramTotalGb,
+                            auxRpm
                         );
 
+                        // Don't publish after shutdown has begun.
+                        if (token.IsCancellationRequested) break;
                         try
                         {
                             _onSnapshot(snapshot);
                         }
                         catch { }
 
-                        if (!_isFastPolling && !_isOverlayActive)
-                        {
-                            if (++idleTicks >= 6) // Every ~60s while running in background
-                            {
-                                idleTicks = 0;
-                                TrimWorkingSet();
-                            }
-                        }
-                        else
-                        {
-                            idleTicks = 0;
-                        }
-
-                        await Task.Delay(_pollIntervalMs, _cts.Token);
+                        await Task.Delay(_pollIntervalMs, token);
                     }
                     catch (OperationCanceledException)
                     {
@@ -205,19 +295,34 @@ namespace PredatorControlApp
                     catch (Exception ex)
                     {
                         Program.Report(ex, false);
-                        try { await Task.Delay(2000, _cts.Token); } catch { break; }
+                        try { await Task.Delay(2000, token); } catch { break; }
                     }
                 }
-            });
+            }, token);
         }
 
         public void Dispose()
         {
-            if (!_disposed)
+            if (_disposed) return;
+            _disposed = true;
+
+            try { _cts.Cancel(); } catch { }
+
+            // Wait briefly for the worker to leave its loop before releasing the token source.
+            // Never block the UI thread indefinitely: a stuck WMI call must not hang shutdown.
+            bool stopped = false;
+            try { stopped = _worker.Wait(TimeSpan.FromSeconds(3)); }
+            catch (AggregateException) { stopped = true; } // worker faulted/cancelled == finished
+            catch { }
+
+            if (stopped)
             {
-                _disposed = true;
-                _cts.Cancel();
                 _cts.Dispose();
+            }
+            else
+            {
+                // Worker still busy in a sensor read; dispose once it actually finishes.
+                _worker.ContinueWith(_ => { try { _cts.Dispose(); } catch { } }, TaskScheduler.Default);
             }
         }
     }

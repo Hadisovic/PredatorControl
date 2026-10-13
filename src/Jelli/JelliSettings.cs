@@ -10,15 +10,18 @@ internal sealed record JelliSettings
     public string Metric2 { get; init; } = "gpuTemp";
     public string OverlayCorner { get; init; } = "topLeft";
     public string OverlayMonitor { get; init; } = "";
+    public string OverlayMode { get; init; } = "default";
+    public int OverlayScale { get; init; } = 100;
     public bool OverlayGraphs { get; init; } = true;
     public bool OverlayPower { get; init; } = true;
     public bool OverlayUsage { get; init; } = true;
     public bool SyncRgb { get; init; }
+    public bool JelliEnabled { get; init; } = true;
     public int X { get; init; } = 80;
     public int Y { get; init; } = 120;
 
     internal static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
-    internal static readonly string[] Metrics = ["cpuTemp", "gpuTemp", "cpuFanRpm", "gpuFanRpm", "cpuUsage", "gpuUsage", "gpuPowerW", "batteryPercent", "powerMode", "fps"];
+    internal static readonly string[] Metrics = ["off", "none", "cpuTemp", "gpuTemp", "cpuFanRpm", "gpuFanRpm", "cpuUsage", "gpuUsage", "gpuPowerW", "batteryPercent", "powerMode", "fps", "cpuPowerW", "ramUsedGb", "vramUsedGb"];
     internal static JelliSettings Load()
     {
         try
@@ -30,11 +33,11 @@ internal sealed record JelliSettings
     }
     internal static JelliSettings Validate(JelliSettings s)
     {
-        if (s.Presentation is not ("expand" or "flyout") ||
-            s.OverlayCorner is not ("topLeft" or "topRight" or "bottomLeft" or "bottomRight") ||
-            !Metrics.Contains(s.Metric1) || !Metrics.Contains(s.Metric2))
-            throw new ArgumentException("Invalid Jelli preferences.");
-        return s;
+        string pres = s.Presentation is "expand" or "flyout" ? s.Presentation : "expand";
+        string corner = s.OverlayCorner is "topLeft" or "topRight" or "bottomLeft" or "bottomRight" ? s.OverlayCorner : "topLeft";
+        string m1 = Metrics.Contains(s.Metric1) ? s.Metric1 : "off";
+        string m2 = Metrics.Contains(s.Metric2) ? s.Metric2 : "off";
+        return s with { Presentation = pres, OverlayCorner = corner, Metric1 = m1, Metric2 = m2 };
     }
     internal void Save()
     {

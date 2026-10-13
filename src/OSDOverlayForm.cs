@@ -251,10 +251,13 @@ namespace PredatorControlApp
 
             EnsureFonts();
 
-            // Small header tag: "PREDATOR PROFILE"
+            // Small header tag: "PREDATOR PERFORMANCE" or "NITRO PERFORMANCE"
+            bool isNitro = WmiController.DetectChassisFamily() == AcerChassisFamily.Nitro ||
+                           ThemeManager.Current.Mode == ThemeMode.NitroCrimson;
+            string brandTag = isNitro ? "NITRO PERFORMANCE" : "PREDATOR PERFORMANCE";
             using (var tagBrush = new SolidBrush(Color.FromArgb(160, 175, 195)))
             {
-                g.DrawString("PREDATOR PERFORMANCE", _tagFont!, tagBrush, textLeft, textTop);
+                g.DrawString(brandTag, _tagFont!, tagBrush, textLeft, textTop);
             }
 
             // Title: "TURBO MODE", etc.

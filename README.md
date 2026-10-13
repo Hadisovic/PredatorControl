@@ -4,18 +4,18 @@
 
 # 🪼 Predator Control
 
-[![Version](https://img.shields.io/badge/version-1.2.4-00E5FF?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Hadisovic/PredatorControl/releases)
+[![Version](https://img.shields.io/badge/version-1.3.5-00E5FF?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Hadisovic/PredatorControl/releases)
 [![Jelli UI](https://img.shields.io/badge/Jelli%20UI-Live%20%F0%9F%AA%BC-FF69B4?style=for-the-badge&logo=sparkles&logoColor=white)](#-jelli-ui)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-00B4CC?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/Hadisovic/PredatorControl)
 [![Framework](https://img.shields.io/badge/.NET-10.0%20Windows-512BD4?style=for-the-badge&logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/)
 [![License](https://img.shields.io/badge/license-MIT-2ED573?style=for-the-badge)](LICENSE)
-[![RAM](https://img.shields.io/badge/RAM%20Usage-%7E40%20MB-FF6B35?style=for-the-badge&logo=memory&logoColor=white)](https://github.com/Hadisovic/PredatorControl)
-[![Services](https://img.shields.io/badge/Acer%20Services-4%20Essential%20Only-2ED573?style=for-the-badge&logo=windows&logoColor=white)](#-the-4-essential-acer-services)
+[![RAM](https://img.shields.io/badge/RAM%20Usage-%7E18--65%20MB-FF6B35?style=for-the-badge&logo=memory&logoColor=white)](https://github.com/Hadisovic/PredatorControl)
+[![Services](https://img.shields.io/badge/Acer%20Services-2%20Essential%20Only-2ED573?style=for-the-badge&logo=windows&logoColor=white)](#core-essential-services)
 
 <br/>
 
 **Predator Control** is a lightweight, bloat-free alternative to Acer PredatorSense for **Acer Predator & Nitro** laptops.  
-Direct ACPI WMI hardware control, **~40 MB RAM** (vs 1.5 GB+), and only **4 essential Acer services** running!
+Direct ACPI WMI hardware control, **~18–25 MB RAM** (Classic UI) / **~45–65 MB** (Jelli UI) vs 1.5 GB+, and zero unnecessary telemetry!
 
 </div>
 
@@ -38,6 +38,15 @@ Direct ACPI WMI hardware control, **~40 MB RAM** (vs 1.5 GB+), and only **4 esse
     </tr>
   </table>
 </div>
+
+---
+
+> [!NOTE]
+> ### 🚀 What's New in v1.3.5: GPU MUX Switch Restoration & Clean Switcher
+> - **GPU MUX Switch Fix**: Fully restored physical GPU MUX switch controls (`Optimus / Hybrid`, `Discrete GPU Only`, and `Auto / Advanced Optimus`) for Acer Predator laptops (including Helios 16 and Helios Neo 16 / PHN16-71).
+> - **Telemetry-Independent Probing**: Fixed capability detection fallback so disabling Acer background bloatware services no longer causes false "Physical MUX switch not present" warnings.
+> - **Full UI Synchronization**: MUX controls are fully synced across the Classic WinForms dashboard, system tray menu, and modern Jelli creature companion UI.
+> - **Clean Version Switcher**: Included `clean_switch_version.bat` and `tools/Switch-PredatorVersion.ps1` to easily terminate background instances, clean state, and switch between versions cleanly.
 
 ---
 
@@ -65,14 +74,14 @@ Predator Control now ships with the full **Jelli UI** — a bioluminescent jelly
 ## ✨ Why Predator Control?
 
 Acer PredatorSense and Acer Care Center bundle **10+ background services and telemetry agents**, an Electron frontend, and consume **500 MB – 1.5 GB of RAM**.  
-Predator Control replaces all of that with direct ACPI WMI calls, using only **~40 MB RAM**, and keeps only the **4 essential hardware services** required for your laptop's fans, lighting, and GPU MUX switch!
+Predator Control replaces all of that with direct ACPI WMI calls, using only **~18–25 MB RAM** (Classic UI) / **~45–65 MB** (Jelli UI), and keeps only the **2 essential hardware services** (`AASSvc` and `AcerLightingService`) required for your laptop's fans, lighting, and GPU MUX switch!
 
 ### 🔬 Resource Comparison
 
 | Metric | 🐌 Acer PredatorSense + Care Center | 🪼 Predator Control | Improvement |
 | :--- | :---: | :---: | :--- |
-| **Idle RAM** | 500 MB – 1.5 GB | **~40 MB** | 🟢 **~95% less RAM** |
-| **Background Services** | 10+ bloatware & telemetry daemons | **4 Essential Only** | 🟢 **All telemetry silenced** |
+| **Idle RAM** | 500 MB – 1.5 GB | **~18–25 MB** (Classic) / **~45–65 MB** (Jelli) | 🟢 **~95% less RAM** |
+| **Background Services** | 10+ bloatware & telemetry daemons | **2 Essential Only** | 🟢 **All telemetry silenced** |
 | **Idle CPU** | 0.8 – 3.5% | **< 0.1% / 0.0%** | 🟢 Zero micro-stutter |
 | **Window Toggle Latency** | 2.5 – 5.0 s | **< 50 ms** | 🟢 Instant launch |
 | **Mode Switch Latency** | 500 – 1200 ms | **< 30 ms** | 🟢 Direct EC write |
@@ -81,27 +90,27 @@ Predator Control replaces all of that with direct ACPI WMI calls, using only **~
 
 ---
 
-## 🛡️ The 4 Essential Acer Services
+## 🛡️ Acer Services & Background Optimization
 
-Predator Control replaces the heavy PredatorSense Electron frontend while smartly coexisting with Acer's hardware layer. To maintain full hardware control with **only ~40 MB RAM**, it keeps **4 essential Acer services** running:
+Predator Control replaces the heavy PredatorSense Electron frontend while communicating directly with hardware.
 
-| Service | Display Name | Why It Is Essential |
+### Core Essential Services
+The following services provide active communication channels needed for full feature fidelity:
+| Service | Display Name | Role |
 | :--- | :--- | :--- |
-| **`AASSvc`** | **Acer Agent Service** | Direct Named Pipe (`\\.\pipe\AcerAgentPipe`) for real-time fan RPM tachometers, GPU MUX switching, and fast RGB packet serialization. |
-| **`AcerLightingService`** | **Acer Lighting Service** | Controls keyboard 4-zone lighting profiles and firmware color latching (prevents annoying Amber light reset on reboot). |
-| **`AcerHardwareService`** / **`AcerServiceSvc`** | **Acer Service Component** | Handles low-level APGe hardware actions (30-second keyboard backlight idle sleep timeout, power profile TDP switches). |
-| **`AcerDeviceEnablingServiceV2`** | **Acer Device Enabling Service V2** | ACPI device driver bridge communicating directly with the Embedded Controller (EC). |
+| **`AASSvc`** | **Acer Agent Service** | Direct Named Pipe (`\\.\pipe\AcerAgentPipe`) for real-time fan tachometers and GPU MUX switching. |
+| **`AcerLightingService`** | **Acer Lighting Service** | Controls keyboard 4-zone lighting profiles and firmware color latching. |
 
-### 🧹 What Gets Disabled? (Bloatware & Telemetry Silenced)
-Predator Control automatically detects and disables **6 intrusive, duplicate background services**:
-- ❌ **`AcerCCAgentSvis`** (Acer Care Center — Telemetry, update nagware, background RAM hog)
-- ❌ **`AcerQAAgentSvis`** (Acer Quick Access — Legacy popups & slow OSD)
-- ❌ **`AcerDIAgentSvis`** (Acer Device Info — Periodic cloud telemetry uploads)
-- ❌ **`ASMSvc`** (Acer System Monitor Service — Duplicate sensor polling causing CPU wakeups)
-- ❌ Intrusive Acer startup tasks and background analytics
-
-You can run `disable_acer_bloatware.bat` anytime to apply this optimization with a single click, or `enable_acer_services.bat` to restore default settings.
-
+### Optional / Legacy Services (Disabled in Bloatware Optimization)
+The following services are disabled when the **Disable Acer Bloatware Services** toggle is enabled (or via `disable_acer_bloatware.bat`). *Note: On certain models, disabling these may affect the 30-second backlight idle sleep timeout; unverified on non-standard configurations — disable at your own risk:*
+| Service | Display Name | Status Under Optimization |
+| :--- | :--- | :--- |
+| **`AcerServiceSvc`** | **Acer Service Component** | Disabled (Handles legacy APGe actions; direct WMI used where available) |
+| **`AcerDeviceEnablingServiceV2`** | **Acer Device Enabling Service V2** | Disabled (Legacy driver bridge; direct ACPI WMI preferred) |
+| **`AcerCCAgentSvis`** | **Acer Care Center** | Disabled (Background telemetry, periodic popups, RAM usage) |
+| **`AcerQAAgentSvis`** | **Acer Quick Access** | Disabled (Legacy popups & slow OSD) |
+| **`AcerDIAgentSvis`** | **Acer Device Info** | Disabled (Cloud telemetry uploads) |
+| **`ASMSvc`** | **Acer System Monitor Service** | Disabled (Duplicate sensor polling causing CPU wakeups) |
 ---
 
 ## 🚀 Features Matrix
@@ -136,17 +145,49 @@ You can run `disable_acer_bloatware.bat` anytime to apply this optimization with
 
 ### 🖥️ Hardware & Battery Controls
 - 🔋 **80% Battery Charge Limiter**: Hardware register toggle to preserve battery lifespan.
+- 🩺 **Battery Health Diagnostics & Wear Monitor**: Live display of battery health %, wear percentage, current vs design capacity (mWh), and cycle count, plus 1-click Windows Battery Report generation.
+- 🎬🔊 **Startup Animation & Sound**: Toggles Acer Predator POST boot animation and chime directly through hardware services.
+- ⚡ **Power-off USB Charging**: Turns designated USB port (marked with battery icon) into a power bank when laptop is off, sleeping, or hibernating, with automatic 30% battery cutoff reserve.
 - 🔒 **Windows Key Lock**: Disables Windows key during gaming.
-- 🔊 **BIOS Startup Sound**: Toggle Acer Predator boot chime directly in BIOS/EC.
 - ⚡ **LCD Overdrive (3ms)**: Toggles panel response time.
 - 🖱️ **GPU MUX Switch**: Optimus, Discrete (NVIDIA Only), and Advanced Optimus.
 - 🖥️ **Refresh Rate Switcher**: Switch internal display (60Hz ↔ 165Hz/240Hz) and external monitors via Win32 CCD API.
 
+---
+
+### 🔧 BIOS Guide: How to Enable Startup Animation & Sound
+
+On Acer Predator and Nitro laptops (such as Predator Helios and Nitro series), the boot chime and animation run at the hardware level during the **Power-On Self-Test (POST)** phase before Windows starts.
+
+> [!IMPORTANT]
+> **If the boot animation and sound do not play on startup:**  
+> If POST Animation & Sound was muted or disabled in your laptop's BIOS setup, the hardware ignores desktop software requests. To restore and control it:
+> 1. **Restart your laptop** and immediately press **`F2`** repeatedly as soon as the screen turns on to enter BIOS Setup.
+> 2. Use the arrow keys to navigate to the **Main** tab.
+> 3. Scroll down to **POST Animation & Sound** (or **Boot Sound** depending on BIOS revision).
+> 4. Press `Enter`, change the value to **`Enabled`**, and press `Enter`.
+> 5. Press **`F10`**, select **Yes**, and hit `Enter` to save changes and reboot.
+> 6. Once Windows starts, you can now toggle **Startup Animation & Sound** directly inside Predator Control anytime without rebooting into BIOS!
+
+---
+
+### 🔋 Power-off USB Charging: How It Works
+
+Power-off USB Charging turns your laptop into a portable power bank, allowing you to charge smartphones, controllers, wireless earbuds, or other USB devices even when the laptop is **completely shut down, asleep, or hibernating**.
+
+* **Which USB Port?**  
+  Look closely at your laptop's USB-A ports. The designated port is marked with a **battery icon** or **lightning bolt** next to the standard USB symbol.
+* **Safety Battery Cutoff Reserve:**  
+  When your laptop is running on battery power (unplugged from AC), Power-off USB Charging automatically stops discharging if the laptop battery drops below **30%**. This ensures your laptop never exhausts its own battery while powering external devices.
+* **Direct Integration:**  
+  Predator Control synchronizes the state directly with the hardware controller and Acer configuration layer (`USBChargeState`, `USBChargeSwitch`, and `USBChargeLimit`).
+
+
 ### 🎮 OSD & In-Game Gaming Overlay
 - ⚡ **In-Game Gaming Overlay HUD**: Real-time neon green FPS counter (powered by zero-injection Windows ETW kernel Present monitoring), CPU/GPU temperatures, fan RPMs, active GPU wattage (`0x0D`), 60-second rolling sparkline performance graph, and battery gauge. Toggle with `Ctrl + Shift + O`, drag anywhere with `Ctrl + Shift + Drag`.
-- 🛡️ **100% Anti-Cheat Safe**: Uses Windows ETW kernel tracing (`Microsoft-Windows-DxgKrnl` Event ID 184 / `DXGI` Event ID 42). Zero DLL injection, zero API hooking (safe with Vanguard, EAC, BattlEye, Ricochet).
+- 🛡️ **Non-Invasive Architecture**: Uses standard Windows ETW kernel tracing (`Microsoft-Windows-DxgKrnl` Event ID 184 / `DXGI` Event ID 42). Zero DLL injection, zero API hooking, completely non-invasive alongside active games.
 - 🔑 **Dedicated Predator Key Intercept**: Low-level hardware hook (`WH_KEYBOARD_LL`) intercepting Acer scan code `0x75` (`VK_0xFF`) to toggle the app window instantly without stealing in-game focus.
-- 🏎️ **High CPU Priority Enforcement**: Automatically configures Windows Registry IFEO (`CpuPriorityClass=3`), Task Scheduler `<Priority>2</Priority>`, and runtime `ProcessPriorityClass.High` (`BasePriority=13`) for zero latency and micro-stutter immunity during AAA gaming.
+- 🏎️ **High CPU Priority Enforcement**: Automatically configures background task priority and runtime `ProcessPriorityClass.High` (`BasePriority=13`) for zero latency and micro-stutter immunity during AAA gaming.
 - 🌊 **Floating Mode OSD**: Focus-safe banner with custom neon vector emblems on profile changes.
 - 🎮 **Game Sync Profiles**: Automatically binds performance, fans, and RGB to game `.exe` launches.
 
@@ -173,7 +214,7 @@ Predator Control includes an ultra-lightweight, customizable in-game telemetry H
 | **`Ctrl + Shift + Middle Click`** | **Reset Scale (100%)** | Instantly resets HUD scaling back to standard 100%. |
 
 > [!TIP]
-> **Anti-Cheat Safe:** The overlay utilizes Windows ETW kernel tracing (`Microsoft-Windows-DxgKrnl` Event ID 184 / `DXGI` Event ID 42). It requires zero DLL injection and zero API hooks, making it completely safe in games with anti-cheats (Vanguard, EAC, BattlEye, Ricochet).
+> **Non-Invasive Architecture:** The overlay utilizes standard Windows ETW kernel tracing (`Microsoft-Windows-DxgKrnl` Event ID 184 / `DXGI` Event ID 42). It requires zero DLL injection and zero API hooks, making it completely non-invasive and safe alongside running games.
 
 ## 🏗️ Repository Structure
 
@@ -212,6 +253,35 @@ PredatorControl/
 
 ## 📋 Changelog
 
+### v1.3.3 — Reliability Fixes & Telemetry Accuracy
+- ⏱️ **Debounce Race Fixed**: A superseded timer can no longer remove or fire a newer pending action early. Ownership is verified inside the lock, actions run outside it, and every `CancellationTokenSource` is disposed.
+- 🧵 **Clean Telemetry Shutdown**: The worker task is retained and awaited on `Dispose()`; the cancellation token is captured up front and no snapshot is published after shutdown begins.
+- 📈 **FPS Buffer Synchronization**: Frame writes, sampling and `TargetPid` switches now share a short lock and sampling works on a consistent snapshot.
+- 🎨 **RGB Profile Safety**: Defaults are deep-copied, loaded profiles are validated, writes are atomic, and a damaged profile file is moved aside (`.corrupt-<timestamp>`) instead of overwritten. A temporarily unreadable file is never replaced.
+- 🔄 **Safer Updater Handoff**: Unique, ACL-restricted staging directory; download and hash through one exclusive handle; hash re-verified by the script right before replacement; move result checked with retries; previous version kept in `%LOCALAPPDATA%\PredatorControl\backup`.
+- 🚀 **Game Sync**: One process enumeration per poll (instead of one per profile), profile priority preserved, and process handles always disposed.
+- 🧹 **No Forced Memory Trimming**: Removed periodic `GC.Collect` / `WaitForPendingFinalizers` / `SetProcessWorkingSetSize`.
+- 🎯 **Honest GPU Utilization**: No more fake utilization derived from power or temperature; it is only shown when a real measurement exists.
+### v1.3.2 — Security Hardening: Authenticode Verification & User Consent for OEM Services
+- 🔒 **Authenticode Signature Verification**: Enforced cryptographic Authenticode signature verification (`WinVerifyTrust` + `X509Chain`) for all OEM drivers and service binaries prior to installation or registration, requiring explicit `Acer Incorporated` publisher verification.
+- 🛡️ **Discovery Isolation**: Removed searching user-writable directories (`appDir/oem_drivers` and `parentOem/oem_drivers`); restricted driver discovery strictly to `C:\Windows\System32\DriverStore\FileRepository`.
+- ✋ **Explicit User Consent**: Added one-time user confirmation dialog before registering any new background Windows services (`ASMSvc`, `AcerDeviceEnablingServiceV2`, `AcerLightingService`), with clean abort logic if declined.
+
+### v1.3.1 — Code Simplification, Zero-Allocation Telemetry & C++ Architecture
+- ⚡ **Zero-Allocation Telemetry Loop**: Converted `TelemetrySnapshot` into a stack-allocated readonly record struct (POD) and implemented cached string tables for sensor values, achieving 0 heap allocations during background sensor polling and gaming.
+- 📖 **C++ Rosetta Stone Headers**: Added native systems / C++ architectural documentation headers across all core hardware and networking files (`WmiController.cs`, `AcerAgentClient.cs`, `EtwFpsMonitor.cs`, `NvmlGpuMonitor.cs`, `Form1.cs`).
+- 🎯 **Direct Hardware Cause-and-Effect Mappings**: Documented all ACPI EC registers, named pipes, and WMI methods with explicit `[TRIGGER] ➔ [HARDWARE I/O] ➔ [EFFECT]` blocks.
+- 🧱 **Structured Section Grouping**: Organized hardware I/O, SCM optimization, telemetry, and Win32 message dispatching into clear, predictable architectural sections.
+- 🛡️ **Sensor Update Debouncing**: Eliminated redundant WinForms GDI label redraws when sensor values remain unchanged between ticks.
+
+### v1.3.0 — Battery Diagnostics, Multi-Monitor High-DPI & Hardware Controls
+- 🔋 **Battery Health Diagnostics & Wear Monitor**: Integrated live battery health %, wear percentage, current vs design capacity (mWh), and cycle count into the Battery Care section, plus 1-click Windows Battery Report generation.
+- 🎬🔊 **Startup Animation & Sound**: Renamed and upgraded boot chime control to full Startup Animation & Sound with synchronous integration to `AcerAgentService` and complete BIOS POST guide.
+- ⚡ **Power-off USB Charging**: Control power delivery to designated USB charging port while laptop is off, sleeping, or hibernating, with automatic 30% battery reserve cutoff protection.
+- 🖥️ **Multi-Monitor High-DPI Scaling**: Resolved text overlap in the telemetry sensor cluster (CPU, GPU, fans, power) and eliminated horizontal clipping when moving the application across displays with differing DPI scaling factors.
+- 🪟 **Focus & Scroll Stability**: Fixed focus-induced scroll snapping and scroll bounce when switching between active windows.
+- 🛠️ **Universal OEM Auto-Repair**: Auto-repair subsystem verifies, restores, and configures background services across both Predator and Nitro chassis.
+
 ### v1.2.1 — Jelli Toggle Fix & RGB Polish
 - 🔧 **Jelli Toggle — True Off**: Toggling Jelli off now kills all WebView2 child Chromium processes, guaranteeing **zero CPU and zero RAM** footprint when disabled.
 - 🔧 **Jelli Toggle — No Stuck Switching**: Fixed a hang in the Settings panel where the toggle would get stuck on "Switching..." if settings validation failed; now uses a direct IPC legacy path.
@@ -240,8 +310,9 @@ PredatorControl/
 - [ ] 🎮 **Raw Input HID Hook**: Native hardware Predator Key sniffing (`UsagePage 0xFFA0`)
 - [ ] ⚡ **ACPI Event Sniffing**: Deep `AcerEvent` / `APGeEvent` mapping
 - [ ] 🌊 **RGB Wave Direction**: Direction toggle (Left-to-Right / Right-to-Left)
-- [ ] 🔋 **USB Power-Off Charging**: Direct firmware toggle
-- [ ] 🩺 **Hardware Health Diagnostics**: Battery wear % & SSD S.M.A.R.T. readout
+- [x] 🔋 **USB Power-Off Charging**: Direct firmware & QA sync toggle (Live in v1.3.0)
+- [x] 🩺 **Hardware Health Diagnostics**: Battery wear %, capacity & report generator (Live in v1.3.0)
+- [ ] 💾 **Storage Health Diagnostics**: SSD S.M.A.R.T. readout
 
 ---
 
@@ -259,11 +330,11 @@ cd PredatorControl/src
 # Build Release
 dotnet build -c Release
 
-# Publish Standalone Executable (~52 MB)
+# Publish Standalone Single-File Executable (~52.8 MB - No .NET required)
 dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -o "..\publish\standalone"
 
-# Publish Unpacked Folder
-dotnet publish -c Release -r win-x64 --no-self-contained -p:PublishSingleFile=false -o "..\publish\unpacked"
+# Publish Framework-Dependent Single-File Executable (~3.68 MB - Requires .NET 10 Desktop Runtime)
+dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o "..\publish\win-x64"
 ```
 
 ---
@@ -278,7 +349,7 @@ Because utilities that manipulate laptop hardware write directly to the Embedded
 
 ### 2. Review the Source Code Before Running Binaries
 - Since this is an indie repo with a small user base, avoid downloading precompiled `.exe` releases blind.
-- Review the repository's source files (C# .NET) to verify what drivers or external libraries (such as WinRing0 or LibreHardwareMonitor) it loads. Predator Control communicates directly via standard Windows WMI (`root\wmi`) and Acer's official Agent Named Pipe, loading **zero third-party kernel drivers**.
+- Review the repository's source files (C# .NET) to verify what drivers or external libraries it loads. Predator Control communicates directly via standard Windows WMI (`root\wmi`) and Acer's official Agent Named Pipe, loading **zero third-party kernel drivers**.
 
 ### 3. Windows Defender / SmartScreen Flags
 - Any custom utility that communicates with low-level hardware or WMI without an expensive signed EV certificate will trigger a Windows Defender or SmartScreen prompt. This is expected for custom hardware tools, but all the more reason to inspect the source code first.
@@ -290,9 +361,11 @@ Because utilities that manipulate laptop hardware write directly to the Embedded
 
 ## 🚀 Quick Setup & Usage
 
-1. Download the latest release from [Releases](https://github.com/Hadisovic/PredatorControl/releases).
-2. Run **`PredatorControl-standalone.exe`** as Administrator.
-3. *(Optional)* Toggle **"Start with Windows"** in the app settings to run silently in the system tray at login without any startup delay.
+1. Download the latest release from [Releases](https://github.com/Hadisovic/PredatorControl/releases):
+   - **`PredatorControl-standalone.exe`**: Ready to run anywhere; no runtime installation needed (~52.8 MB).
+   - **`PredatorControl-win-x64.exe`**: Lightweight single-file executable for systems with .NET 10 Desktop Runtime (~3.68 MB).
+2. Run the executable as Administrator.
+3. *(Optional)* Toggle **"Start with Windows"** in settings to run silently in the system tray at login without startup delay.
 
 ---
 
@@ -317,10 +390,21 @@ $pipe.Close()
 
 ## 🛡️ Safe Bloatware Optimization
 
-To silence Acer telemetry and bloatware without breaking hardware controls:
-1. Run **`disable_acer_bloatware.bat`** as Administrator.
-2. It disables the 6 telemetry daemons (`AcerCCAgentSvis`, `AcerDIAgentSvis`, `AcerQAAgentSvis`, `ASMSvc`, etc.) while safeguarding the **4 essential services** (`AASSvc`, `AcerLightingService`, etc.).
-3. To restore factory Acer services at any time, run **`enable_acer_services.bat`**.
+To silence Acer telemetry and OEM background services without breaking hardware controls:
+1. **Built-in In-App Toggle**: Under **SYSTEM OPTIMIZATION**, toggle **"Optimize Acer Services (Disable OEM Bloatware)"**.
+2. It interacts directly with the Windows Service Control Manager (SCM) to safely stop and disable the 6 telemetry daemons (`AcerCCAgentSvis`, `AcerDIAgentSvis`, `AcerQAAgentSvis`, `ASMSvc`, `AcerServiceSvc`, `AcerDeviceEnablingServiceV2`) while safeguarding essential hardware services (`AASSvc`, `AcerLightingService`).
+3. Real-time counter reflects live daemon states matching Windows Task Manager (e.g. `6 of 6 bloatware services disabled & stopped`).
+4. Standalone batch utilities **`disable_acer_bloatware.bat`** and **`enable_acer_services.bat`** remain available as headless recovery options.
+
+---
+
+## 📊 Reproducible RAM Measurements
+
+To verify RAM footprint independently on your own hardware, run:
+```powershell
+.\tools\measure_ram.ps1
+```
+This samples both working set and private bytes across steady-state execution for both Classic UI and Jelli UI modes.
 
 ---
 

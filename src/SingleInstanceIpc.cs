@@ -1,4 +1,4 @@
-﻿using System.IO.Pipes;
+using System.IO.Pipes;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text;
@@ -35,6 +35,11 @@ namespace PredatorControlApp
             catch (AbandonedMutexException)
             {
                 isFirstInstance = true;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // Access denied on existing mutex: never grant primary status to a secondary process
+                isFirstInstance = false;
             }
             catch
             {
@@ -80,10 +85,14 @@ namespace PredatorControlApp
                     try
                     {
                         var pipeSecurity = new PipeSecurity();
-                        pipeSecurity.AddAccessRule(new PipeAccessRule(
-                            new SecurityIdentifier(WellKnownSidType.AuthenticatedUserSid, null),
-                            PipeAccessRights.ReadWrite,
-                            AccessControlType.Allow));
+                        var currentUserSid = WindowsIdentity.GetCurrent().User;
+                        if (currentUserSid != null)
+                        {
+                            pipeSecurity.AddAccessRule(new PipeAccessRule(
+                                currentUserSid,
+                                PipeAccessRights.ReadWrite,
+                                AccessControlType.Allow));
+                        }
 
                         using var server = NamedPipeServerStreamAcl.Create(
                             PipeName,
@@ -97,7 +106,14 @@ namespace PredatorControlApp
                         await server.WaitForConnectionAsync(_cts.Token);
 
                         using var reader = new StreamReader(server, Encoding.UTF8);
-                        string? line = await reader.ReadLineAsync(_cts.Token);
+                        var readTask = reader.ReadLineAsync(_cts.Token).AsTask();
+                        var done = await Task.WhenAny(readTask, Task.Delay(5000, _cts.Token));
+                        if (done != readTask)
+                        {
+                            server.Close();
+                            continue;
+                        }
+                        string? line = await readTask;
                         if (!string.IsNullOrEmpty(line))
                         {
                             try { _onCommandReceived(line); } catch { }
@@ -128,7 +144,7 @@ namespace PredatorControlApp
                     _mutex.ReleaseMutex();
                 }
                 catch { }
-                _mutex.Dispose();
+                _mutex?.Dispose();
             }
         }
     }

@@ -1,4 +1,22 @@
-﻿using System.Runtime.InteropServices;
+// ====================================================================================================
+// PREDATOR CONTROL · NATIVE WIN32 DISPLAY & REFRESH RATE CONTROLLER (CCD)
+// File: src/DisplayCcdController.cs
+//
+// 📖 C++ / SYSTEMS DEVELOPER ROSETTA STONE:
+// - C++ Equivalent : Windows CCD (Connecting and Configuring Displays) API via user32.dll / wingdi.h.
+// - Hardware Target: Display engine (eDP / HDMI / DP), mode tables, pixel clock, and refresh rate (Hz).
+// - Subsystem Role : Queries active monitor display paths, available refresh rates (60Hz, 144Hz, 165Hz, 240Hz),
+//                    and sets target refresh rate dynamically without screen flickering or driver restarts.
+//
+// 🔄 C# -> C++ TYPE TRANSLATION REFERENCE:
+// - GetDisplayConfigBufferSizes       => ::GetDisplayConfigBufferSizes(...)
+// - QueryDisplayConfig                => ::QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, ...)
+// - SetDisplayConfig                  => ::SetDisplayConfig(...)
+// - ChangeDisplaySettingsEx           => ::ChangeDisplaySettingsExW(...)
+// - DEVMODE                           => DEVMODEW struct (wingdi.h)
+// ====================================================================================================
+
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 
 namespace PredatorControlApp

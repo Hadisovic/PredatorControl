@@ -13,6 +13,6 @@ export interface State {
   telemetry: Record<string, number | boolean | null> | null; powerMode: string; fanMode: string; gpuMode: string;
   gpuNotice: string; fps: number | null; overlay: boolean; overlayMode?: 'light' | 'default' | 'full' | 'complete'; overlayScale?: number;
   sections: {id: string; label: string; controls: Control[]}[];
-  menu: MenuItem[]; settings: Preferences; monitors: {id: string; label: string}[]; version: string; doubleClickMs: number; gameSyncStatus: string
+  menu: MenuItem[]; settings: Preferences; monitors: {id: string; label: string}[]; version: string; doubleClickMs: number; gameSyncStatus: string; batteryNotice?: string;
 }
 export interface Layout {surface: Surface; creatureX: number; creatureY: number; flyout: boolean; panelLeft: number}

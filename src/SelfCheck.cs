@@ -28,7 +28,19 @@ namespace PredatorControlApp
             Debug.Assert(Form1.BatteryProfileValues[3] == 0x06, "battery Eco must map to 0x06");
             Debug.Assert(Form1.AcProfileValues.Length == 5, "AC table size");
             Debug.Assert(Form1.AcProfileValues[4] == 0x05, "AC Turbo must map to 0x05");
+            Debug.Assert(Form1.NitroBatteryProfileValues.Length == 3, "Nitro battery table size");
+            Debug.Assert(Form1.NitroAcProfileValues.Length == 4, "Nitro AC table size");
+            Debug.Assert(Form1.NitroAcProfileValues[3] == 0x04, "Nitro AC Perf must map to 0x04");
+            var nitroBloat = Form1.GetBloatServices(AcerChassisFamily.Nitro);
+            Debug.Assert(!nitroBloat.Contains("ASMSvc"), "Nitro must protect ASMSvc");
+            Debug.Assert(!nitroBloat.Contains("AcerServiceSvc"), "Nitro must protect AcerServiceSvc");
+            Debug.Assert(!nitroBloat.Contains("AcerDeviceEnablingServiceV2"), "Nitro must protect AcerDeviceEnablingServiceV2");
+            Debug.Assert(!nitroBloat.Contains("AcerDeviceEnablingService"), "Nitro must protect AcerDeviceEnablingService");
+            Debug.Assert(Array.Exists(OemServiceManager.NitroEssentialServices, s => s == "ASMSvc"), "OemServiceManager must include ASMSvc for Nitro");
+            Debug.Assert(Array.Exists(OemServiceManager.PredatorEssentialServices, s => s == "AcerLightingService"), "OemServiceManager must include AcerLightingService for Predator");
 
+            CheckOemServiceSecurity();
+            CheckBitmaskEngine();
             CheckPowerLineDebounce();
             CheckPredatorKeyHook();
             CheckDisplayCcdTechnology();
@@ -36,13 +48,97 @@ namespace PredatorControlApp
             CheckDebounceHelper();
         }
 
+        private static void CheckOemServiceSecurity()
+        {
+            // 1. Verify FindMatchingDriverFiles only returns files inside DriverStore
+            string driverStore = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "DriverStore", "FileRepository");
+            var files = OemServiceManager.FindMatchingDriverFiles(new[] { "sysmonitorservice.inf", "acerdeviceenablingservicecomponent.inf", "acerlightingservice.inf" });
+            foreach (var f in files)
+            {
+                Debug.Assert(Path.GetFullPath(f).StartsWith(Path.GetFullPath(driverStore), StringComparison.OrdinalIgnoreCase),
+                    $"Found driver file outside DriverStore: {f}");
+                Debug.Assert(!f.Contains("oem_drivers", StringComparison.OrdinalIgnoreCase) || f.StartsWith(driverStore, StringComparison.OrdinalIgnoreCase),
+                    "FindMatchingDriverFiles must never search local oem_drivers");
+            }
+
+            // 2. Verify VerifyFileAuthenticity rejects non-existent and untrusted files
+            bool nonExistentPass = OemServiceManager.VerifyFileAuthenticity(Path.Combine(driverStore, "nonexistent.exe"), out string reason1);
+            Debug.Assert(!nonExistentPass && !string.IsNullOrEmpty(reason1), "Non-existent file must fail verification");
+
+            string tempFile = Path.Combine(Path.GetTempPath(), "fake_service.exe");
+            File.WriteAllText(tempFile, "fake binary content");
+            try
+            {
+                bool outsidePass = OemServiceManager.VerifyFileAuthenticity(tempFile, out string reason2);
+                Debug.Assert(!outsidePass && reason2.Contains("outside DriverStore", StringComparison.OrdinalIgnoreCase),
+                    "File outside DriverStore must fail verification");
+            }
+            finally
+            {
+                try { File.Delete(tempFile); } catch { }
+            }
+
+            // 3. Verify that real DriverStore Acer binary passes verification if present
+            foreach (var f in files.Where(x => x.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)))
+            {
+                bool verified = OemServiceManager.VerifyFileAuthenticity(f, out string reason);
+                Debug.Assert(verified, $"Real DriverStore Acer binary should verify: {f} (failed: {reason})");
+            }
+
+            // 4. Verify UserConsentPrompt delegate can intercept and decline consent cleanly
+            bool promptInvoked = false;
+            OemServiceManager.UserConsentPrompt = (svc, path) =>
+            {
+                promptInvoked = true;
+                return false; // Decline consent
+            };
+            try
+            {
+                bool accepted = OemServiceManager.UserConsentPrompt("TestService", "TestBinary.exe");
+                Debug.Assert(!accepted && promptInvoked, "Consent prompt hook must intercept and decline");
+            }
+            finally
+            {
+                OemServiceManager.UserConsentPrompt = null;
+            }
+        }
+
+        private static void CheckBitmaskEngine()
+        {
+            AcerFeature f = AcerFeature.CoolBoost | AcerFeature.LcdOverdrive | AcerFeature.BootSound;
+            Debug.Assert((f & AcerFeature.CoolBoost) != 0, "CoolBoost must be set in bitmask");
+            Debug.Assert((f & AcerFeature.LcdOverdrive) != 0, "LcdOverdrive must be set in bitmask");
+            Debug.Assert((f & AcerFeature.BootSound) != 0, "BootSound must be set in bitmask");
+            Debug.Assert((f & AcerFeature.RgbLighting) == 0, "RgbLighting must not be set");
+
+            var caps = new HardwareCapabilities
+            {
+                ChassisFamily = AcerChassisFamily.Predator,
+                Features = f
+            };
+            Debug.Assert(caps.SupportsCoolBoost, "HardwareCapabilities.SupportsCoolBoost must be true");
+            Debug.Assert(caps.SupportsLcdOverdrive, "HardwareCapabilities.SupportsLcdOverdrive must be true");
+            Debug.Assert(caps.SupportsBootSound, "HardwareCapabilities.SupportsBootSound must be true");
+            Debug.Assert(!caps.SupportsRgbLighting, "HardwareCapabilities.SupportsRgbLighting must be false");
+        }
+
         private static void CheckPredatorKeyHook()
         {
-            Debug.Assert(PredatorKeyHook.IsPredatorKey(PredatorKeyHook.VK_LAUNCH_APP2, 0, 0), "VK_LAUNCH_APP2 must match Predator key");
-            Debug.Assert(PredatorKeyHook.IsModeKey(PredatorKeyHook.VK_F24, 0, 0), "VK_F24 must match Mode key");
-            Debug.Assert(PredatorKeyHook.IsModeKey(0, PredatorKeyHook.ACER_SCANCODE_MODE_KEY, 0), "Scan code 0x76 must match Mode key");
-            Debug.Assert(PredatorKeyHook.IsPredatorKey(0, PredatorKeyHook.ACER_SCANCODE_PREDATOR, 0), "Scan code 0x71 must match Predator key");
-            Debug.Assert(PredatorKeyHook.IsPredatorKey(0, PredatorKeyHook.ACER_SCANCODE_PREDATOR, PredatorKeyHook.LLKHF_EXTENDED), "Extended scan code 0x71 must match");
+            // Calculator key (VK_LAUNCH_APP2) and F24 must NOT match Predator/Mode key
+            Debug.Assert(!PredatorKeyHook.IsPredatorKey(PredatorKeyHook.VK_LAUNCH_APP2, 0, 0), "VK_LAUNCH_APP2 must not match Predator key");
+            Debug.Assert(!PredatorKeyHook.IsModeKey(PredatorKeyHook.VK_F24, 0, 0), "VK_F24 must not match Mode key");
+
+            // Scan codes alone (without VK) must not match
+            Debug.Assert(!PredatorKeyHook.IsModeKey(0, PredatorKeyHook.ACER_SCANCODE_MODE_KEY, 0), "Scan code 0x76 alone must not match Mode key");
+            Debug.Assert(!PredatorKeyHook.IsPredatorKey(0, PredatorKeyHook.ACER_SCANCODE_PREDATOR, 0), "Scan code 0x71 alone must not match Predator key");
+
+            // Valid VK + Scan Code pairs must match
+            Debug.Assert(PredatorKeyHook.IsModeKey(PredatorKeyHook.VK_OEM_PREDATOR, PredatorKeyHook.ACER_SCANCODE_MODE_KEY, 0), "VK_OEM_PREDATOR + Mode key scan code must match Mode key");
+            Debug.Assert(PredatorKeyHook.IsPredatorKey(PredatorKeyHook.VK_OEM_PREDATOR, PredatorKeyHook.ACER_SCANCODE_PREDATOR_ACTUAL, 0), "VK_OEM_PREDATOR + SC 0x75 must match Predator key");
+            Debug.Assert(PredatorKeyHook.IsPredatorKey(PredatorKeyHook.VK_OEM_PREDATOR, PredatorKeyHook.ACER_SCANCODE_PREDATOR_KEY, 0), "VK_OEM_PREDATOR + SC 0x71 must match Predator key");
+            Debug.Assert(PredatorKeyHook.IsPredatorKey(PredatorKeyHook.VK_LAUNCH_APP1, PredatorKeyHook.ACER_SCANCODE_NITRO_1, 0), "VK_LAUNCH_APP1 + SC 0x6E must match Nitro key");
+
+            // Unrelated keys must never match
             Debug.Assert(!PredatorKeyHook.IsPredatorKey(0x5B, 0x5B, 0), "Left Windows key must not match Predator key");
             Debug.Assert(!PredatorKeyHook.IsModeKey(0x5B, 0x5B, 0), "Left Windows key must not match Mode key");
             Debug.Assert(!PredatorKeyHook.IsPredatorKey(0x41, 0x1E, 0), "Key A must not match");
@@ -109,7 +205,7 @@ namespace PredatorControlApp
         [Conditional("DEBUG")]
         private static void CheckUpdater()
         {
-            Debug.Assert(Updater.TryParseTag("v1.3.1", out var tag) && tag == new Version(1, 3, 1), "tag must parse without the v");
+            Debug.Assert(Updater.TryParseTag("v1.3.2", out var tag) && tag == new Version(1, 3, 2), "tag must parse without the v");
             Debug.Assert(!Updater.TryParseTag("nightly", out _), "junk tags must be rejected");
             Debug.Assert(Updater.Current.Revision == -1, "Current must be Major.Minor.Build so tags compare cleanly");
 

@@ -1,0 +1,30 @@
+#!/bin/sh
+# Pre-commit hook: scan staged files for secrets and forbidden transcript/export files
+
+echo "[pre-commit] Scanning staged files for secrets and private transcripts..."
+
+# 1. Block forbidden files
+FORBIDDEN=$(git diff --cached --name-only | grep -E '(_EXPORT\.md|TRANSCRIPT|CONVERSATION_EXPORT|\.secret|\.key|\.token|\.env)')
+if [ -n "$FORBIDDEN" ]; then
+    echo "ERROR: Attempting to commit forbidden private transcript or secret file:"
+    echo "$FORBIDDEN"
+    echo "Aborting commit. Please unstage these files."
+    exit 1
+fi
+
+# 2. Check for gitleaks or trufflehog if installed
+if command -v gitleaks >/dev/null 2>&1; then
+    gitleaks protect --staged --verbose
+    if [ $? -ne 0 ]; then
+        echo "ERROR: gitleaks detected secrets in staged changes. Aborting commit."
+        exit 1
+    fi
+elif command -v trufflehog >/dev/null 2>&1; then
+    trufflehog git file://. --since-commit HEAD --fail
+    if [ $? -ne 0 ]; then
+        echo "ERROR: trufflehog detected secrets in staged changes. Aborting commit."
+        exit 1
+    fi
+fi
+
+exit 0

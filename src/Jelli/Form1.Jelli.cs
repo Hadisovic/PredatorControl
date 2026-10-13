@@ -37,48 +37,79 @@ public partial class Form1 : IJelliBackend
     {
         _jelliActions.Clear();
         var sections = new List<JelliSection>();
-        JelliControl Button(string id, string label, PredatorButton b) {
-            _jelliActions[id] = _ => { if (!b.Enabled) throw new InvalidOperationException("This action is currently unavailable."); b.InvokeAction(); };
-            return new(id, label, "button", b.IsActive, b.Enabled, Accent: b.ColorIndicator is Color color ? ColorTranslator.ToHtml(color) : null);
+        JelliControl Button(string id, string label, PredatorButton? b) {
+            _jelliActions[id] = _ => { if (b == null || !b.Enabled) throw new InvalidOperationException("This action is currently unavailable."); b.InvokeAction(); };
+            return new(id, label, "button", b?.IsActive ?? false, b?.Enabled ?? false, Accent: b?.ColorIndicator is Color color ? ColorTranslator.ToHtml(color) : null);
         }
-        JelliControl Toggle(string id, string label, PredatorToggle b) {
-            _jelliActions[id] = d => { if (!b.Enabled) throw new InvalidOperationException("This feature is unavailable."); b.Checked = d.GetBoolean(); };
-            return new(id, label, "toggle", b.Checked, b.Enabled);
+        JelliControl Toggle(string id, string label, PredatorToggle? b) {
+            _jelliActions[id] = d => { if (b == null || !b.Enabled) throw new InvalidOperationException("This feature is unavailable."); b.Checked = d.GetBoolean(); };
+            return new(id, label, "toggle", b?.Checked ?? false, b?.Enabled ?? false);
         }
-        JelliControl Select(string id, string label, PredatorDropDown b) {
+        JelliControl Select(string id, string label, PredatorDropDown? b) {
             _jelliActions[id] = d => {
                 int i = d.GetInt32();
-                if (!b.Enabled || i < 0 || i >= b.Items.Count) throw new ArgumentException("Unavailable selection.");
+                if (b == null || !b.Enabled || i < 0 || i >= b.Items.Count) throw new ArgumentException("Unavailable selection.");
                 b.SelectedIndex = i;
             };
-            return new(id, label, "select", b.SelectedIndex, b.Enabled,
-                b.Items.Select((v, i) => new JelliChoice(v.ToString() ?? "", i)).ToArray());
+            return new(id, label, "select", b?.SelectedIndex ?? 0, b?.Enabled ?? false,
+                b?.Items.Cast<object>().Select((v, i) => new JelliChoice(v.ToString() ?? "", i)).ToArray() ?? Array.Empty<JelliChoice>());
         }
-        JelliControl Range(string id, string label, PredatorSlider b) {
+        JelliControl Range(string id, string label, PredatorSlider? b) {
             _jelliActions[id] = d => {
                 int v = d.GetInt32();
-                if (!b.Enabled || v < b.Minimum || v > b.Maximum) throw new ArgumentException("Value outside the available range.");
+                if (b == null || !b.Enabled || v < b.Minimum || v > b.Maximum) throw new ArgumentException("Value outside the available range.");
                 b.CommitValue(v);
             };
-            return new(id, label, "range", b.Value, b.Enabled, Min: b.Minimum, Max: b.Maximum);
+            return new(id, label, "range", b?.Value ?? 0, b?.Enabled ?? false, Min: b?.Minimum ?? 0, Max: b?.Maximum ?? 100);
         }
-        sections.Add(new("power", "Performance", [
+        var powerControls = new List<JelliControl>
+        {
+            Button("power.quiet", "Quiet", _btnQuiet),
+            Button("power.balanced", _wmi.Capabilities.ChassisFamily == AcerChassisFamily.Nitro ? "Default" : "Balanced", _btnBalanced),
+            Button("power.performance", "Performance", _btnPerform)
+        };
+        if (_wmi.Capabilities.ChassisFamily != AcerChassisFamily.Nitro)
+        {
+            if (_btnTurbo != null) powerControls.Add(Button("power.turbo", "Turbo", _btnTurbo));
+            if (_btnEco != null) powerControls.Add(Button("power.eco", "Eco", _btnEco));
+        }
+        powerControls.Add(Select("power.ac", "When plugged in", _cboAcProfile));
+        powerControls.Add(Select("power.battery", "On battery", _cboBatteryProfile));
+        sections.Add(new("power", "Performance", powerControls.ToArray()));
+        /*
             Button("power.quiet", "Quiet", _btnQuiet), Button("power.balanced", "Balanced", _btnBalanced),
             Button("power.performance", "Performance", _btnPerform), Button("power.turbo", "Turbo", _btnTurbo),
             Button("power.eco", "Eco", _btnEco), Select("power.ac", "When plugged in", _cboAcProfile),
-            Select("power.battery", "On battery", _cboBatteryProfile)]));
+        */
         var fans = new List<JelliControl> { Button("fans.auto", "Auto", _btnAutoFan), Button("fans.max", "Maximum", _btnMaxFan), Button("fans.custom", "Custom", _btnCustomFan) };
-        if (GetCurrentFanByte() == 3) fans.AddRange([
-            Button("fans.fixed", "Fixed speed", _btnFixedSpeed), Button("fans.curve", "Edit fan curve ↗", _btnFanCurve),
-            Range("fans.cpu", "CPU fan", _cpuFanSlider), Range("fans.gpu", "GPU fan", _gpuFanSlider)]);
+        if (_wmi.Capabilities.SupportsCoolBoost && _switchCoolBoost != null)
+        {
+            fans.Add(Toggle("fans.coolboost", "Acer CoolBoost", _switchCoolBoost));
+        }
+        if (GetCurrentFanByte() == 3)
+        {
+            fans.Add(Button("fans.fixed", "Fixed speed", _btnFixedSpeed));
+            fans.Add(Button("fans.curve", "Edit fan curve ↗", _btnFanCurve));
+            fans.Add(Range("fans.cpu", "CPU fan", _cpuFanSlider));
+            fans.Add(Range("fans.gpu", "GPU fan", _gpuFanSlider));
+            if (_wmi.HasAuxFan && _auxFanSlider != null)
+                fans.Add(Range("fans.aux", "Aux fan", _auxFanSlider));
+        }
         sections.Add(new("fans", "Cooling", fans.ToArray()));
-        var gpu = new List<JelliControl>();
+        if (_wmi.Capabilities.SupportsGpuMux)
+        {
+            var gpu = new List<JelliControl>();
         if ((_gpuCapability & 1) != 0) gpu.Add(Button("gpu.hybrid", "Hybrid", _btnGpuOptimus));
         if ((_gpuCapability & 2) != 0) gpu.Add(Button("gpu.discrete", "Discrete", _btnGpuDiscrete));
         if ((_gpuCapability & 4) != 0) gpu.Add(Button("gpu.auto", "Automatic", _btnGpuAuto));
-        sections.Add(new("gpu", "GPU · restart required", gpu.ToArray()));
+            if (gpu.Count > 0) sections.Add(new("gpu", "GPU · restart required", gpu.ToArray()));
+        }
         var display = new List<JelliControl>();
-        if (_internalDisplayGdiName != null) display.AddRange([Button("display.60", "60 Hz", _btn60Hz), Button("display.max", $"{_maxHz} Hz", _btnMaxHz)]);
+        if (_internalDisplayGdiName != null)
+        {
+            if (_btn60Hz != null) display.Add(Button("display.60", "60 Hz", _btn60Hz));
+            if (_maxHz > 60 && _btnMaxHz != null) display.Add(Button("display.max", $"{_maxHz} Hz", _btnMaxHz));
+        }
         foreach (var monitor in _externalMonitors) {
             string id = "display.external." + monitor.GdiName;
             _jelliActions[id] = d => {
@@ -88,14 +119,44 @@ public partial class Form1 : IJelliBackend
             };
             display.Add(new(id, monitor.FriendlyName, "select", monitor.CurrentHz, Choices: monitor.SupportedHz.Select(hz => new JelliChoice($"{hz} Hz", hz)).ToArray()));
         }
-        display.Add(Toggle("display.overdrive", "LCD overdrive", _switchLcdOverdrive));
+        if (_wmi.Capabilities.SupportsLcdOverdrive && _switchLcdOverdrive != null)
+        {
+            display.Add(Toggle("display.overdrive", "LCD overdrive", _switchLcdOverdrive));
+        }
         sections.Add(new("display", "Displays", display.ToArray()));
         _jelliActions["battery.limit"] = d => {
             bool wanted = d.GetBoolean(); ApplyBatteryLimit(wanted);
             if (_switchBatteryLimit.Checked != wanted) throw new InvalidOperationException("The backend could not apply the battery charge limit.");
         };
-        sections.Add(new("battery", "Battery care", [new("battery.limit", "Stop charging at 80%", "toggle", _switchBatteryLimit.Checked)]));
-        var rgb = new List<JelliControl> { Select("rgb.mode", "Lighting effect", _rgbDropDown) };
+        _jelliActions["battery.report"] = _ => BatteryHealthMonitor.OpenBatteryReport();
+        _jelliActions["battery.health"] = _ => BatteryHealthMonitor.OpenBatteryReport();
+
+        var batteryControls = new List<JelliControl>
+        {
+            new("battery.limit", "Stop charging at 80%", "toggle", _switchBatteryLimit.Checked)
+        };
+
+        var batInfo = BatteryHealthMonitor.GetBatteryHealth();
+        if (batInfo != null)
+        {
+            double healthPct = Math.Max(0.0, Math.Round(100.0 - batInfo.WearLevelPercent, 1));
+            string healthLabel = $"Health: {healthPct:0.#}% ({batInfo.HealthStatus}) · {batInfo.FullChargeCapacityMWh / 1000.0:0.0} Wh / {batInfo.DesignCapacityMWh / 1000.0:0.0} Wh";
+            batteryControls.Add(new("battery.health", healthLabel, "button", false, Enabled: true));
+        }
+
+        batteryControls.Add(new("battery.report", "📊 View Full Battery Report ↗", "button", false, Enabled: true));
+
+        sections.Add(new("battery", "Battery care", batteryControls.ToArray()));
+        if (!_wmi.Capabilities.SupportsRgbLighting)
+        {
+            var mono = new List<JelliControl>();
+            if (_brightnessSlider != null) mono.Add(Range("rgb.brightness", "Brightness", _brightnessSlider));
+            if (_switchBacklight30s != null) mono.Add(Toggle("rgb.sleep", "Backlight sleeps after 30 seconds", _switchBacklight30s));
+            sections.Add(new("rgb", "Keyboard backlight (Red)", mono.ToArray()));
+        }
+        else
+        {
+            var rgb = new List<JelliControl> { Select("rgb.mode", "Lighting effect", _rgbDropDown) };
         rgb.Add(Button("rgb.all", "All zones", _btnAllZones));
         for (int i = 0; i < 4; i++) rgb.Add(Button($"rgb.zone{i}", $"Zone {i + 1}", _btnZones[i]));
         _jelliActions["rgb.color"] = d => {
@@ -172,7 +233,8 @@ public partial class Form1 : IJelliBackend
         };
 
         rgb.AddRange([Range("rgb.brightness", "Brightness", _brightnessSlider), Range("rgb.speed", "Effect speed", _speedSlider), Toggle("rgb.sleep", "Backlight sleeps after 30 seconds", _switchBacklight30s)]);
-        sections.Add(new("rgb", "Keyboard light", rgb.ToArray()));
+            sections.Add(new("rgb", "Keyboard light", rgb.ToArray()));
+        }
                 _jelliActions["overlay.mode"] = d => {
             string m = d.GetString() ?? "default";
             OverlayMode mode = m.ToLowerInvariant() switch { "light" => OverlayMode.Light, "full" => OverlayMode.Full, "complete" => OverlayMode.Complete, _ => OverlayMode.Default };
@@ -186,10 +248,30 @@ public partial class Form1 : IJelliBackend
             if (InvokeRequired) BeginInvoke(new Action(OpenOverlaySettings));
             else OpenOverlaySettings();
         };
-        sections.Add(new("hardware", "Hardware", [
-            Toggle("hardware.keyLock", "Lock Windows & Menu keys", _switchWinKeyLock),
-            Button("overlay.settings", "Overlay Settings ↗", _btnOverlaySettings)
-        ]));
+        var hwControls = new List<JelliControl>
+        {
+            Toggle("hardware.keyLock", "Lock Windows & Menu keys", _switchWinKeyLock)
+        };
+        if (_switchBootSound != null)
+            hwControls.Add(Toggle("hardware.bootsound", "Startup Animation & Sound", _switchBootSound));
+        if (_switchUsbCharging != null)
+            hwControls.Add(Toggle("hardware.usbcharging", "Power-off USB charging", _switchUsbCharging));
+        if (_switchAutoCoolBoost != null)
+            hwControls.Add(Toggle("hardware.autocoolboost", "Auto-CoolBoost on Perf / Turbo", _switchAutoCoolBoost));
+
+        // Hardware Key Actions (Image 2)
+        if (_cboTurboAction != null)
+            hwControls.Add(Select("hardware.turbokey", "Turbo / Mode Key", _cboTurboAction));
+        if (_cboPredatorAction != null)
+            hwControls.Add(Select("hardware.predatorkey", _wmi.ChassisFamily == AcerChassisFamily.Nitro ? "Nitro 'N' Key" : "Predator Key", _cboPredatorAction));
+
+        // System Optimization (Image 3)
+        if (_switchOptimizeServices != null)
+            hwControls.Add(Toggle("hardware.optimizeServices", "Optimize Acer Services (Disable OEM Bloatware)", _switchOptimizeServices));
+        if (_btnAutoRepair != null)
+            hwControls.Add(Button("hardware.autoRepairServices", "\uD83D\uDEE0 Auto-Repair OEM Services", _btnAutoRepair));
+
+        sections.Add(new("hardware", "Hardware", hwControls.ToArray()));
         sections.Add(new("games", "Game Sync", [Toggle("games.enabled", "Apply profiles when games launch", _switchGameSync), Button("games.configure", "Configure game profiles ↗", _btnConfigureGames)]));
         sections.Add(new("app", "Application", [Toggle("app.startup", "Start with Windows", _switchStartWithWindows), Button("app.updates", "Check for updates", _btnCheckUpdates),
             Button("app.teal", "Teal", _btnThemeTeal), Button("app.crimson", "Crimson", _btnThemeCrimson), Button("app.oled", "OLED", _btnThemeOled)]));
@@ -200,14 +282,31 @@ public partial class Form1 : IJelliBackend
             return new JelliMenu(id, item.Text?.Trim() ?? "", item.Enabled, item.Checked, Menu(item.DropDownItems, id + "."));
         }).ToArray();
         return new {
-            telemetry = _jelliTelemetry, powerMode = _lblPowerStatus.Text, fanMode = _lblFanStatus.Text,
-            gpuMode = _activeGpuModeBtn?.Text, gpuNotice = _lblGpuRestartNotice.Text,
+            telemetry = _jelliTelemetry,
+            powerMode = _lblPowerStatus?.Text ?? "",
+            fanMode = _lblFanStatus?.Text ?? "",
+            gpuMode = _activeGpuModeBtn?.Text,
+            gpuNotice = _lblGpuRestartNotice?.Text,
             fps = _overlayForm?.Visible == true ? _overlayForm.CurrentFps : null,
-            overlay = _overlayForm?.Visible == true, sections, menu = Menu(_trayMenu.Items, "menu."), settings = settings with { JelliEnabled = !_jelliFallback },
+            overlay = _overlayForm?.Visible == true,
+            sections,
+            menu = _trayMenu != null ? Menu(_trayMenu.Items, "menu.") : Array.Empty<JelliMenu>(),
+            settings = settings with { JelliEnabled = !_jelliFallback },
             monitors = Screen.AllScreens.Select(s => new { id = s.DeviceName, label = s.DeviceName + (s.Primary ? " (primary)" : "") }),
-            version = Updater.CurrentText, doubleClickMs = SystemInformation.DoubleClickTime,
-            gameSyncStatus = _lblGameSyncStatus.Text,
+            version = Updater.CurrentText,
+            doubleClickMs = SystemInformation.DoubleClickTime,
+            gameSyncStatus = _lblGameSyncStatus?.Text ?? "",
+            batteryNotice = GetBatteryNotice(),
         };
+    }
+
+    private static string GetBatteryNotice()
+    {
+        var info = BatteryHealthMonitor.GetBatteryHealth();
+        if (info == null) return string.Empty;
+        string cycleText = info.CycleCount > 0 ? $" • {info.CycleCount} cycles" : "";
+        double healthPct = Math.Max(0.0, Math.Round(100.0 - info.WearLevelPercent, 1));
+        return $"Health: {healthPct:0.#}% ({info.HealthStatus}) • Full: {info.FullChargeCapacityMWh:N0} mWh / Design: {info.DesignCapacityMWh:N0} mWh{cycleText} • Wear: {info.WearLevelPercent:0.#}%";
     }
 
     internal void JelliAction(string id, JsonElement data)

@@ -96,7 +96,7 @@ export function Settings({state: s}: {state: State}) {
           </select>
         </label>
       ))}
-      {toggle('Sync keyboard RGB with Jelli', 'syncRgb')}
+      {s.keyboard?.supportsRgb && toggle('Sync keyboard RGB with Jelli', 'syncRgb')}
       <p className="footnote">Temporary color sync. Manual lighting is restored when disabled. Game Sync keeps priority.</p>
     </section>
 

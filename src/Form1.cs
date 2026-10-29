@@ -461,6 +461,7 @@ namespace PredatorControlApp
                 // AcerLightingService re-initializes 1-8 seconds after user logon and writes its factory
                 // preset (Amber Breathing) back to LightingProfile.ini. We re-assert the user's saved
                 // profile at 1s, 3s, 6s, and 10s to guarantee we win the race regardless of service timing.
+                if (_wmi.Keyboard.SupportsRgb && LoadState("KeyboardLightingConfigured", 0) == 1)
                 _ = Task.Run(async () =>
                 {
                     int[] delays = { 1000, 3000, 6000, 10000 };
@@ -1966,28 +1967,44 @@ namespace PredatorControlApp
             {
                 MakeSectionHeader("KEYBOARD BACKLIGHT", pad, y);
                 y += S(24);
-                MakeLabel("Monochrome Red Backlight Detected (Single-Color)", pad, y, FontBody, Color.FromArgb(140, 140, 155));
-                y += S(24);
-
-                _lblBrightHdr = MakeLabel("KEYBOARD BRIGHTNESS: 100%", pad, y, FontSectionHeader, Color.FromArgb(120, 120, 135));
-                y += S(24);
-                _brightnessSlider = new PredatorSlider { Location = new Point(pad, y), Size = new Size(contentW, S(28)), Minimum = 0, Maximum = 100, Value = 100 };
-                _contentPanel.Controls.Add(_brightnessSlider);
-
-                _brightnessSlider.ValueChanged += (s, e) =>
+                var keyboard = _wmi.Keyboard;
+                MakeLabel(keyboard.SupportsPower ? "On/off keyboard backlight" : "Keyboard type unverified", pad, y, FontBody, Color.FromArgb(140, 140, 155));
+                y += S(28);
+                _lblKeyboardPower = MakeLabel("Keyboard backlight (unverified)", pad, y, FontBody, Color.FromArgb(180, 190, 200));
+                _switchKeyboardPower = new PredatorToggle
                 {
-                    _lblBrightHdr.Text = $"KEYBOARD BRIGHTNESS: {_brightnessSlider.Value}%";
-                    DebounceHelper.Debounce("BacklightBrightnessLive", () =>
-                    {
-                        _wmi.SetBrightness((byte)_brightnessSlider.Value);
-                    }, 40);
+                    Location = new Point(ClientSize.Width - pad - S(48), y),
+                    Size = new Size(S(48), switchH), Enabled = keyboard.SupportsPower
                 };
-                _brightnessSlider.ValueCommitted += (s, e) =>
+                _contentPanel.Controls.Add(_switchKeyboardPower);
+                _switchKeyboardPower.CheckedChanged += async (_, _) =>
                 {
-                    _wmi.SetBrightness((byte)_brightnessSlider.Value);
-                    SaveState("Brightness", _brightnessSlider.Value);
+                    if (_restoringLighting || _updatingKeyboard) return;
+                    await ChangeKeyboardFromClassicAsync(true, _switchKeyboardPower.Checked);
                 };
+                y += S(28);
+                // Legacy RGB snapshot fields remain usable without presenting a brightness slider.
+                _brightnessSlider = new PredatorSlider { Minimum = 0, Maximum = 100, Value = 100 };
 
+                var profileDropDown = new PredatorDropDown { Location = new Point(pad, y), Size = new Size(contentW, S(34)) };
+                profileDropDown.Items.AddRange(new string[] { "Automatic keyboard type", "On/off backlight", "RGB keyboard", "No backlight" });
+                using (var profileKey = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\PredatorControl"))
+                    profileDropDown.SelectedIndex = Math.Max(0, Array.IndexOf(new[] { "auto", "binary", "rgb", "none" }, profileKey?.GetValue("KeyboardProfile") as string ?? "auto"));
+                if (_wmi.Keyboard.FixedColor != null)
+                {
+                    profileDropDown.Enabled = false;
+                    profileDropDown.Items.Clear();
+                    profileDropDown.Items.Add("Nitro · Red backlight · On / Off");
+                    profileDropDown.SelectedIndex = 0;
+                }
+                profileDropDown.SelectedIndexChanged += (_, _) =>
+                {
+                    using var profileKey = Registry.CurrentUser.CreateSubKey(@"SOFTWARE\PredatorControl");
+                    profileKey.SetValue("KeyboardProfile", new[] { "auto", "binary", "rgb", "none" }[profileDropDown.SelectedIndex]);
+                    MessageBox.Show(this, "Restart Predator Control to apply the keyboard type. No hardware command was sent.", "Keyboard type");
+                };
+                _contentPanel.Controls.Add(profileDropDown);
+                y += S(44);
                 _rgbDropDown = new PredatorDropDown();
                 foreach (var name in RgbModeNames) _rgbDropDown.Items.Add(name);
                 _rgbDropDown.SelectedIndex = 0;
@@ -2097,6 +2114,7 @@ namespace PredatorControlApp
 
             _brightnessSlider.ValueChanged += (s, e) =>
             {
+                if (_restoringLighting) return;
                 _lblBrightHdr.Text = $"BRIGHTNESS: {_brightnessSlider.Value}%";
                 DebounceHelper.Debounce("RgbBrightnessLive", () =>
                 {
@@ -2111,6 +2129,7 @@ namespace PredatorControlApp
 
             _speedSlider.ValueChanged += (s, e) =>
             {
+                if (_restoringLighting) return;
                 _lblSpeedHdr.Text = $"EFFECT SPEED: {_speedSlider.Value}%";
                 DebounceHelper.Debounce("RgbSpeedLive", () =>
                 {
@@ -2125,7 +2144,7 @@ namespace PredatorControlApp
 
             _rgbDropDown.SelectedIndexChanged += (s, e) =>
             {
-                if (_isGameSyncOverriding) return;
+                if (_isGameSyncOverriding || _restoringLighting) return;
                 int mode = _rgbDropDown.SelectedIndex;
                 ApplyRgbModeFromDropdown(mode);
             };
@@ -2144,14 +2163,11 @@ namespace PredatorControlApp
             };
             _contentPanel.Controls.Add(_switchBacklight30s);
 
-            _switchBacklight30s.CheckedChanged += (s, e) =>
+            _switchBacklight30s.Enabled = _wmi.Keyboard.SupportsIdleTimeout;
+            _switchBacklight30s.CheckedChanged += async (_, _) =>
             {
-                bool enable = _switchBacklight30s.Checked;
-                SaveState("Backlight30s", enable ? 1 : 0);
-                Task.Run(() =>
-                {
-                    try { _wmi.SetBacklight30s(enable); } catch { }
-                });
+                if (_restoringLighting || _updatingKeyboard) return;
+                await ChangeKeyboardFromClassicAsync(false, _switchBacklight30s.Checked);
             };
 
             // SYSTEM & HARDWARE CONTROLS
@@ -2384,7 +2400,7 @@ namespace PredatorControlApp
             _btnConfigureGames = MakeButton("\uD83C\uDFAE  Configure Executables", pad, y, contentW, btnH);
             _btnConfigureGames.Click += (s, e) =>
             {
-                using var form = new GameSyncForm(_gameSync, _maxHz);
+                using var form = new GameSyncForm(_gameSync, _maxHz, _wmi.Keyboard.SupportsRgb);
                 form.ShowDialog(this);
             };
 
@@ -2508,6 +2524,7 @@ namespace PredatorControlApp
 
         private void ApplyPresetColor(Color c)
         {
+            if (!_wmi.Keyboard.SupportsRgb || _restoringLighting) return;
             _colorPicker.Color = c;
 
             // Only switch to Static if currently in a mode that doesn't support custom colors (Neon, Wave, Off)
@@ -2834,6 +2851,7 @@ namespace PredatorControlApp
             PlaceToggle(_switchCoolBoost);
             PlaceToggle(_switchLcdOverdrive);
             PlaceToggle(_switchBacklight30s);
+            PlaceToggle(_switchKeyboardPower);
             PlaceToggle(_switchBatteryLimit);
             PlaceToggle(_switchStartWithWindows);
             PlaceToggle(_switchWinKeyLock);
@@ -3537,6 +3555,7 @@ namespace PredatorControlApp
 
         private void ApplyRgbModeFromDropdown(int mode)
         {
+            if (!_wmi.Keyboard.SupportsRgb || _restoringLighting) return;
             CheckUntestedChassisWarning();
             UpdateRgbControlsState(mode);
 
@@ -3714,7 +3733,7 @@ namespace PredatorControlApp
             await Task.Delay(500);
             if (IsDisposed) return;
 
-            if (profile.RgbMode >= 0)
+            if (_wmi.Keyboard.SupportsRgb && profile.RgbMode >= 0)
             {
                 int mode = Math.Clamp(profile.RgbMode, 0, 8);
                 int brightVal = profile.RgbBrightness >= 0 ? Math.Clamp(profile.RgbBrightness, 0, 100) : _brightnessSlider.Value;
@@ -3798,6 +3817,7 @@ namespace PredatorControlApp
             await Task.Delay(500);
             if (IsDisposed) return;
 
+            if (!_wmi.Keyboard.SupportsRgb) return;
             int rgbMode = Math.Clamp(snap.RgbMode, 0, 8);
             int bright = Math.Clamp(snap.RgbBrightness, 0, 100);
             int speed = Math.Clamp(snap.RgbSpeed, 1, 100);
@@ -3823,6 +3843,9 @@ namespace PredatorControlApp
         private void SaveState(string name, int value)
         {
             if (_isGameSyncOverriding) return;
+            if (!_restoringLighting && _wmi.Keyboard.SupportsRgb &&
+                (name is "RGB_Mode" or "Brightness" or "RGB_Speed" || name.StartsWith("ZoneColor_", StringComparison.Ordinal)))
+                PersistKeyboardSetting("KeyboardLightingConfigured", 1);
             DebounceHelper.Debounce($"State_{name}", () =>
             {
                 try
@@ -4017,17 +4040,21 @@ namespace PredatorControlApp
                     _btnAllZones.ColorIndicator = _currentZoneColors[0];
 
                 int clampedMode = Math.Clamp(savedRgbMode, 0, 8);
-                ApplyRgbModeFromDropdown(clampedMode);
+                if (_wmi.Keyboard.SupportsRgb) _rgbDropDown.SelectedIndex = clampedMode;
+                // UI values may load, but only explicit 1.4+ lighting preferences are restored.
+                RestoreKeyboardPreferences();
 
                 // Restore active RGB profile if in Static mode
-                if (clampedMode == 0)
+                if (_wmi.Keyboard.SupportsRgb && LoadState("KeyboardLightingConfigured", 0) == 1 && clampedMode == 0)
                 {
                     string activeProfName = RgbProfileManager.GetActiveProfile();
                     var allProfiles = RgbProfileManager.LoadProfiles();
                     var activeProf = allProfiles.FirstOrDefault(p => string.Equals(p.Name, activeProfName, StringComparison.OrdinalIgnoreCase));
                     if (activeProf != null)
                     {
-                        ApplyRgbProfile(activeProf);
+                        _restoringLighting = false;
+                        try { ApplyRgbProfile(activeProf); }
+                        finally { _restoringLighting = true; }
                     }
                 }
 
@@ -4035,24 +4062,7 @@ namespace PredatorControlApp
                 if (_btnCustomColor != null)
                     _btnCustomColor.ColorIndicator = activeColor;
 
-                try
-                {
-                    using var hklmKey = Registry.LocalMachine.CreateSubKey(@"SOFTWARE\PredatorControl");
-                    if (hklmKey != null)
-                    {
-                        hklmKey.SetValue("RGB_Mode", clampedMode);
-                        hklmKey.SetValue("Brightness", savedBrightness);
-                        hklmKey.SetValue("RGB_Speed", savedSpeed);
-                        hklmKey.SetValue("RGB_R", savedR);
-                        hklmKey.SetValue("RGB_G", savedG);
-                        hklmKey.SetValue("RGB_B", savedB);
-                        for (int z = 0; z < 4; z++)
-                        {
-                            hklmKey.SetValue($"ZoneColor_{z}", _currentZoneColors[z].ToArgb());
-                        }
-                    }
-                }
-                catch { }
+                // Do not mirror synthetic RGB defaults into machine-wide startup settings.
 
                 if (_wmi.IsBatteryControlSupported())
                 {
@@ -4088,14 +4098,7 @@ namespace PredatorControlApp
                 if (_switchLcdOverdrive != null) _switchLcdOverdrive.Checked = (savedLcdOverdrive == 1);
                 Task.Run(() => { try { _wmi.SetLcdOverdrive(savedLcdOverdrive == 1); } catch { } });
 
-                // Backlight 30s Sleep
-                int savedBacklight30s = GetInt(key, "Backlight30s", -1, 0, 1);
-                if (savedBacklight30s == -1)
-                {
-                    try { savedBacklight30s = _wmi.GetBacklight30s() ? 1 : 0; } catch { savedBacklight30s = 1; }
-                }
-                if (_switchBacklight30s != null) _switchBacklight30s.Checked = (savedBacklight30s == 1);
-                Task.Run(() => { try { _wmi.SetBacklight30s(savedBacklight30s == 1); } catch { } });
+                UpdateKeyboardSwitches();
 
                 // Gaming Overlay HUD
                 int savedOverlay = GetInt(key, "OverlayEnabled", 0, 0, 1);
@@ -4271,6 +4274,7 @@ namespace PredatorControlApp
                 });
             }
             catch { }
+            finally { _restoringLighting = false; }
         }
 
         #endregion
@@ -4733,6 +4737,7 @@ namespace PredatorControlApp
 
         internal void ApplyRgbProfile(RgbProfile profile)
         {
+            if (!_wmi.Keyboard.SupportsRgb || _restoringLighting) return;
             if (profile == null) return;
             _isApplyingRgbProfile = true;
             try

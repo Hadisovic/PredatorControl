@@ -1,8 +1,8 @@
-import type { State, Preferences, Surface } from './types'
+import type { State, Preferences, Surface, OperationResult } from './types'
 type Actions = {
   connect: {data: null; result: State}; surface: {data: Surface; result: void};
   move: {data: {x: number; y: number}; result: void}; savePosition: {data: null; result: void};
-  control: {data: {id: string; value: unknown}; result: void}; settings: {data: Preferences; result: void};
+  control: {data: {id: string; value: unknown}; result: OperationResult | null}; settings: {data: Preferences; result: void};
   color: {data: {r: number; g: number; b: number}; result: void}; overlay: {data: boolean; result: void};
   legacy: {data: null; result: void}; exit: {data: null; result: void};
   'overlay.settings': {data: null; result: void}

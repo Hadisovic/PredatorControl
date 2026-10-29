@@ -49,14 +49,17 @@ namespace PredatorControlApp
         private static readonly byte[] PowerModeValues = { 0x00, 0x01, 0x04, 0x05, 0x06 };
         private static readonly string[] FanModeNames = { "Auto", "Max", "Custom" };
         private static readonly byte[] FanModeValues = { 0x01, 0x02, 0x03 };
+        private readonly bool _supportsRgb;
+
         private static readonly string[] RgbModeNames = { "Don't Change", "Static", "Breathing", "Neon", "Wave", "Shifting", "Zoom", "Meteor", "Twinkling" };
 
         #endregion
 
         #region Constructor
 
-        public GameSyncForm(GameSyncController controller, int maxHz)
+        public GameSyncForm(GameSyncController controller, int maxHz, bool supportsRgb)
         {
+            _supportsRgb = supportsRgb;
             _controller = controller;
             _maxHz = maxHz;
 
@@ -243,6 +246,7 @@ namespace PredatorControlApp
             _cboBattery = MakeComboIn(_pnlEditor, new[] { "Don't Change", "Full Charge (100%)", "Limit to 80% (Health)" }, 0, ey, editorW);
             ey += sectionGap;
 
+            int lightingStart = ey;
             MakeLabelIn(_pnlEditor, "RGB KEYBOARD", 0, ey, FontSection, HeaderColor);
             ey += 24;
             _cboRgbMode = MakeComboIn(_pnlEditor, RgbModeNames, 0, ey, editorW);
@@ -290,6 +294,12 @@ namespace PredatorControlApp
 
             ey += sectionGap;
 
+            if (!_supportsRgb)
+            {
+                foreach (Control control in _pnlEditor.Controls)
+                    if (control.Top >= lightingStart) control.Visible = false;
+                ey = lightingStart;
+            }
             int btnW = (editorW - 16) / 2;
             _btnSave = new PredatorButton { Text = "💾  Save Profile", Location = new Point(0, ey), Size = new Size(btnW, 38) };
             _pnlEditor.Controls.Add(_btnSave);

@@ -255,7 +255,7 @@ internal sealed class JelliHostForm : Form
         if (_ready && !_gaming) Send(new { version = 1, type = "state", data = _backend.State(_settings) });
     }
 
-    private void Receive(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
+    private async void Receive(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
         if (!e.Source.StartsWith(Origin, StringComparison.Ordinal) || e.WebMessageAsJson.Length > 16384) return;
         JelliRequest? request = null;
@@ -290,12 +290,14 @@ internal sealed class JelliHostForm : Form
                     if (id.StartsWith("rgb.", StringComparison.Ordinal) && _settings.SyncRgb) DisableSync();
                     if (_actionInProgress) throw new InvalidOperationException("Complete the current hardware dialog first.");
                     _actionInProgress = true;
-                    try { _backend.Action(id, request.Data.GetProperty("value")); }
+                    try { result = await _backend.Action(id, request.Data.GetProperty("value")); }
                     finally { _actionInProgress = false; }
                     PublishState();
                     break;
                 case "settings":
                     var updated = JelliSettings.Validate(request.Data.Deserialize<JelliSettings>(JelliSettings.Json) ?? throw new ArgumentException("Missing preferences."));
+                    if (updated.SyncRgb)
+                        await _backend.Action("keyboard.sync", JsonSerializer.SerializeToElement(true));
                     if (_settings.SyncRgb && !updated.SyncRgb) DisableSync();
                     bool enabledChanged = _settings.JelliEnabled != updated.JelliEnabled;
                     _settings = updated with { X = _anchor.X, Y = _anchor.Y };

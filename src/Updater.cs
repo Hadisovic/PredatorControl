@@ -28,6 +28,11 @@ namespace PredatorControlApp
 
         internal static string CurrentText => Current.ToString(3);
 
+        internal static int BuildRevision => Version.TryParse(
+            Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyFileVersionAttribute>()?.Version,
+            out var version) ? Math.Max(version.Revision, 0) : 0;
+
+
         private static Version Norm(Version v) => new(v.Major, v.Minor, Math.Max(v.Build, 0));
 
         internal static bool TryParseTag(string tag, out Version v)

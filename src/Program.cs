@@ -58,29 +58,13 @@ namespace PredatorControlApp
             try
             {
                 bool enableLimit = RegistryConfig.ReadInt("BatteryLimit") == 1;
-                int rgbMode = RegistryConfig.ReadInt("RGB_Mode") ?? 0;
-                int brightness = RegistryConfig.ReadInt("Brightness") ?? 100;
-                int rgbSpeed = RegistryConfig.ReadInt("RGB_Speed") ?? 50;
-                int[] zoneColors = new int[4];
-                for (int z = 0; z < 4; z++)
-                {
-                    zoneColors[z] = RegistryConfig.ReadInt($"ZoneColor_{z}") ?? unchecked((int)0xFF00E6B4);
-                }
-
                 using var wmiEarly = new WmiController();
                 wmiEarly.SetBatteryChargeLimit(enableLimit);
 
                 if (batteryOnly) return;
 
-                // Early boot keyboard lighting enforcement:
-                // Applies user's saved color to ACPI WMI and updates LightingProfile.ini with ActiveMode=2 (Static)
-                var zones = new Color[4];
-                for (int z = 0; z < 4; z++)
-                {
-                    zones[z] = Color.FromArgb(zoneColors[z]);
-                }
-                byte mappedEarlySpeed = (byte)Math.Clamp(Math.Round(rgbSpeed * 9.0 / 100.0), 1, 9);
-                wmiEarly.ApplyLightingSynchronous(zones, rgbMode, (byte)Math.Clamp(brightness, 0, 100), mappedEarlySpeed);
+                // Keyboard restoration runs once in Form1 after capability detection.
+                // Never send generic RGB defaults before the keyboard has been identified.
 
                 // Boot Sound and USB Power-off Charging enforcement
                 try

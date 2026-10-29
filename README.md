@@ -4,7 +4,7 @@
 
 # 🪼 Predator Control
 
-[![Version](https://img.shields.io/badge/version-1.3.5-00E5FF?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Hadisovic/PredatorControl/releases)
+[![Version](https://img.shields.io/badge/version-1.4.0-00E5FF?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Hadisovic/PredatorControl/releases)
 [![Jelli UI](https://img.shields.io/badge/Jelli%20UI-Live%20%F0%9F%AA%BC-FF69B4?style=for-the-badge&logo=sparkles&logoColor=white)](#-jelli-ui)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-00B4CC?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/Hadisovic/PredatorControl)
 [![Framework](https://img.shields.io/badge/.NET-10.0%20Windows-512BD4?style=for-the-badge&logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/)
@@ -41,12 +41,26 @@ Direct ACPI WMI hardware control, **~18–25 MB RAM** (Classic UI) / **~45–65 
 
 ---
 
-> [!NOTE]
-> ### 🚀 What's New in v1.3.5: GPU MUX Switch Restoration & Clean Switcher
-> - **GPU MUX Switch Fix**: Fully restored physical GPU MUX switch controls (`Optimus / Hybrid`, `Discrete GPU Only`, and `Auto / Advanced Optimus`) for Acer Predator laptops (including Helios 16 and Helios Neo 16 / PHN16-71).
-> - **Telemetry-Independent Probing**: Fixed capability detection fallback so disabling Acer background bloatware services no longer causes false "Physical MUX switch not present" warnings.
-> - **Full UI Synchronization**: MUX controls are fully synced across the Classic WinForms dashboard, system tray menu, and modern Jelli creature companion UI.
-> - **Clean Version Switcher**: Included `clean_switch_version.bat` and `tools/Switch-PredatorVersion.ps1` to easily terminate background instances, clean state, and switch between versions cleanly.
+## What's new in 1.4.0 revision 2
+
+- Detected Nitro laptops now use fixed-red backlight On/Off controls, regardless of RGB method metadata or older RGB profile settings. Brightness, effects, zones, colors and RGB profiles are hidden for Nitro. The 30-second idle timeout remains separate.
+- Jelli's original 1.3.5 window sizes are restored exactly: expanded dashboard 430 × 600, attached flyout 610 × 600 including the companion area. The current design and original companion size are retained.
+- This revision supersedes the earlier AN515-58-only rule and Nitro RGB override choice described in previous local release notes. Non-Nitro RGB keyboards retain their controls.
+- Use `releases/1.4.0/revision-2/`; product version stays 1.4.0 and file version is 1.4.0.2.
+
+## What's new in 1.4.0 revision 1
+
+- Compact expanded Jelli dashboard: 480 × 590 logical pixels, down from 760 × 760.
+- Short headings, denser telemetry cards, compact On/Off segments, and expandable keyboard compatibility details.
+- Attached flyout uses a 480-pixel panel plus the original Jelli companion area. The jellyfish keeps its original size and interactions. The Classic panel layout matches the 1.4.0 baseline; keyboard behavior is preserved.
+
+## What's new in 1.4.0
+
+- Jelli stays: a redesigned expanded dashboard adds Overview, Cooling, Keyboard, Games, and Settings tabs, responsive cards, device branding, themes, and inline operation feedback.
+- Startup preserves keyboard firmware state until an explicit compatible preference has been saved. Generic four-zone startup writes and legacy lighting defaults are no longer applied to binary or unknown keyboards.
+- Nitro AN515-58 uses a conservative on/off backlight profile. Brightness is not offered in this profile; the 30-second inactivity timeout is a separate setting. RGB variants can select their actual keyboard type and restart the app.
+- Backlight power/timeout commands require readable OEM configuration and matching readback before saving. If the OEM hotkey registration or a readable APGe interface is missing, no speculative firmware command is sent. Hardware validation is still required for each variant and BIOS.
+- Legacy Brightness, RGB_Mode, and Backlight30s keys are retained for rollback and are not automatically migrated to binary power preferences. Choose the keyboard settings explicitly after upgrading.
 
 ---
 

@@ -72,7 +72,7 @@ namespace PredatorControlApp
     }
 
     [SupportedOSPlatform("windows")]
-    public class WmiController : IDisposable
+    public partial class WmiController : IDisposable
     {
         private ManagementObject? _cachedObj;
         private readonly object _lock = new();
@@ -447,9 +447,7 @@ namespace PredatorControlApp
         {
             if (_detectedChassisFamily.HasValue) return _detectedChassisFamily.Value;
             var (_, model, _, _) = GetSystemIdentity();
-            if (model.Contains("Nitro", StringComparison.OrdinalIgnoreCase) ||
-                model.StartsWith("AN", StringComparison.OrdinalIgnoreCase) ||
-                model.StartsWith("AV", StringComparison.OrdinalIgnoreCase))
+            if (KeyboardCapabilities.IsNitroModel(model))
             {
                 _detectedChassisFamily = AcerChassisFamily.Nitro;
             }
@@ -501,7 +499,7 @@ namespace PredatorControlApp
             var chassis = ChassisFamily;
             AcerFeature f = AcerFeature.None;
 
-            if (ProbeRgbHardwareSupported(chassis))
+            if (Keyboard.SupportsRgb)
                 f |= AcerFeature.RgbLighting;
 
             if (chassis == AcerChassisFamily.Nitro)
@@ -585,55 +583,6 @@ namespace PredatorControlApp
             };
         }
 
-        private static bool ProbeRgbHardwareSupported(AcerChassisFamily chassis)
-        {
-            if (chassis == AcerChassisFamily.Predator)
-                return true;
-
-            try
-            {
-                // Check 1: Windows Service 'AcerLightingService' exists in SCM
-                try
-                {
-                    using var sc = new ServiceController("AcerLightingService");
-                    _ = sc.Status;
-                    return true;
-                }
-                catch { }
-
-                // Check 2: AcerLightingService directory structure on disk
-                if (Directory.Exists(@"C:\ProgramData\OEM\AcerLightingService") ||
-                    Directory.Exists(@"C:\Program Files\OEM\AcerLightingService") ||
-                    Directory.Exists(@"C:\Program Files (x86)\OEM\AcerLightingService"))
-                {
-                    return true;
-                }
-
-                // Check 3: OEM Registry registration for Acer Lighting
-                using (var reg = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\OEM\AcerLightingService"))
-                {
-                    if (reg != null) return true;
-                }
-                using (var reg = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\WOW6432Node\OEM\AcerLightingService"))
-                {
-                    if (reg != null) return true;
-                }
-
-                // Check 4: Physical ITE 829X / 891X RGB keyboard controller device
-                try
-                {
-                    using var searcher = new ManagementObjectSearcher(@"root\CIMV2",
-                        "SELECT DeviceID FROM Win32_PnPEntity WHERE DeviceID LIKE '%VID_048D&PID_829%' OR DeviceID LIKE '%VID_048D&PID_891%'");
-                    using var results = searcher.Get();
-                    if (results.Count > 0) return true;
-                }
-                catch { }
-            }
-            catch { }
-
-            return false;
-        }
-
         private bool _coolBoost;
         public bool CoolBoost => _coolBoost;
 
@@ -686,59 +635,8 @@ namespace PredatorControlApp
 
         public bool SetMonochromeBacklight(byte brightness)
         {
-            _brightness = brightness;
-            uint hotkeyNum = GetBkHotkeyNumber();
-            uint low32 = 0x80002 | (hotkeyNum << 8);
-            uint high32 = (_backlight30s ? 0x1E00U : 0x0000U) | brightness;
-            ulong uiInput = ((ulong)high32 << 32) | (ulong)low32;
-
-            bool anySuccess = false;
-
-            // 1. Direct WMI SetGamingKBBacklight command
-            try
-            {
-                byte[] ledPayload = new byte[16];
-                ledPayload[0] = 0x04;
-                ledPayload[2] = brightness;
-                ledPayload[4] = 0x01;
-                ledPayload[5] = 0xFF; // Full Red channel
-                ledPayload[8] = 0x03;
-                ledPayload[9] = (byte)(brightness == 0 ? 0 : 1);
-                if (SendLedCommand(ledPayload)) anySuccess = true;
-            }
-            catch { }
-
-            // 2. Named pipe dispatch to hardware services
-            string[] pipeNames = { "systemmonitoring_hardware_service_", "nitrosense_hardware_service_", "predatorsense_hardware_service_" };
-            byte[] packet = new byte[15];
-            BitConverter.GetBytes((ushort)0x1F).CopyTo(packet, 0);
-            packet[2] = 1;
-            BitConverter.GetBytes((uint)8).CopyTo(packet, 3);
-            BitConverter.GetBytes(uiInput).CopyTo(packet, 7);
-
-            foreach (var pipeName in pipeNames)
-            {
-                try
-                {
-                    using var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut);
-                    pipe.Connect(100);
-                    pipe.Write(packet, 0, packet.Length);
-                    pipe.Flush();
-                    anySuccess = true;
-                    break;
-                }
-                catch { }
-            }
-
-            // 3. Direct WMI SetGamingMiscSetting command
-            try
-            {
-                var (ok, _) = SendCommand("SetGamingMiscSetting", uiInput);
-                if (ok) anySuccess = true;
-            }
-            catch { }
-
-            return anySuccess;
+            if (brightness is not (0 or 100)) return false;
+            return KeyboardControl.Apply(brightness > 0, null).Confirmed;
         }
 
         // ============================================================================================
@@ -913,6 +811,7 @@ namespace PredatorControlApp
 
         public void SetRgbMode(int mode, byte r, byte g, byte b, byte brightness, byte speed, byte direction)
         {
+            if (!Keyboard.SupportsRgb) return;
             _lastR = r; _lastG = g; _lastB = b;
             _brightness = brightness;
             _speed = speed;
@@ -927,6 +826,7 @@ namespace PredatorControlApp
 
         public void SetSingleZoneColor(int zoneIndex, Color color, int mode = 0)
         {
+            if (!Keyboard.SupportsRgb) return;
             if (zoneIndex >= 0 && zoneIndex < 4)
             {
                 _zoneColors[zoneIndex] = color;
@@ -953,6 +853,7 @@ namespace PredatorControlApp
 
         public void Set3ZoneCustomColor(int zoneIndex, Color color, int mode = 0)
         {
+            if (!Keyboard.SupportsRgb) return;
             _lastMode = mode;
             if (zoneIndex == 0)
             {
@@ -990,6 +891,7 @@ namespace PredatorControlApp
 
         private void ApplyZoneLightingCore(int zoneIndex, Color color)
         {
+            if (!Keyboard.SupportsRgb) return;
             // SetGamingRgbKb zone bitmask: 1 << zoneIndex (1, 2, 4, 8 for physical zones 1, 2, 3, 4)
             ulong mask = 1ul << Math.Clamp(zoneIndex, 0, 3);
             ulong zonePayload = mask
@@ -1001,6 +903,7 @@ namespace PredatorControlApp
 
         public void Set4ZoneColors(Color[] zones, int mode = 0, byte? brightness = null, byte? speed = null)
         {
+            if (!Keyboard.SupportsRgb) return;
             if (zones != null && zones.Length >= 4)
             {
                 for (int i = 0; i < 4; i++) _zoneColors[i] = zones[i];
@@ -1020,12 +923,8 @@ namespace PredatorControlApp
 
         public void SetBrightness(byte brightness)
         {
+            if (!Keyboard.SupportsBrightness) return;
             _brightness = brightness;
-            if (!Capabilities.SupportsRgbLighting)
-            {
-                SetMonochromeBacklight(brightness);
-                return;
-            }
 
             QueueLightingTask(() =>
             {
@@ -1038,7 +937,7 @@ namespace PredatorControlApp
                     ApplyLightingModeCore(_lastMode);
                 }
             });
-            Task.Run(() => { try { SetBacklight30s(_backlight30s); } catch { } });
+
         }
 
         public void SetSpeed(byte speed)
@@ -1065,6 +964,7 @@ namespace PredatorControlApp
 
         public void SetKeyboardColor(Color c, int mode = 0)
         {
+            if (!Keyboard.SupportsRgb) return;
             _lastR = c.R; _lastG = c.G; _lastB = c.B;
             _lastMode = mode;
             for (int i = 0; i < 4; i++) _zoneColors[i] = c;
@@ -1106,20 +1006,15 @@ namespace PredatorControlApp
 
         public void SetKeyboardOff()
         {
+            if (!Keyboard.SupportsRgb) return; // Binary power uses the explicit keyboard controller.
             _brightness = 0;
             _lastMode = 8;
-            if (!Capabilities.SupportsRgbLighting)
-            {
-                SetMonochromeBacklight(0);
-            }
-            else
-            {
-                QueueLightingTask(() => ApplyLightingModeCore(8));
-            }
+            QueueLightingTask(() => ApplyLightingModeCore(8));
         }
 
         public void ApplyLightingSynchronous(Color[] zones, int mode = 0, byte brightness = 100, byte speed = 5)
         {
+            if (!Keyboard.SupportsRgb) return;
             if (zones != null && zones.Length >= 4)
             {
                 for (int i = 0; i < 4; i++) _zoneColors[i] = zones[i];
@@ -1133,6 +1028,7 @@ namespace PredatorControlApp
 
         private void ApplyLightingModeCore(int mode)
         {
+            if (!Keyboard.SupportsRgb) return;
             byte[] payload = new byte[16];
             payload[0] = (byte)(mode == 8 ? 0 : mode);
             payload[1] = _speed;
@@ -1163,6 +1059,7 @@ namespace PredatorControlApp
 
         private void Apply4ZoneLightingCore(int mode)
         {
+            if (!Keyboard.SupportsRgb) return;
             // 1. Send backlight mode & brightness configuration to controller first
             byte[] payload = new byte[16];
             payload[0] = (byte)(mode == 8 ? 0 : mode);
@@ -1194,6 +1091,7 @@ namespace PredatorControlApp
 
         public void SyncLightingProfileIni()
         {
+            if (!Keyboard.SupportsRgb) return;
             try
             {
                 string iniPath = @"C:\ProgramData\OEM\AcerLightingService\LightingProfile\LightingProfile.ini";
@@ -1603,212 +1501,9 @@ namespace PredatorControlApp
             return false;
         }
 
-        private static uint GetBkHotkeyNumber()
-        {
-            try
-            {
-                using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\OEM\AcerAgentService");
-                if (key?.GetValue("BK_Hotkey_Number") is int val) return (uint)val;
-                if (key?.GetValue("BK_Hotkey_Number") is long val64) return (uint)val64;
-            }
-            catch { }
-            return 132; // Default for Predator Neo/Helios (0x84)
-        }
+        public bool GetBacklight30s() => KeyboardControl.State.IdleTimeout ?? true;
 
-        public bool GetBacklight30s()
-        {
-            uint hotkeyNum = GetBkHotkeyNumber();
-            uint low32_get = 0x80001 | (hotkeyNum << 8);
-
-            // 1. Hardware Service named pipes (kSvcCmdWMIGetFunction = 0x1E)
-            string[] pipeNames = { "systemmonitoring_hardware_service_", "predatorsense_hardware_service_", "nitrosense_hardware_service_" };
-            byte[] packet = new byte[11];
-            BitConverter.GetBytes((ushort)0x1E).CopyTo(packet, 0);
-            packet[2] = 1;
-            BitConverter.GetBytes((uint)4).CopyTo(packet, 3);
-            BitConverter.GetBytes(low32_get).CopyTo(packet, 7);
-
-            foreach (var pipeName in pipeNames)
-            {
-                try
-                {
-                    using var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
-                    pipe.Connect(150);
-                    pipe.Write(packet, 0, packet.Length);
-                    pipe.Flush();
-                    byte[] resp = new byte[32];
-                    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
-                    int read;
-                    try
-                    {
-                        read = pipe.ReadAsync(resp, 0, resp.Length, cts.Token).GetAwaiter().GetResult();
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        pipe.Close();
-                        return _backlight30s;
-                    }
-                    if (read >= 13)
-                    {
-                        ulong val = BitConverter.ToUInt64(resp, 5);
-                        uint high32 = (uint)(val >> 32);
-                        byte timeoutSec = (byte)((high32 >> 8) & 0xFF);
-                        _backlight30s = timeoutSec > 0;
-                        return _backlight30s;
-                    }
-                }
-                catch { }
-            }
-
-            // 2. Direct WMI APGeAction.GetFunction
-            try
-            {
-                using var searcher = new ManagementObjectSearcher(@"root\WMI", "SELECT * FROM APGeAction");
-                using var results = searcher.Get();
-                using var enumerator = results.GetEnumerator();
-                if (enumerator.MoveNext() && enumerator.Current is ManagementObject obj)
-                {
-                    using var inParams = obj.GetMethodParameters("GetFunction");
-                    inParams["uiInput"] = low32_get;
-                    using var outParams = obj.InvokeMethod("GetFunction", inParams, null);
-                    if (outParams?["uiOutput"] != null)
-                    {
-                        ulong val = Convert.ToUInt64(outParams["uiOutput"]);
-                        uint high32 = (uint)(val >> 32);
-                        byte timeoutSec = (byte)((high32 >> 8) & 0xFF);
-                        _backlight30s = timeoutSec > 0;
-                        return _backlight30s;
-                    }
-                }
-            }
-            catch { }
-
-            // 3. Direct WMI AcerGenericMethod.GetFunction
-            try
-            {
-                using var searcher = new ManagementObjectSearcher(@"root\WMI", "SELECT * FROM AcerGenericMethod");
-                using var results = searcher.Get();
-                using var enumerator = results.GetEnumerator();
-                if (enumerator.MoveNext() && enumerator.Current is ManagementObject obj)
-                {
-                    using var inParams = obj.GetMethodParameters("GetFunction");
-                    inParams["uiInput"] = low32_get;
-                    using var outParams = obj.InvokeMethod("GetFunction", inParams, null);
-                    if (outParams?["uiOutput"] != null)
-                    {
-                        ulong val = Convert.ToUInt64(outParams["uiOutput"]);
-                        uint high32 = (uint)(val >> 32);
-                        byte timeoutSec = (byte)((high32 >> 8) & 0xFF);
-                        _backlight30s = timeoutSec > 0;
-                        return _backlight30s;
-                    }
-                }
-            }
-            catch { }
-
-            return _backlight30s;
-        }
-
-        public bool SetBacklight30s(bool enable)
-        {
-            // Reverse-Engineered from AcerAgentService.exe (0x14003DFE0 - 0x14003E0D1) & AcerHardwareService.exe:
-            // low32  = 0x80002 | (BK_Hotkey_Number << 8)  => 0x88402 (on BK_Hotkey_Number = 132 / 0x84)
-            // high32 = (enable ? 0x1E00 : 0x0000) | brightness (0x1E = 30 seconds idle timeout!)
-            // uiInput = ((ulong)high32 << 32) | (ulong)low32
-            //
-            // We dispatch across all supported communication paths:
-            // 1. Hardware Service Named Pipe (kSvcCmdWMISetFunction = 0x1F) - exact method used by official PredatorSense
-            // 2. Direct WMI APGeAction.SetFunction
-            // 3. Direct WMI AcerGenericMethod.SetFunction
-            // 4. Direct WMI AcerGamingFunction.SetGamingMiscSetting
-            _backlight30s = enable;
-            uint hotkeyNum = GetBkHotkeyNumber();
-
-            uint low32 = 0x80002 | (hotkeyNum << 8);
-            uint high32 = (enable ? 0x1E00U : 0x0000U) | (_brightness > 0 ? _brightness : (byte)0x64);
-            ulong uiInput = ((ulong)high32 << 32) | (ulong)low32;
-
-            bool anySuccess = false;
-
-            // Path 1: Hardware Service Named Pipe
-            string[] pipeNames = { "systemmonitoring_hardware_service_", "predatorsense_hardware_service_", "nitrosense_hardware_service_" };
-            byte[] packet = new byte[15];
-            BitConverter.GetBytes((ushort)0x1F).CopyTo(packet, 0); // kSvcCmdWMISetFunction
-            packet[2] = 1;                                         // 1 argument
-            BitConverter.GetBytes((uint)8).CopyTo(packet, 3);      // argument size (8 bytes)
-            BitConverter.GetBytes(uiInput).CopyTo(packet, 7);      // payload uint64
-
-            foreach (var pipeName in pipeNames)
-            {
-                try
-                {
-                    using var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
-                    pipe.Connect(150);
-                    pipe.Write(packet, 0, packet.Length);
-                    pipe.Flush();
-                    byte[] resp = new byte[16];
-                    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
-                    int read;
-                    try
-                    {
-                        read = pipe.ReadAsync(resp, 0, resp.Length, cts.Token).GetAwaiter().GetResult();
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        pipe.Close();
-                        return false;
-                    }
-                    if (read >= 7 && resp[read - 1] == 0)
-                    {
-                        anySuccess = true;
-                        break;
-                    }
-                }
-                catch { }
-            }
-
-            // Path 2: Direct WMI APGeAction.SetFunction
-            try
-            {
-                using var searcher = new ManagementObjectSearcher(@"root\WMI", "SELECT * FROM APGeAction");
-                using var results = searcher.Get();
-                using var enumerator = results.GetEnumerator();
-                if (enumerator.MoveNext() && enumerator.Current is ManagementObject obj)
-                {
-                    using var inParams = obj.GetMethodParameters("SetFunction");
-                    inParams["uiInput"] = uiInput;
-                    using var outParams = obj.InvokeMethod("SetFunction", inParams, null);
-                    if (outParams?["uiOutput"] != null) anySuccess = true;
-                }
-            }
-            catch { }
-
-            // Path 3: Direct WMI AcerGenericMethod.SetFunction
-            try
-            {
-                using var searcher = new ManagementObjectSearcher(@"root\WMI", "SELECT * FROM AcerGenericMethod");
-                using var results = searcher.Get();
-                using var enumerator = results.GetEnumerator();
-                if (enumerator.MoveNext() && enumerator.Current is ManagementObject obj)
-                {
-                    using var inParams = obj.GetMethodParameters("SetFunction");
-                    inParams["uiInput"] = uiInput;
-                    using var outParams = obj.InvokeMethod("SetFunction", inParams, null);
-                    if (outParams?["uiOutput"] != null) anySuccess = true;
-                }
-            }
-            catch { }
-
-            // Path 4: Direct WMI AcerGamingFunction.SetGamingMiscSetting
-            try
-            {
-                var (ok, _) = SendCommand("SetGamingMiscSetting", uiInput);
-                if (ok) anySuccess = true;
-            }
-            catch { }
-
-            return anySuccess;
-        }
+        public bool SetBacklight30s(bool enable) => KeyboardControl.Apply(null, enable).Confirmed;
 
         public bool SetWinKeyLock(bool lockKeys)
         {

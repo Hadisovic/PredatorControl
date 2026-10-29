@@ -1,8 +1,13 @@
 import { useEffect, useState } from 'react'
-import type { Control } from '../../bridge/types'
+import type { Control, OperationResult } from '../../bridge/types'
 import { request, reportError } from '../../bridge/client'
 
-export function HardwareControl({control: c}: {control: Control}) {
+export function HardwareControl({control}: {control: Control}) {
+  const [feedback, setFeedback] = useState<{status: string; message: string} | null>(null)
+  return <div className={`control-shell control-${control.kind}`}><HardwareControlBody control={control} onFeedback={setFeedback}/>{feedback && <p role={feedback.status === 'failed' ? 'alert' : 'status'} className={`operation-feedback ${feedback.status}`}>{feedback.message}</p>}</div>
+}
+
+function HardwareControlBody({control: c, onFeedback}: {control: Control; onFeedback: (result: {status: string; message: string}) => void}) {
   const [busy, setBusy] = useState(false)
   const [value, setValue] = useState(c.value)
   const [isPrompting, setIsPrompting] = useState(false)
@@ -14,13 +19,17 @@ export function HardwareControl({control: c}: {control: Control}) {
 
   const commit = async (v: unknown) => {
     setBusy(true)
+    onFeedback({status: 'pending', message: 'Sending request…'})
     try {
-      await request('control', {id: c.id, value: v})
+      const result: OperationResult | null = await request('control', {id: c.id, value: v})
+      onFeedback(result ?? {status: 'unverified', message: 'Request sent.'})
+      if (result && result.status !== 'confirmed') { setValue(c.value); return }
       if (c.id === 'rgb.profile.save') {
         setSavedFeedback(true)
         setTimeout(() => setSavedFeedback(false), 1500)
       }
     } catch (e) {
+      onFeedback({status: 'failed', message: e instanceof Error ? e.message : String(e)})
       reportError(e)
       setValue(c.value)
     } finally {
@@ -200,7 +209,8 @@ export function HardwareControl({control: c}: {control: Control}) {
     )
   }
 
-  if (c.kind === 'toggle') return <button className="toggle-row" role="switch" aria-checked={!!c.value} disabled={disabled} onClick={() => void commit(!c.value)}><span>{c.label}</span><span className={`switch ${c.value ? 'on' : ''}`}><i /></span></button>
+  if (c.kind === 'toggle' && c.value === null) return <div className="unknown-toggle"><span>{c.label}<small className="unknown-state">State unverified · choose a setting</small></span><div className="segments"><button disabled={disabled} onClick={() => void commit(true)}>On</button><button disabled={disabled} onClick={() => void commit(false)}>Off</button></div></div>
+  if (c.kind === 'toggle') return <button className="toggle-row" role="switch" aria-label={c.label} aria-checked={c.value === null ? 'mixed' : !!c.value} aria-busy={busy} disabled={disabled} onClick={() => void commit(!c.value)}><span>{c.label}{c.value === null && <small className="unknown-state">State unverified · choose a setting</small>}</span>{c.id.startsWith('keyboard.') && <span className="toggle-state">{c.value ? 'On' : 'Off'}</span>}<span className={`switch ${c.value ? 'on' : ''}`}><i /></span></button>
   if (c.kind === 'select') return <label className="field"><span>{c.label}</span><select disabled={disabled} value={Number(c.value)} onChange={e => void commit(Number(e.target.value))}>{c.choices?.map(o => <option key={o.value} value={o.value} disabled={!o.enabled}>{o.label}</option>)}</select></label>
   if (c.kind === 'color') return <label className="field"><span>{c.label}</span><input aria-label={c.label} type="color" value={String(value)} disabled={disabled} onChange={e => {setValue(e.target.value); void commit(e.target.value)}} /></label>
   return <label className={`dial-field ${disabled ? 'disabled' : ''}`}><span>{c.label}<strong>{Number(value)}<small>%</small></strong></span><input type="range" min={c.min} max={c.max} value={Number(value)} disabled={disabled} onChange={e => setValue(Number(e.target.value))} onPointerUp={e => void commit(Number(e.currentTarget.value))} onKeyUp={e => {if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End','PageUp','PageDown'].includes(e.key)) void commit(Number(e.currentTarget.value))}} /></label>

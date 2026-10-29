@@ -8,28 +8,11 @@ void Check(bool condition, string scenario)
     passed++;
 }
 
-var binary = KeyboardCapabilities.Detect("Acer", "Nitro AN515-58", true, null);
-Check(binary.Kind == KeyboardKind.Binary && !binary.SupportsBrightness && !binary.SupportsRgb && binary.FixedColor == "#ff394b",
-    "Nitro uses a fixed red On/Off profile even when an RGB method exists");
-foreach (var model in new[] { "Nitro AN515-54", "AN515-54", "Nitro AN515-58", "AN515-58", "Nitro AN16-41", "ANV15-51", "Nitro V 15" })
-foreach (var profile in new string?[] { null, "rgb", "binary", "none" })
-{
-    var capabilities = KeyboardCapabilities.Detect("Acer", model, true, profile);
-    Check(capabilities.Kind == KeyboardKind.Binary && capabilities.FixedColor == "#ff394b" &&
-        !capabilities.SupportsBrightness && !capabilities.SupportsRgb && capabilities.SupportsPower,
-        $"{model} ignores misleading RGB metadata and saved profile '{profile ?? "auto"}'");
-}
-Check(KeyboardCapabilities.Detect("Acer", "Predator PH16-71", true, null).SupportsRgb,
-    "Predator RGB capabilities are preserved");
-Check(KeyboardCapabilities.Detect("Acer", "PH16-71", false, "rgb").SupportsRgb,
-    "explicit RGB profile remains available outside Nitro");
-Check(!KeyboardCapabilities.Detect("Other OEM", "Nitro AN515-58", true, "rgb").SupportsPower,
-    "manufacturer is checked before applying Nitro policy");
-Check(KeyboardCapabilities.Detect("Acer", "Unknown", false, null).Kind == KeyboardKind.Unknown,
-    "unknown hardware is not silently classified as a red backlight");
-Check(KeyboardCapabilities.Detect("Acer", "ANN515-58", false, null).Kind == KeyboardKind.Unknown &&
-    KeyboardCapabilities.Detect("Acer", "AV15-51", false, null).Kind == KeyboardKind.Unknown,
-    "unrelated model prefixes are not classified as Nitro");
+// Explicit fixture evidence replaces the former brand-wide and user-preference assumptions.
+var binary = new KeyboardCapabilities(KeyboardKind.Binary, "Verified synthetic fixed-red keyboard", "#ff394b", IdleTimeoutSupported: true);
+foreach (string model in new[] { "Nitro AN515-58", "ANV15-51", "PH16-71", "Unknown" })
+    Check(!KeyboardCapabilities.Detect("Acer", model, true, "rgb").SupportsPower,
+        $"Brand, method metadata and saved RGB preference cannot authorize {model}");
 
 foreach (bool on in new[] { false, true })
 foreach (bool timeout in new[] { false, true })

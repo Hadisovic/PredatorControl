@@ -1,6 +1,6 @@
 {
   "name": "predator-jelli-ui",
-  "version": "1.4.0+rev.2",
+  "version": "1.4.0",
   "private": true,
   "type": "module",
   "scripts": {

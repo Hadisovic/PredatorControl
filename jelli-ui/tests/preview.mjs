@@ -5,7 +5,7 @@ const unknown = scenario === 'unknown'
 const control = (id, label, kind, value, extra = {}) => ({id, label, kind, value, enabled: true, min: 0, max: 100, choices: null, ...extra})
 const state = {
   device: rgb ? 'Predator Helios (simulated)' : 'Nitro AN515-54 (simulated)',
-  theme: new URLSearchParams(location.search).get('theme') === 'teal' ? 'PredatorTeal' : 'NitroCrimson', version: '1.4.0', revision: 2,
+  theme: new URLSearchParams(location.search).get('theme') === 'teal' ? 'PredatorTeal' : 'NitroCrimson', version: '1.4.0', revision: 0,
   telemetry: {cpuTemp: 52, gpuTemp: 46, cpuFanRpm: 2180, gpuFanRpm: 1950, batteryPercent: 80, gpuPowerW: null, powerLine: 1},
   powerMode: 'Default', fanMode: 'Auto', gpuMode: 'Hybrid', doubleClickMs: 500, menu: [], monitors: [], overlay: false,
   settings: {presentation: 'expand', metric1: 'cpuTemp', metric2: 'gpuTemp', syncRgb: false, jelliEnabled: true, overlayGraphs: true, overlayPower: true, overlayUsage: true},

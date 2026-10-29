@@ -10,11 +10,11 @@
 [![Framework](https://img.shields.io/badge/.NET-10.0%20Windows-512BD4?style=for-the-badge&logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/)
 [![License](https://img.shields.io/badge/license-MIT-2ED573?style=for-the-badge)](LICENSE)
 [![RAM](https://img.shields.io/badge/RAM%20Usage-%7E18--65%20MB-FF6B35?style=for-the-badge&logo=memory&logoColor=white)](https://github.com/Hadisovic/PredatorControl)
-[![Services](https://img.shields.io/badge/Acer%20Services-2%20Essential%20Only-2ED573?style=for-the-badge&logo=windows&logoColor=white)](#core-essential-services)
+[![Services](https://img.shields.io/badge/Acer%20Services-Model%20Dependent-2ED573?style=for-the-badge&logo=windows&logoColor=white)](#core-essential-services)
 
 <br/>
 
-**Predator Control** is a lightweight, bloat-free alternative to Acer PredatorSense for **Acer Predator & Nitro** laptops.  
+**Predator Control** is a lightweight, bloat-free alternative to Acer PredatorSense for **Acer Predator & Nitro** laptops.
 Direct ACPI WMI hardware control, **~18–25 MB RAM** (Classic UI) / **~45–65 MB** (Jelli UI) vs 1.5 GB+, and zero unnecessary telemetry!
 
 </div>
@@ -41,26 +41,22 @@ Direct ACPI WMI hardware control, **~18–25 MB RAM** (Classic UI) / **~45–65 
 
 ---
 
-## What's new in 1.4.0 revision 2
+## Hardware compatibility engine (development)
 
-- Detected Nitro laptops now use fixed-red backlight On/Off controls, regardless of RGB method metadata or older RGB profile settings. Brightness, effects, zones, colors and RGB profiles are hidden for Nitro. The 30-second idle timeout remains separate.
-- Jelli's original 1.3.5 window sizes are restored exactly: expanded dashboard 430 × 600, attached flyout 610 × 600 including the companion area. The current design and original companion size are retained.
-- This revision supersedes the earlier AN515-58-only rule and Nitro RGB override choice described in previous local release notes. Non-Nitro RGB keyboards retain their controls.
-- Use `releases/1.4.0/revision-2/`; product version stays 1.4.0 and file version is 1.4.0.2.
+Classic, Jelli, tray, hotkeys, Game Sync and startup now share an evidence-based capability snapshot. Unknown hardware cannot receive speculative firmware commands. Power/fan operations select one implementation; battery limits require operational status/readback; Nitro branding does not determine keyboard type.
 
-## What's new in 1.4.0 revision 1
+See [hardware compatibility, matrix and opt-in validation](docs/HARDWARE_COMPATIBILITY.md), [baseline audit](docs/COMPATIBILITY_AUDIT.md), and [implementation/test report](docs/COMPATIBILITY_IMPLEMENTATION_REPORT.md). Run `scripts/Test-Compatibility.ps1` for synthetic tests and builds. No new physical hardware compatibility is claimed by this change.
 
-- Compact expanded Jelli dashboard: 480 × 590 logical pixels, down from 760 × 760.
-- Short headings, denser telemetry cards, compact On/Off segments, and expandable keyboard compatibility details.
-- Attached flyout uses a 480-pixel panel plus the original Jelli companion area. The jellyfish keeps its original size and interactions. The Classic panel layout matches the 1.4.0 baseline; keyboard behavior is preserved.
+The following release notes describe earlier packaged releases; the development compatibility policy above supersedes their brand-wide assumptions and manual keyboard-type overrides.
 
 ## What's new in 1.4.0
 
-- Jelli stays: a redesigned expanded dashboard adds Overview, Cooling, Keyboard, Games, and Settings tabs, responsive cards, device branding, themes, and inline operation feedback.
-- Startup preserves keyboard firmware state until an explicit compatible preference has been saved. Generic four-zone startup writes and legacy lighting defaults are no longer applied to binary or unknown keyboards.
-- Nitro AN515-58 uses a conservative on/off backlight profile. Brightness is not offered in this profile; the 30-second inactivity timeout is a separate setting. RGB variants can select their actual keyboard type and restart the app.
-- Backlight power/timeout commands require readable OEM configuration and matching readback before saving. If the OEM hotkey registration or a readable APGe interface is missing, no speculative firmware command is sent. Hardware validation is still required for each variant and BIOS.
-- Legacy Brightness, RGB_Mode, and Backlight30s keys are retained for rollback and are not automatically migrated to binary power preferences. Choose the keyboard settings explicitly after upgrading.
+- **Redesigned Jelli Dashboard (`430 × 600` expanded / `610 × 600` attached flyout)**: Overview, Cooling, Keyboard, Games, and Settings tabs with responsive cards, authoritative `PREDATOR` / `NITRO` / `ACER` branding, and themes.
+- **Native Acer Nitro Performance Profiles**:
+  - Pre-2022 Nitro models (`AN515-54` / `Octavia_CFS`, `MachineType = 0/1`) support **Power saver**, **Balanced**, **Balanced (Acer Optimized)**, and **High performance** via native Windows power schemes (`PowerSetActiveScheme` / `PowerGetActiveScheme`), discovering hidden inbox schemes from `HKLM\SYSTEM\CurrentControlSet\Control\Power\User\PowerSchemes`.
+  - 2022+ Nitro models (`AN515-58`, `AN515-46`, `AN515-47`, `AN517-42`, `AN517-43`, `AN517-55`, `MachineType = 2`) support native **Quiet (`0`)**, **Default (`1`)**, and **Performance (`4`)** operation modes recovered from NitroSense 3.01.3056 (`PSSvc` command `30` / WMI `SetGamingMiscSetting(0x0B)` and `GetGamingMiscSetting(0x0B)`), with AC/battery and BatteryBoost (`>= 40%`) protection.
+- **Acer Nitro CoolBoost & Fan Coordination**: Native CoolBoost support via `APGeAction.SetFunction` / `PSSvc` with readback confirmation, and safe coordination between performance profiles and Auto/Max/Manual fan speeds.
+- **Evidence-Based Hardware Compatibility & Keyboard Protection**: Startup preserves keyboard firmware state until an explicit compatible preference is saved; single-color red Nitro keyboards use verified `APGe` On/Off and 30-second idle timeout controls without receiving speculative 4-zone RGB writes.
 
 ---
 
@@ -87,15 +83,15 @@ Predator Control now ships with the full **Jelli UI** — a bioluminescent jelly
 
 ## ✨ Why Predator Control?
 
-Acer PredatorSense and Acer Care Center bundle **10+ background services and telemetry agents**, an Electron frontend, and consume **500 MB – 1.5 GB of RAM**.  
-Predator Control replaces all of that with direct ACPI WMI calls, using only **~18–25 MB RAM** (Classic UI) / **~45–65 MB** (Jelli UI), and keeps only the **2 essential hardware services** (`AASSvc` and `AcerLightingService`) required for your laptop's fans, lighting, and GPU MUX switch!
+Acer PredatorSense and Acer Care Center bundle **10+ background services and telemetry agents**, an Electron frontend, and consume **500 MB – 1.5 GB of RAM**.
+Predator Control replaces all of that with direct ACPI WMI calls, using only **~18–25 MB RAM** (Classic UI) / **~45–65 MB** (Jelli UI), and preserves the OEM hardware services required by the selected implementation. Service requirements vary by model and feature.
 
 ### 🔬 Resource Comparison
 
 | Metric | 🐌 Acer PredatorSense + Care Center | 🪼 Predator Control | Improvement |
 | :--- | :---: | :---: | :--- |
 | **Idle RAM** | 500 MB – 1.5 GB | **~18–25 MB** (Classic) / **~45–65 MB** (Jelli) | 🟢 **~95% less RAM** |
-| **Background Services** | 10+ bloatware & telemetry daemons | **2 Essential Only** | 🟢 **All telemetry silenced** |
+| **Background Services** | 10+ bloatware & telemetry daemons | **Model dependent** | 🟢 **All telemetry silenced** |
 | **Idle CPU** | 0.8 – 3.5% | **< 0.1% / 0.0%** | 🟢 Zero micro-stutter |
 | **Window Toggle Latency** | 2.5 – 5.0 s | **< 50 ms** | 🟢 Instant launch |
 | **Mode Switch Latency** | 500 – 1200 ms | **< 30 ms** | 🟢 Direct EC write |
@@ -116,15 +112,15 @@ The following services provide active communication channels needed for full fea
 | **`AcerLightingService`** | **Acer Lighting Service** | Controls keyboard 4-zone lighting profiles and firmware color latching. |
 
 ### Optional / Legacy Services (Disabled in Bloatware Optimization)
-The following services are disabled when the **Disable Acer Bloatware Services** toggle is enabled (or via `disable_acer_bloatware.bat`). *Note: On certain models, disabling these may affect the 30-second backlight idle sleep timeout; unverified on non-standard configurations — disable at your own risk:*
+Optimization targets only the telemetry services listed as Disabled below. Known hardware services, including both AcerDeviceEnablingService variants, are preserved on every family. Explicit repair and installation retain the application signature and consent checks.
 | Service | Display Name | Status Under Optimization |
 | :--- | :--- | :--- |
-| **`AcerServiceSvc`** | **Acer Service Component** | Disabled (Handles legacy APGe actions; direct WMI used where available) |
-| **`AcerDeviceEnablingServiceV2`** | **Acer Device Enabling Service V2** | Disabled (Legacy driver bridge; direct ACPI WMI preferred) |
+| **`AcerServiceSvc`** | **Acer Service Component** | Preserved; may provide hardware transport |
+| **`AcerDeviceEnablingServiceV2`** | **Acer Device Enabling Service V2** | Preserved; may provide hardware transport |
 | **`AcerCCAgentSvis`** | **Acer Care Center** | Disabled (Background telemetry, periodic popups, RAM usage) |
 | **`AcerQAAgentSvis`** | **Acer Quick Access** | Disabled (Legacy popups & slow OSD) |
 | **`AcerDIAgentSvis`** | **Acer Device Info** | Disabled (Cloud telemetry uploads) |
-| **`ASMSvc`** | **Acer System Monitor Service** | Disabled (Duplicate sensor polling causing CPU wakeups) |
+| **`ASMSvc`** | **Acer System Monitor Service** | Preserved; may provide battery/telemetry interfaces |
 ---
 
 ## 🚀 Features Matrix
@@ -144,7 +140,7 @@ The following services are disabled when the **Disable Acer Bloatware Services**
 ### 🌡️ Thermal Management & Fans
 - 💨 **Auto Fan**: Hardware EC curve.
 - 🚀 **Max Fan Override**: Instant 100% full speed cooling.
-- 🎚️ **Dual Custom Fan Sliders**: Independent CPU & GPU fan sliders (0–100%).
+- 🎚️ **Dual Custom Fan Sliders**: Independent CPU & GPU fan sliders (10–100% where authorized).
 - 📈 **Graphical Fan Curve Designer**: Interactive multi-point temperature-to-RPM editor.
 - ❄️ **CoolBoost™ Toggle**: Raises thermal ceiling for emergency cooling.
 - 📊 **Live Dual Tachometer**: Real-time RPM monitoring.
@@ -174,7 +170,7 @@ The following services are disabled when the **Disable Acer Bloatware Services**
 On Acer Predator and Nitro laptops (such as Predator Helios and Nitro series), the boot chime and animation run at the hardware level during the **Power-On Self-Test (POST)** phase before Windows starts.
 
 > [!IMPORTANT]
-> **If the boot animation and sound do not play on startup:**  
+> **If the boot animation and sound do not play on startup:**
 > If POST Animation & Sound was muted or disabled in your laptop's BIOS setup, the hardware ignores desktop software requests. To restore and control it:
 > 1. **Restart your laptop** and immediately press **`F2`** repeatedly as soon as the screen turns on to enter BIOS Setup.
 > 2. Use the arrow keys to navigate to the **Main** tab.
@@ -189,11 +185,11 @@ On Acer Predator and Nitro laptops (such as Predator Helios and Nitro series), t
 
 Power-off USB Charging turns your laptop into a portable power bank, allowing you to charge smartphones, controllers, wireless earbuds, or other USB devices even when the laptop is **completely shut down, asleep, or hibernating**.
 
-* **Which USB Port?**  
+* **Which USB Port?**
   Look closely at your laptop's USB-A ports. The designated port is marked with a **battery icon** or **lightning bolt** next to the standard USB symbol.
-* **Safety Battery Cutoff Reserve:**  
+* **Safety Battery Cutoff Reserve:**
   When your laptop is running on battery power (unplugged from AC), Power-off USB Charging automatically stops discharging if the laptop battery drops below **30%**. This ensures your laptop never exhausts its own battery while powering external devices.
-* **Direct Integration:**  
+* **Direct Integration:**
   Predator Control synchronizes the state directly with the hardware controller and Acer configuration layer (`USBChargeState`, `USBChargeSwitch`, and `USBChargeLimit`).
 
 
@@ -406,7 +402,7 @@ $pipe.Close()
 
 To silence Acer telemetry and OEM background services without breaking hardware controls:
 1. **Built-in In-App Toggle**: Under **SYSTEM OPTIMIZATION**, toggle **"Optimize Acer Services (Disable OEM Bloatware)"**.
-2. It interacts directly with the Windows Service Control Manager (SCM) to safely stop and disable the 6 telemetry daemons (`AcerCCAgentSvis`, `AcerDIAgentSvis`, `AcerQAAgentSvis`, `ASMSvc`, `AcerServiceSvc`, `AcerDeviceEnablingServiceV2`) while safeguarding essential hardware services (`AASSvc`, `AcerLightingService`).
+2. It interacts directly with the Windows Service Control Manager (SCM) to safely stop and disable the selected telemetry services (`AcerCCAgentSvis`, `AcerDIAgentSvis`, `AcerQAAgentSvis`) while preserving known OEM hardware dependencies. The standalone script delegates to the same application policy.
 3. Real-time counter reflects live daemon states matching Windows Task Manager (e.g. `6 of 6 bloatware services disabled & stopped`).
 4. Standalone batch utilities **`disable_acer_bloatware.bat`** and **`enable_acer_services.bat`** remain available as headless recovery options.
 

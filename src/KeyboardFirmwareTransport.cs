@@ -5,7 +5,7 @@ namespace PredatorControlApp;
 
 // Use one readable APGe transport, preserving all unrelated configuration bits.
 // Never guess Predator's default hotkey number on a Nitro keyboard.
-internal sealed class KeyboardFirmwareTransport : IKeyboardFirmware
+internal sealed class KeyboardFirmwareTransport(bool nitroSense3 = false) : IKeyboardFirmware
 {
     private string? _className;
     private uint? _hotkey;
@@ -15,7 +15,7 @@ internal sealed class KeyboardFirmwareTransport : IKeyboardFirmware
         configuration = 0;
         try
         {
-            using var key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\OEM\AcerAgentService");
+            using var key = Registry.LocalMachine.OpenSubKey(nitroSense3 ? @"SOFTWARE\OEM\NitroSense" : @"SOFTWARE\OEM\AcerAgentService");
             object? raw = key?.GetValue("BK_Hotkey_Number");
             if (raw == null || !uint.TryParse(raw.ToString(), out uint hotkey) || hotkey > 255) return false;
             _hotkey = hotkey;
@@ -23,7 +23,7 @@ internal sealed class KeyboardFirmwareTransport : IKeyboardFirmware
             {
                 try
                 {
-                    if (Invoke(name, "GetFunction", 0x80001U | (hotkey << 8), out ulong output))
+                    if (Invoke(name, "GetFunction", 0x80001U | (hotkey << 8), out ulong output) && (output & 255) == 0)
                     {
                         uint config = (uint)(output >> 32);
                         // Only accept the configuration shape this adapter understands.
@@ -42,6 +42,8 @@ internal sealed class KeyboardFirmwareTransport : IKeyboardFirmware
 
     public bool TryWrite(uint configuration)
     {
+        if (!HardwareWriteGate.InScope(HardwareFeature.KeyboardPower, "apge-keyboard") &&
+            !HardwareWriteGate.InScope(HardwareFeature.KeyboardTimeout, "apge-keyboard")) return false;
         if (_className == null || !_hotkey.HasValue) return false;
         try
         {

@@ -8,7 +8,7 @@ import { QuickMenu } from './components/context-menu/QuickMenu'
 import { ClickArbiter } from './bridge/clicks'
 import { Settings } from './components/gaming-settings/Settings'
 
-import { tabs, restoreTab, sectionTab, canPreviewZones } from './bridge/dashboard'
+import { tabs, restoreTab, sectionTab, canPreviewZones, deviceBrand, powerProfileSummary } from './bridge/dashboard'
 export function App() {
   const [state, setState] = useState<State | null>(null)
   const [layout, setLayout] = useState<Layout>({surface: 'compact', creatureX: 20, creatureY: 0, flyout: false, panelLeft: 180})
@@ -70,9 +70,8 @@ export function App() {
     () => send('surface', 'dashboard'))
   const context = () => { clicks.current.cancel(); send('surface', 'menu') }
   const sections = state?.sections.filter(s => sectionTab(s.id) === tab) ?? []
-  const isNitro = state?.device?.toLowerCase().includes('nitro') || state?.device?.startsWith('AN')
-  const brand = isNitro ? 'NITRO' : 'PREDATOR'
-  const versionLabel = state ? `${state.version}${state.revision ? ` rev ${state.revision}` : ''}` : '1.4.0 rev 2'
+  const brand = deviceBrand(state?.compatibility?.chassisFamily)
+  const versionLabel = state ? `${state.version}${state.revision ? ` rev ${state.revision}` : ''}` : '1.4.0'
   return <main className={`${state?.theme === 'NitroCrimson' ? 'theme-crimson' : state?.theme === 'OledBlack' ? 'theme-oled' : 'theme-teal'} ${layout.surface} ${layout.flyout ? 'flyout' : ''} ${suspended ? 'suspended' : ''}`} onPointerDown={e => { if (e.target === e.currentTarget) send('surface', 'compact') }}>
     <div className="creature" style={{left: layout.creatureX, top: layout.creatureY}}>
       <BlobCanvas onActivate={activate} onContext={context} onDrag={() => clicks.current.cancel()}/>
@@ -93,6 +92,7 @@ export function App() {
     {layout.surface !== 'compact' && <div key={layout.surface} className={`glass ${closing ? 'closing' : ''}`} style={layout.flyout ? {left: layout.panelLeft, width: 'min(430px, calc(100vw - 180px))', top: 0, height: '100vh'} : undefined}>
       <header><div><span className="eyebrow"><i aria-hidden="true"/>{brand} CONTROL <span className="brand-divider">/</span> JELLI</span><h1>{layout.surface === 'summary' ? 'At a glance' : layout.surface === 'menu' ? 'Quick controls' : tab}</h1><p className="panel-subtitle">{state?.device && state.device !== 'Unknown' ? state.device : 'Your desktop companion'} <span className="version-label">v{versionLabel}</span></p></div><button className="close" aria-label="Collapse to Jelli" onClick={() => setClosing(true)}>×</button></header>
       {(!connected || error) && <div role="alert" className="error"><span>{error || 'Backend unavailable'}</span><button onClick={retry}>Reconnect</button>{connected && <button aria-label="Dismiss error" onClick={() => setError('')}>×</button>}</div>}
+      {state?.lastOperation?.status === 'failed' && <p className="footnote" role="alert">{state.lastOperation.message}</p>}
       {layout.surface === 'menu' && <QuickMenu items={state?.menu ?? []}/>}
       {layout.surface === 'summary' && <div className="summary-content"><div className="metric-grid">{['cpuTemp','gpuTemp','cpuFanRpm','gpuFanRpm','gpuPowerW','batteryPercent','fps'].filter(k => ['cpuTemp','gpuTemp'].includes(k) || valueFor(state,k) !== null).map(k => <Metric key={k} state={state} name={k}/>)}</div><dl><dt>Performance</dt><dd>{state?.powerMode ?? '—'}</dd><dt>Cooling</dt><dd>{state?.fanMode ?? '—'}</dd><dt>GPU</dt><dd>{state?.gpuMode ?? '—'}</dd><dt>Power</dt><dd>{state?.telemetry?.powerLine === 1 ? 'AC connected' : 'Battery'}{state?.telemetry?.isCharging ? ' · charging' : ''}</dd></dl><button className="launch" onClick={() => send('surface', 'dashboard')}>Open full dashboard →</button></div>}
       {layout.surface === 'dashboard' && <>
@@ -107,14 +107,16 @@ export function App() {
           {tab === 'Keyboard' && <div className="keyboard-intro"><span className="eyebrow">{state?.keyboard?.supportsRgb ? 'RGB KEYBOARD' : state?.keyboard?.kind === 'binary' ? (state.keyboard.fixedColor ? 'RED BACKLIGHT' : 'ON / OFF BACKLIGHT') : 'KEYBOARD UNVERIFIED'}</span><span className="compact-hint">{state?.keyboard?.kind === 'binary' ? 'No brightness adjustment' : 'Hardware controls'}</span></div>}
           <div className="section-grid">{sections.map(s => s.id === 'keyboardProfile'
             ? <section className="hardware-card card-keyboardProfile" key={s.id}><details><summary>Keyboard compatibility</summary><p className="footnote">{state?.keyboard?.evidence}</p><p className="footnote" role="status">{state?.keyboard?.notice}</p><div className="controls">{s.controls.map(c => <HardwareControl key={c.id} control={c}/>)}</div>{state?.keyboard?.kind === 'binary' && <p className="footnote">With idle sleep enabled, typing wakes the backlight. Its enabled preference stays on.</p>}</details></section>
-            : <section className={`hardware-card card-${s.id}`} key={s.id}><div className="card-heading"><h2>{s.label}</h2><span aria-hidden="true" className="card-indicator"/></div>
-            {s.id === 'rgb' && canPreviewZones(state?.keyboard?.supportsRgb ?? false, s.controls.map(c => c.id)) && <div className="keyboard-preview" aria-label="Four keyboard lighting zones">{[0,1,2,3].map(z => <button aria-label={`Select zone ${z+1}`} key={z} onClick={() => send('control',{id: `rgb.zone${z}`,value:null})}>{Array.from({length:12},(_,i)=><i key={i}/>)}</button>)}</div>}
+            : <section className={`hardware-card card-${s.id}`} key={s.id}><div className="card-heading"><h2>{s.label}</h2>{s.id === 'power' ? <span className="status-pill">{powerProfileSummary(state?.powerMode, s.controls).activeLabel}</span> : <span aria-hidden="true" className="card-indicator"/>}</div>
+            {s.id === 'rgb' && canPreviewZones(state?.keyboard?.supportsRgb ?? false, s.controls.map(c => c.id), state?.keyboard?.zoneCount ?? 0) && <div className="keyboard-preview" aria-label="Keyboard lighting zones">{Array.from({length: state?.keyboard?.zoneCount ?? 0}, (_, i) => i).map(z => <button aria-label={`Select zone ${z+1}`} key={z} onClick={() => send('control',{id: `rgb.zone${z}`,value:null})}>{Array.from({length:12},(_,i)=><i key={i}/>)}</button>)}</div>}
             {s.id === 'keyboard' && state?.keyboard?.fixedColor && <div className="single-color-keyboard" style={{color: state.keyboard.fixedColor}} aria-label="Fixed red single-color keyboard backlight"><div>{Array.from({length:42},(_,i) => <i key={i}/>)}</div><span>RED · SINGLE COLOR</span></div>}
             <div className="controls">{s.controls.map(c => <HardwareControl key={c.id} control={c}/>)}</div>
+            {s.id === 'power' && state?.powerPlanNotice && <p className="footnote">{state.powerPlanNotice}</p>}
             {s.id === 'gpu' && <p className="footnote">{state?.gpuNotice}</p>}{s.id === 'games' && <p className="footnote">{state?.gameSyncStatus}</p>}{s.id === 'battery' && state?.batteryNotice && <details className="card-details"><summary>Battery health</summary><p className="footnote">{state.batteryNotice}</p></details>}
-            {s.id === 'keyboard' && s.controls.length === 0 && <p className="muted">Choose your keyboard type under compatibility below.</p>}
+            {s.id === 'keyboard' && s.controls.length === 0 && <p className="muted">No verified control interface. See keyboard compatibility below.</p>}
           </section>)}</div>
           {tab === 'Games' && <section className="hardware-card game-card"><h2>Gaming overlay</h2><p className="muted">Show live metrics while you play.</p><button className="launch" onClick={() => {void request('overlay',true).catch(reportError)}}>Open gaming overlay ↗</button><p className="footnote">Ctrl + Shift + O toggles the overlay.</p></section>}
+          {tab === 'Settings' && state?.compatibility && <section className="hardware-card"><h2>Device compatibility</h2><p>{state.compatibility.explanation}</p><p>Profile: {state.compatibility.profileId}</p><details><summary>Feature evidence</summary>{Object.entries(state.compatibility.results).map(([feature, result]) => <p key={feature}><strong>{feature}: {result.status}</strong> · {result.evidence}</p>)}{state.lastOperation && <p role="status">{state.lastOperation.status}: {state.lastOperation.message}</p>}</details></section>}
           {tab === 'Settings' && state && <Settings state={state}/>}
         </div>
         <footer><span className={`connection ${connected ? 'online' : ''}`}/>{connected ? 'Connected to your laptop' : 'Disconnected'}<span>JELLI · {versionLabel}</span></footer>

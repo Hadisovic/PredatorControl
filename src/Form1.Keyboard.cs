@@ -14,13 +14,13 @@ public partial class Form1
     private static void PersistKeyboardSetting(string name, int value)
     {
         using var key = Registry.CurrentUser.CreateSubKey(@"SOFTWARE\PredatorControl");
-        key.SetValue(name, value);
+        CompatibilitySettings.Write(key, name, value);
     }
 
     private static bool? ExplicitKeyboardPreference(string name)
     {
         using var key = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\PredatorControl");
-        return key?.GetValue(name) is int value && value is 0 or 1 ? value == 1 : null;
+        return CompatibilitySettings.Read(key, name) is int value && value is 0 or 1 ? value == 1 : null;
     }
 
     private void RestoreKeyboardPreferences()
@@ -30,7 +30,7 @@ public partial class Form1
         if (_wmi.Keyboard.Kind == KeyboardKind.Binary)
         {
             using var key = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\PredatorControl");
-            var preferences = KeyboardPreferences.Read(name => key?.GetValue(name));
+            var preferences = KeyboardPreferences.Read(name => CompatibilitySettings.Read(key, name));
             var result = _wmi.KeyboardControl.Restore(preferences.Enabled, preferences.IdleTimeout);
             _keyboardNotice = result?.Message;
         }
@@ -39,7 +39,7 @@ public partial class Form1
             if (ExplicitKeyboardPreference("KeyboardLightingConfigured") == true)
             {
                 _restoringLighting = false;
-                try { ApplyRgbModeFromDropdown(_rgbDropDown.SelectedIndex); }
+                try { ApplyRgbModeFromDropdown(SelectedRgbMode); }
                 finally { _restoringLighting = true; }
             }
             var timeout = ExplicitKeyboardPreference("KeyboardIdleTimeout");

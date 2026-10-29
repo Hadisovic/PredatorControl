@@ -25,6 +25,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.ServiceProcess;
 using System.Windows.Forms;
 using Microsoft.Win32;
+using System.Management;
 
 namespace PredatorControlApp
 {
@@ -36,8 +37,81 @@ namespace PredatorControlApp
     /// </summary>
     public static class OemServiceManager
     {
+        public static readonly string[] HardwareServices =
+        ["AASSvc", "PSSvc", "AcerLightingService", "ASMSvc", "AcerServiceSvc", "AcerDeviceEnablingServiceV2", "AcerDeviceEnablingService"];
+        public static readonly string[] OptimizationCandidates = ["AcerCCAgentSvis", "AcerQAAgentSvis", "AcerDIAgentSvis"];
+
+        // Explicit operator command only; never called by discovery. Hardware dependencies stay untouched.
+        public static bool OptimizeTelemetryServices()
+        {
+            if (!WmiController.GetSystemIdentity().IsAcer) return false;
+            bool ok = true;
+            foreach (string name in OptimizationCandidates)
+            {
+                try
+                {
+                    using var service = new ServiceController(name);
+                    if (service.Status == ServiceControllerStatus.Running) service.Stop();
+                    using var config = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\" + name, true);
+                    config?.SetValue("Start", 4, RegistryValueKind.DWord);
+                }
+                catch (InvalidOperationException ex) when (ex.InnerException is System.ComponentModel.Win32Exception { NativeErrorCode: 1060 }) { /* Not installed. */ }
+                catch { ok = false; }
+            }
+            return ok;
+        }
+        private static readonly Dictionary<string, (DateTime Stamp, bool Trusted)> ServiceTrust = new(StringComparer.OrdinalIgnoreCase);
+
+        public static ServiceEvidence ReadServiceEvidence(string name)
+        {
+            if (!HardwareServices.Contains(name, StringComparer.OrdinalIgnoreCase)) return new(name, false, false, false);
+            try
+            {
+                using var controller = new ServiceController(name);
+                bool running = controller.Status == ServiceControllerStatus.Running;
+                using var key = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\" + name);
+                string image = Environment.ExpandEnvironmentVariables(key?.GetValue("ImagePath") as string ?? "").Trim();
+                int extension = image.IndexOf(".exe", StringComparison.OrdinalIgnoreCase);
+                string path = image.StartsWith('"') ? image.Split('"')[1] : extension >= 0 ? image[..(extension + 4)] : "";
+                bool trusted;
+                lock (ServiceTrust)
+                {
+                    DateTime stamp = File.GetLastWriteTimeUtc(path);
+                    if (!ServiceTrust.TryGetValue(path, out var cached) || cached.Stamp != stamp)
+                    {
+                        trusted = false;
+                        if (File.Exists(path) && VerifyWinTrust(path) == 0)
+                        {
+#pragma warning disable SYSLIB0057
+                            using var cert = new X509Certificate2(X509Certificate.CreateFromSignedFile(path));
+#pragma warning restore SYSLIB0057
+                            trusted = cert.GetNameInfo(X509NameType.SimpleName, false).Equals("Acer Incorporated", StringComparison.OrdinalIgnoreCase);
+                        }
+                        ServiceTrust[path] = (stamp, trusted);
+                    }
+                    else trusted = cached.Trusted;
+                }
+                return new(name, true, running, trusted);
+            }
+            catch { return new(name, false, false, false); }
+        }
+
+        internal static bool IsTrustedAgentProcess(uint pid, string service = "AASSvc")
+        {
+            if (service is not ("AASSvc" or "PSSvc") || pid == 0 || ReadServiceEvidence(service) is not { Running: true, Trusted: true }) return false;
+            try
+            {
+                using var query = new ManagementObjectSearcher($"SELECT ProcessId FROM Win32_Service WHERE Name='{service}'");
+                using var rows = query.Get();
+                foreach (ManagementObject row in rows)
+                    using (row) if (Convert.ToUInt32(row["ProcessId"]) == pid) return true;
+            }
+            catch { }
+            return false;
+        }
         public static readonly string[] NitroEssentialServices =
         {
+            "PSSvc",
             "ASMSvc",
             "AcerDeviceEnablingServiceV2",
             "AcerDeviceEnablingService",
@@ -159,7 +233,7 @@ namespace PredatorControlApp
             {
                 string fullPath = Path.GetFullPath(filePath);
                 string driverStore = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "DriverStore", "FileRepository");
-                if (!fullPath.StartsWith(driverStore, StringComparison.OrdinalIgnoreCase))
+                if (!fullPath.StartsWith(driverStore.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
                 {
                     failureReason = $"Untrusted path: file is located outside DriverStore ({fullPath})";
                     return false;
@@ -502,27 +576,7 @@ namespace PredatorControlApp
         /// </summary>
         public static void ConfigureNitroBatteryLimitRegistry()
         {
-            string[] subKeys =
-            {
-                @"SOFTWARE\OEM\AcerCareCenter\Battery",
-                @"SOFTWARE\WOW6432Node\OEM\AcerCareCenter\Battery"
-            };
-
-            foreach (var subKey in subKeys)
-            {
-                try
-                {
-                    using var reg = Registry.LocalMachine.CreateSubKey(subKey, true);
-                    if (reg != null)
-                    {
-                        reg.SetValue("StopCharging", 80, RegistryValueKind.DWord);
-                        reg.SetValue("HealthControl", 1, RegistryValueKind.DWord);
-                        reg.SetValue("BatteryLimit", 1, RegistryValueKind.DWord);
-                        reg.SetValue("LimitPercent", 80, RegistryValueKind.DWord);
-                    }
-                }
-                catch { }
-            }
+            // Service repair cannot establish or change a firmware charging limit.
         }
 
         /// <summary>
@@ -540,10 +594,7 @@ namespace PredatorControlApp
             }
             else
             {
-                // Generic Acer chassis: apply both battery limit and available hardware services
-                var r1 = AutoRepairNitro(statusCallback, forcePrompt);
-                var r2 = AutoRepairPredator(statusCallback, forcePrompt);
-                return (r1.success || r2.success, $"{r1.summary}; {r2.summary}");
+                return (false, "No service repair profile exists for this unidentified device.");
             }
         }
 

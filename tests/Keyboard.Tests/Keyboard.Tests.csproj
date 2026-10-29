@@ -5,5 +5,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
-  <ItemGroup><Compile Include="../../src/KeyboardPolicy.cs" Link="KeyboardPolicy.cs" /></ItemGroup>
+  <ItemGroup><Compile Include="../../src/KeyboardPolicy.cs" Link="KeyboardPolicy.cs" /><Compile Include="../../src/HardwareCompatibility.cs" Link="HardwareCompatibility.cs" /></ItemGroup>
+  <Target Name="RunKeyboardTests" BeforeTargets="VSTest" DependsOnTargets="Build">
+    <Exec Command="dotnet &quot;$(TargetPath)&quot;" />
+  </Target>
 </Project>

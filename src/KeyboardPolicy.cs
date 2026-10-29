@@ -2,12 +2,13 @@ namespace PredatorControlApp;
 
 public enum KeyboardKind { Unknown, Binary, Rgb, None }
 
-public sealed record KeyboardCapabilities(KeyboardKind Kind, string Evidence, string? FixedColor = null)
+public sealed record KeyboardCapabilities(KeyboardKind Kind, string Evidence, string? FixedColor = null,
+    int ZoneCount = 0, IReadOnlyList<int>? Effects = null, bool IdleTimeoutSupported = false)
 {
     public bool SupportsPower => Kind is KeyboardKind.Binary or KeyboardKind.Rgb;
     public bool SupportsBrightness => Kind == KeyboardKind.Rgb;
     public bool SupportsRgb => Kind == KeyboardKind.Rgb;
-    public bool SupportsIdleTimeout => SupportsPower;
+    public bool SupportsIdleTimeout => IdleTimeoutSupported;
 
     public static bool IsNitroModel(string model) =>
         model.Contains("Nitro", StringComparison.OrdinalIgnoreCase) ||
@@ -19,16 +20,8 @@ public sealed record KeyboardCapabilities(KeyboardKind Kind, string Evidence, st
         if (!manufacturer.Equals("Acer", StringComparison.OrdinalIgnoreCase) &&
             !manufacturer.StartsWith("Acer ", StringComparison.OrdinalIgnoreCase))
             return new(KeyboardKind.Unknown, "Keyboard hardware has not been identified.");
-        // Product policy: Nitro uses a fixed red backlight, regardless of generic RGB
-        // method metadata, leftover OEM services or a previously saved RGB profile.
-        if (IsNitroModel(model))
-            return new(KeyboardKind.Binary, "Nitro keyboard: fixed red backlight with On/Off control. Brightness, colors and RGB effects are unavailable.", "#ff394b");
-        if (profile is "binary" or "rgb" or "none")
-            return new(profile == "binary" ? KeyboardKind.Binary : profile == "rgb" ? KeyboardKind.Rgb : KeyboardKind.None,
-                "Keyboard type selected by you. Firmware control is verified separately.");
-        return rgbInterface
-            ? new(KeyboardKind.Rgb, "RGB firmware interface detected. Commands may still be unavailable on this configuration.")
-            : new(KeyboardKind.Unknown, "Keyboard type is unverified. Select your keyboard type to enable its controls.");
+        // Compatibility is resolved centrally. A user preference or method name cannot prove support.
+        return new(KeyboardKind.Unknown, "Use the resolved device profile and operational interface evidence.");
     }
 }
 
@@ -54,7 +47,7 @@ internal sealed record KeyboardPreferences(bool? Enabled, bool? IdleTimeout)
 }
 
 // No legacy RGB/brightness preference is interpreted as an explicit binary power setting.
-internal sealed class KeyboardController(KeyboardCapabilities capabilities, IKeyboardFirmware firmware)
+internal sealed class KeyboardController(KeyboardCapabilities capabilities, IKeyboardFirmware firmware, Action<KeyboardOperationResult>? report = null)
 {
     private readonly object _gate = new();
     public KeyboardState State { get; private set; } = new(null, null, "Current hardware state is unverified.");
@@ -69,22 +62,25 @@ internal sealed class KeyboardController(KeyboardCapabilities capabilities, IKey
 
     public KeyboardOperationResult Apply(bool? enabled, bool? timeout)
     {
+        KeyboardOperationResult Finish(KeyboardOperationResult result) { report?.Invoke(result); return result; }
+        lock (HardwareWriteGate.CommandLock)
         lock (_gate)
         {
-            if (!capabilities.SupportsPower || (timeout.HasValue && !capabilities.SupportsIdleTimeout))
-                return new("failed", "This keyboard control is unavailable.");
+            if (!enabled.HasValue && !timeout.HasValue) return Finish(new("failed", "No keyboard change was requested."));
+            if ((enabled.HasValue && !capabilities.SupportsPower) || (timeout.HasValue && !capabilities.SupportsIdleTimeout))
+                return Finish(new("failed", "This keyboard control is unavailable."));
             if (!firmware.TryRead(out uint current))
-                return new("failed", "A readable OEM keyboard configuration is unavailable. No command was sent; firmware state was preserved.");
+                return Finish(new("failed", "A readable OEM keyboard configuration is unavailable. No command was sent; firmware state was preserved."));
             uint desired = Merge(current, enabled, timeout);
-            if (!firmware.TryWrite(desired)) return new("failed", "The OEM keyboard command failed. The setting was not saved.");
+            if (!firmware.TryWrite(desired)) return Finish(new("failed", "The OEM keyboard command failed. The setting was not saved."));
             if (!firmware.TryRead(out uint actual) || (actual & 0xFFFFU) != (desired & 0xFFFFU))
             {
                 State = State with { Status = "Command sent, but hardware confirmation is unavailable. The setting was not saved." };
-                return new("unverified", State.Status);
+                return Finish(new("unverified", State.Status));
             }
             // Do not confuse firmware idle sleep with the user's enabled preference.
             State = new(enabled ?? State.Enabled, timeout ?? State.IdleTimeout, "Setting confirmed by the OEM keyboard interface.");
-            return new("confirmed", State.Status);
+            return Finish(new("confirmed", State.Status));
         }
     }
 

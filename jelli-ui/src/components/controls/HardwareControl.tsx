@@ -4,7 +4,7 @@ import { request, reportError } from '../../bridge/client'
 
 export function HardwareControl({control}: {control: Control}) {
   const [feedback, setFeedback] = useState<{status: string; message: string} | null>(null)
-  return <div className={`control-shell control-${control.kind}`}><HardwareControlBody control={control} onFeedback={setFeedback}/>{feedback && <p role={feedback.status === 'failed' ? 'alert' : 'status'} className={`operation-feedback ${feedback.status}`}>{feedback.message}</p>}</div>
+  return <div className={`control-shell control-${control.kind}`}><HardwareControlBody control={control} onFeedback={setFeedback}/>{feedback?.status === 'failed' && <p role="alert" className="operation-feedback failed">{feedback.message}</p>}</div>
 }
 
 function HardwareControlBody({control: c, onFeedback}: {control: Control; onFeedback: (result: {status: string; message: string}) => void}) {
@@ -23,7 +23,7 @@ function HardwareControlBody({control: c, onFeedback}: {control: Control; onFeed
     try {
       const result: OperationResult | null = await request('control', {id: c.id, value: v})
       onFeedback(result ?? {status: 'unverified', message: 'Request sent.'})
-      if (result && result.status !== 'confirmed') { setValue(c.value); return }
+      if (result && result.status === 'failed') { setValue(c.value); return }
       if (c.id === 'rgb.profile.save') {
         setSavedFeedback(true)
         setTimeout(() => setSavedFeedback(false), 1500)

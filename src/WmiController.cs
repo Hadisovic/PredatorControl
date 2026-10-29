@@ -32,44 +32,7 @@ namespace PredatorControlApp
     // SECTION 1: HARDWARE IDENTIFICATION, PROBING & 4-BYTE BITMASK CAPABILITIES
     // ================================================================================================
 
-    public enum AcerChassisFamily
-    {
-        Predator,
-        Nitro,
-        GenericAcer
-    }
 
-    [Flags]
-    public enum AcerFeature : uint
-    {
-        None           = 0,
-        CoolBoost      = 1 << 0,
-        RgbLighting    = 1 << 1,
-        LcdOverdrive   = 1 << 2,
-        BootSound      = 1 << 3,
-        UsbCharging    = 1 << 4,
-        BatteryLimit   = 1 << 5,
-        AuxFan         = 1 << 6,
-        GpuMux         = 1 << 7
-    }
-
-    public record HardwareCapabilities
-    {
-        public AcerChassisFamily ChassisFamily { get; init; }
-        public AcerFeature Features { get; init; }
-        public bool SupportsRgbLighting => (Features & AcerFeature.RgbLighting) != 0;
-        public bool SupportsCoolBoost => (Features & AcerFeature.CoolBoost) != 0;
-        public bool SupportsBatteryControl => (Features & AcerFeature.BatteryLimit) != 0;
-        public bool SupportsGpuMux => (Features & AcerFeature.GpuMux) != 0;
-        public bool SupportsLcdOverdrive => (Features & AcerFeature.LcdOverdrive) != 0;
-        public bool SupportsBootSound => (Features & AcerFeature.BootSound) != 0;
-        public bool SupportsUsbCharging => (Features & AcerFeature.UsbCharging) != 0;
-        public bool HasAuxFan => (Features & AcerFeature.AuxFan) != 0;
-        public int PowerModeCount { get; init; }
-        public string[] PowerModeLabels { get; init; } = Array.Empty<string>();
-        public byte[] PowerModeValues { get; init; } = Array.Empty<byte>();
-        public static readonly HardwareCapabilities None = new();
-    }
 
     [SupportedOSPlatform("windows")]
     public partial class WmiController : IDisposable
@@ -86,6 +49,9 @@ namespace PredatorControlApp
 
         [DllImport("powrprof.dll")]
         private static extern uint PowerSetActiveOverlayScheme(Guid scheme);
+
+        [DllImport("powrprof.dll")]
+        private static extern uint PowerGetActualOverlayScheme(out Guid scheme);
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern bool WritePrivateProfileString(string lpAppName, string? lpKeyName, string? lpString, string lpFileName);
@@ -139,7 +105,7 @@ namespace PredatorControlApp
         };
         private string? _discoveredClassName;
 
-        public string DiscoveredWmiClass => _discoveredClassName ?? "AcerGamingFunction";
+        public string DiscoveredWmiClass => _discoveredClassName ?? "";
 
         private ManagementObject? GetWmiObject()
         {
@@ -241,13 +207,15 @@ namespace PredatorControlApp
             {
                 try
                 {
+                    if (_disposed || !AuthorizeWmi(method, input)) return (false, 0);
+                    if (_testIo != null) return _testIo.SendWmi(method, input);
                     var obj = GetWmiObject();
                     if (obj == null) return (false, 0);
 
                     using var inParams = obj.GetMethodParameters(method);
                     inParams["gmInput"] = input;
 
-                    using var outParams = obj.InvokeMethod(method, inParams, null);
+                    using var outParams = obj.InvokeMethod(method, inParams, new InvokeMethodOptions { Timeout = TimeSpan.FromSeconds(2) });
                     if (outParams?["gmOutput"] == null) return (false, 0);
 
                     ulong result = Convert.ToUInt64(outParams["gmOutput"]);
@@ -259,18 +227,10 @@ namespace PredatorControlApp
                         return (true, result);
                     }
 
-                    // EC rejected the command (non-zero status byte) — retry once after 20ms
-                    // This handles transient EC-busy states without meaningfully increasing
-                    // latency on the success path.
-                    Thread.Sleep(20);
-                    using var retryIn = obj.GetMethodParameters(method);
-                    retryIn["gmInput"] = input;
-                    using var retryOut = obj.InvokeMethod(method, retryIn, null);
-                    if (retryOut?["gmOutput"] == null) return (false, 0);
-                    ulong retryResult = Convert.ToUInt64(retryOut["gmOutput"]);
-                    _consecutiveFailures = 0;
-                    return ((retryResult & 0xFF) == 0, retryResult);
+                    return (false, result);
                 }
+
+
                 catch
                 {
                     InvalidateCache();
@@ -279,8 +239,9 @@ namespace PredatorControlApp
             }
         }
 
-        private bool SendLedCommand(byte[] payload)
+        private bool SendLedCommandRaw(byte[] payload)
         {
+            if (_testIo != null) return _testIo.SendLighting(payload);
             lock (_lock)
             {
                 try
@@ -288,10 +249,11 @@ namespace PredatorControlApp
                     var obj = GetWmiObject();
                     if (obj == null) return false;
 
+                    if (!HardwareWriteGate.InScope(HardwareFeature.Rgb, "acer-wmi-rgb")) return false;
                     using var inParams = obj.GetMethodParameters("SetGamingKBBacklight");
                     inParams["gmInput"] = payload;
 
-                    using var outParams = obj.InvokeMethod("SetGamingKBBacklight", inParams, null);
+                    using var outParams = obj.InvokeMethod("SetGamingKBBacklight", inParams, new InvokeMethodOptions { Timeout = TimeSpan.FromSeconds(2) });
                     if (outParams?["gmOutput"] == null) return false;
 
                     ulong result = Convert.ToUInt64(outParams["gmOutput"]);
@@ -299,16 +261,10 @@ namespace PredatorControlApp
 
                     if (ok) { _consecutiveFailures = 0; return true; }
 
-                    // Single retry on EC rejection
-                    Thread.Sleep(20);
-                    using var retryIn = obj.GetMethodParameters("SetGamingKBBacklight");
-                    retryIn["gmInput"] = payload;
-                    using var retryOut = obj.InvokeMethod("SetGamingKBBacklight", retryIn, null);
-                    if (retryOut?["gmOutput"] == null) return false;
-                    ulong retryResult = Convert.ToUInt64(retryOut["gmOutput"]);
-                    _consecutiveFailures = 0;
-                    return (retryResult & 0xFF) == 0;
+                    return false;
                 }
+
+
                 catch
                 {
                     InvalidateCache();
@@ -317,74 +273,19 @@ namespace PredatorControlApp
             }
         }
 
-        private bool SendGamingRgbKbCommand(byte[] payload)
-        {
-            lock (_lock)
-            {
-                try
-                {
-                    var obj = GetWmiObject();
-                    if (obj == null) return false;
+        private bool SendLedCommand(byte[] payload) => Write(HardwareFeature.Rgb,
+            payload.Length == 16 && payload[0] <= 7 && payload[1] is >= 1 and <= 9 && payload[2] <= 100,
+            () => Acknowledged(SendLedCommandRaw(payload))).Accepted;
 
-                    // 1. Primary for modern 4-zone (Helios 16/18, Triton, Nitro 16/17)
-                    try
-                    {
-                        using var inParams = obj.GetMethodParameters("SetGamingRgbKb");
-                        if (inParams != null)
-                        {
-                            if (inParams.Properties["gmInput"]?.IsArray == true)
-                            {
-                                inParams["gmInput"] = payload;
-                            }
-                            else
-                            {
-                                ulong val = 0;
-                                for (int i = 0; i < Math.Min(payload.Length, 8); i++)
-                                    val |= ((ulong)payload[i]) << (i * 8);
-                                inParams["gmInput"] = val;
-                            }
-
-                            using var outParams = obj.InvokeMethod("SetGamingRgbKb", inParams, null);
-                            if (outParams?["gmOutput"] != null)
-                            {
-                                ulong result = Convert.ToUInt64(outParams["gmOutput"]);
-                                if ((result & 0xFF) == 0) return true;
-                            }
-                        }
-                    }
-                    catch { }
-
-                    // 2. Fallback for older generations (Nitro 5 / Helios 300) using SetGamingKBBacklight
-                    try
-                    {
-                        using var bkIn = obj.GetMethodParameters("SetGamingKBBacklight");
-                        if (bkIn != null)
-                        {
-                            ulong val = 0;
-                            for (int i = 0; i < Math.Min(payload.Length, 8); i++)
-                                val |= ((ulong)payload[i]) << (i * 8);
-                            bkIn["gmInput"] = val;
-                            using var bkOut = obj.InvokeMethod("SetGamingKBBacklight", bkIn, null);
-                            if (bkOut?["gmOutput"] != null)
-                            {
-                                ulong res = Convert.ToUInt64(bkOut["gmOutput"]);
-                                return (res & 0xFF) == 0;
-                            }
-                        }
-                    }
-                    catch { }
-
-                    return false;
-                }
-                catch
-                {
-                    InvalidateCache();
-                    return false;
-                }
-            }
-        }
 
         private int? GetSensorReading(ulong sensorId)
+        {
+            if (_testIo != null) return _testIo.ReadSensor(sensorId);
+            ulong? raw = ReadGamingSystemInfo((uint)(0x0001 | (sensorId << 8)));
+            return raw.HasValue ? (int)((raw.Value >> 8) & 0xFFFF) : null;
+        }
+
+        private ulong? ReadGamingSystemInfo(uint command)
         {
             lock (_lock)
             {
@@ -394,16 +295,15 @@ namespace PredatorControlApp
                     if (obj == null) return null;
 
                     using var inParams = obj.GetMethodParameters("GetGamingSysInfo");
-                    inParams["gmInput"] = (ulong)(0x0001 | (sensorId << 8));
+                    inParams["gmInput"] = command;
 
-                    using var outParams = obj.InvokeMethod("GetGamingSysInfo", inParams, null);
+                    using var outParams = obj.InvokeMethod("GetGamingSysInfo", inParams, new InvokeMethodOptions { Timeout = TimeSpan.FromSeconds(2) });
                     if (outParams?["gmOutput"] == null) return null;
 
                     ulong raw = Convert.ToUInt64(outParams["gmOutput"]);
                     if ((raw & 0xFF) == 0)
                     {
-                        int reading = (int)((raw >> 8) & 0xFFFF);
-                        return reading > 0 ? reading : null;
+                        return raw;
                     }
                 }
                 catch (ManagementException) { InvalidateCache(); }
@@ -426,114 +326,17 @@ namespace PredatorControlApp
             return (cpuTemp, gpuTemp, cpuRpm, gpuRpm, auxRpm, gpuPower);
         }
 
-        public int? CpuTemp => GetSensorReading(0x01);
-        public int? GpuTemp => GetSensorReading(0x0A);
-        public int? CpuFanRpm => GetSensorReading(0x02);
-        public int? GpuFanRpm => GetSensorReading(0x06);
-        public int? AuxFanRpm => GetSensorReading(0x07) ?? GetSensorReading(0x0B);
-        public bool HasAuxFan
-        {
-            get
-            {
-                if (_supportedFeatures.HasValue && (_supportedFeatures.Value & AcerFeature.AuxFan) != 0)
-                    return true;
-                return AuxFanRpm.HasValue && AuxFanRpm.Value > 0;
-            }
-        }
-        public int? GpuPowerW => GetSensorReading(0x0D);
-
-        private static AcerChassisFamily? _detectedChassisFamily;
-        public static AcerChassisFamily DetectChassisFamily()
-        {
-            if (_detectedChassisFamily.HasValue) return _detectedChassisFamily.Value;
-            var (_, model, _, _) = GetSystemIdentity();
-            if (KeyboardCapabilities.IsNitroModel(model))
-            {
-                _detectedChassisFamily = AcerChassisFamily.Nitro;
-            }
-            else if (model.Contains("Predator", StringComparison.OrdinalIgnoreCase) ||
-                     model.Contains("Helios", StringComparison.OrdinalIgnoreCase) ||
-                     model.Contains("Triton", StringComparison.OrdinalIgnoreCase) ||
-                     model.StartsWith("PH", StringComparison.OrdinalIgnoreCase) ||
-                     model.StartsWith("PT", StringComparison.OrdinalIgnoreCase))
-            {
-                _detectedChassisFamily = AcerChassisFamily.Predator;
-            }
-            else
-            {
-                _detectedChassisFamily = AcerChassisFamily.GenericAcer;
-            }
-            return _detectedChassisFamily.Value;
-        }
-
-        public AcerChassisFamily ChassisFamily => DetectChassisFamily();
-
-        private AcerFeature? _supportedFeatures;
-        private bool _probingFeatures;
-
-        public AcerFeature SupportedFeatures
-        {
-            get
-            {
-                if (!_supportedFeatures.HasValue)
-                {
-                    if (_probingFeatures) return AcerFeature.None;
-                    _probingFeatures = true;
-                    try
-                    {
-                        _supportedFeatures = ProbeSupportedFeatures();
-                    }
-                    finally
-                    {
-                        _probingFeatures = false;
-                    }
-                }
-                return _supportedFeatures.Value;
-            }
-        }
-
+        public int? CpuTemp => ReadChannel("cpuTemp");
+        public int? GpuTemp => ReadChannel("gpuTemp");
+        public int? CpuFanRpm => ReadChannel("cpuFanRpm");
+        public int? GpuFanRpm => ReadChannel("gpuFanRpm");
+        public int? AuxFanRpm => ReadChannel("auxFanRpm");
+        public int? GpuPowerW => ReadChannel("gpuPowerW");
+        public bool HasAuxFan => Capabilities.HasAuxFan;
+        public static AcerChassisFamily DetectChassisFamily() => GetSystemIdentity().ChassisFamily;
+        public AcerChassisFamily ChassisFamily => Capabilities.ChassisFamily;
+        public AcerFeature SupportedFeatures => Capabilities.Features;
         public bool Supports(AcerFeature feature) => (SupportedFeatures & feature) == feature;
-
-        private AcerFeature ProbeSupportedFeatures()
-        {
-            var chassis = ChassisFamily;
-            AcerFeature f = AcerFeature.None;
-
-            if (Keyboard.SupportsRgb)
-                f |= AcerFeature.RgbLighting;
-
-            if (chassis == AcerChassisFamily.Nitro)
-                f |= AcerFeature.CoolBoost;
-
-            if (IsBatteryControlSupported())
-                f |= AcerFeature.BatteryLimit;
-
-            // LCD Overdrive: Predator models, or Nitro models with display refresh rate > 60Hz
-            if (chassis == AcerChassisFamily.Predator ||
-                (chassis == AcerChassisFamily.Nitro && DisplayCcdController.GetMaxRefreshRate() > 60))
-            {
-                f |= AcerFeature.LcdOverdrive;
-            }
-
-            // Boot Sound: Predator chassis has BIOS boot animation chime
-            if (chassis == AcerChassisFamily.Predator)
-                f |= AcerFeature.BootSound;
-
-            // GPU MUX: Predator chassis; exact modes are refined at runtime from the Acer Agent capability bitmask
-            if (chassis == AcerChassisFamily.Predator)
-                f |= AcerFeature.GpuMux;
-
-            // USB Charging when powered off: supported on Predator and Nitro models
-            f |= AcerFeature.UsbCharging;
-
-            // 3rd Aux fan: supported if sensor returns a reading > 0 (Helios 18 / Triton 17)
-            var aux = AuxFanRpm;
-            if (aux.HasValue && aux.Value > 0)
-                f |= AcerFeature.AuxFan;
-
-            return f;
-        }
-
         private HardwareCapabilities? _cachedCapabilities;
         private static readonly object _probeLock = new();
         public HardwareCapabilities Capabilities
@@ -542,96 +345,38 @@ namespace PredatorControlApp
             {
                 lock (_probeLock)
                 {
-                    if (_cachedCapabilities != null)
-                        return _cachedCapabilities;
-
-                    try
-                    {
-                        var probed = ProbeCapabilities();
-                        _cachedCapabilities = probed;
-                        return probed;
-                    }
-                    catch
-                    {
-                        return HardwareCapabilities.None;
-                    }
+                    if (_cachedCapabilities != null) return _cachedCapabilities;
+                    try { return _cachedCapabilities = ProbeCapabilities(); }
+                    catch { return HardwareCapabilities.None; }
                 }
             }
         }
 
-        private HardwareCapabilities ProbeCapabilities()
-        {
-            var chassis = ChassisFamily;
-            var features = SupportedFeatures;
-
-            bool isPredator = chassis == AcerChassisFamily.Predator;
-            int modeCount = isPredator ? 5 : 3;
-            string[] modeLabels = isPredator
-                ? new[] { "Quiet", "Balanced", "Perf", "Turbo", "Eco" }
-                : new[] { "Quiet", "Default", "Performance" };
-            byte[] modeValues = isPredator
-                ? new byte[] { 0x00, 0x01, 0x04, 0x05, 0x06 }
-                : new byte[] { 0x00, 0x01, 0x04 };
-
-            return new HardwareCapabilities
-            {
-                ChassisFamily = chassis,
-                Features = features,
-                PowerModeCount = modeCount,
-                PowerModeLabels = modeLabels,
-                PowerModeValues = modeValues
-            };
-        }
 
         private bool _coolBoost;
         public bool CoolBoost => _coolBoost;
 
         public bool SetCoolBoost(bool enable)
         {
-            _coolBoost = enable;
-
-            // 1. Dual-dispatch via AcerAgentClient (TCP 46933 & named pipes)
-            _ = Task.Run(async () =>
+            var result = Write(HardwareFeature.CoolBoost, true, () =>
             {
-                try { await AcerAgentClient.SetCoolBoostAsync(enable); } catch { }
+                string backend = Capabilities.Results[HardwareFeature.CoolBoost].Backend;
+                if (backend is not (NitroSense3Protocol.Backend or "nitrosense3-apge"))
+                    return new("failed", "No verified CoolBoost implementation.");
+                ulong? Exchange(ushort cmd, ulong input, bool wide) => _testIo != null
+                    ? _testIo.SendNitroSense(cmd, input, wide) : backend == "nitrosense3-apge" ? NitroSense3Protocol.ExchangeDirect(cmd, input, wide)
+                    : NitroSense3Protocol.Exchange(cmd, input, wide).GetAwaiter().GetResult();
+                ulong? reply = Exchange(17, 7UL | (enable ? 1UL << 16 : 0), true);
+                if (!reply.HasValue || (reply.Value & 255) != 0) return new("failed", "NitroSense CoolBoost command failed.");
+                bool? actual = NitroSense3Protocol.CoolBoostState(Exchange(20, 519, false));
+                return actual == enable ? new("confirmed", "CoolBoost confirmed by NitroSense readback.")
+                    : actual.HasValue ? new("failed", "CoolBoost readback differs from the requested state.")
+                    : new("unverified", "CoolBoost acknowledged; readback unavailable. Preference was not saved.");
             });
-
-            // 2. Direct named pipe dispatch to NitroSense & SystemMonitoring services
-            Task.Run(() =>
-            {
-                try
-                {
-                    string[] pipeNames = { "nitrosense_hardware_service_", "systemmonitoring_hardware_service_", "predatorsense_hardware_service_" };
-                    string json = enable ? "{\"Function\":\"COOL_BOOST\",\"Parameter\":{\"status\":1}}" : "{\"Function\":\"COOL_BOOST\",\"Parameter\":{\"status\":0}}";
-                    byte[] jsonBytes = System.Text.Encoding.UTF8.GetBytes(json);
-                    byte[] packet = new byte[8 + jsonBytes.Length];
-                    System.Text.Encoding.ASCII.GetBytes("ACER").CopyTo(packet, 0);
-                    BitConverter.GetBytes((uint)100).CopyTo(packet, 4); // CMD_SET_DEVICE_DATA = 100
-                    Buffer.BlockCopy(jsonBytes, 0, packet, 8, jsonBytes.Length);
-
-                    foreach (var pipe in pipeNames)
-                    {
-                        try
-                        {
-                            using var client = new NamedPipeClientStream(".", pipe, PipeDirection.InOut);
-                            client.Connect(150);
-                            client.Write(packet, 0, packet.Length);
-                            client.Flush();
-                            break;
-                        }
-                        catch { }
-                    }
-                }
-                catch { }
-            });
-
-            // 3. Direct WMI ACPI dispatch: SetGamingFanBehavior (triggers CoolBoost ceiling in EC)
-            ulong flag1 = enable ? 0x01000000UL : 0x00000000UL;
-            ulong flag2 = enable ? 0x00000100UL : 0x00000000UL;
-            var (ok1, _) = SendCommand("SetGamingFanBehavior", 0x09UL | flag1);
-            var (ok2, _) = SendCommand("SetGamingFanBehavior", 0x09UL | flag2);
-            return ok1 || ok2;
+            if (result.Confirmed) _coolBoost = enable;
+            return result.Confirmed;
         }
+
 
         public bool SetMonochromeBacklight(byte brightness)
         {
@@ -645,32 +390,123 @@ namespace PredatorControlApp
 
         /// <summary>
         /// [TRIGGER]     : User selects a power profile (Quiet, Balanced, Performance, Turbo, Eco)
-        /// [HARDWARE I/O]: Writes mode byte to ACPI register 0x0B and dual-dispatches to AcerAgentService
+        /// [HARDWARE I/O]: Sends the selected profile's verified SetGamingProfile encoding once
         /// [EFFECT]      : Embedded Controller adjusts PL1/PL2 CPU power ceilings and GPU overclock
         /// </summary>
-        public void SetPowerMode(byte mode)
+        public HardwareOperationResult SetPowerMode(byte mode)
         {
-            // 1. Dual-dispatch to Acer OEM Agent Service (TCP socket & named pipe)
-            // This actively communicates with AcerAgentService / AcerHardwareService
-            // and sets PL1/PL2 power ceilings, GPU overclocking, and hardware mode state.
-            _ = Task.Run(async () =>
-            {
-                try
+            string backend = Capabilities.Results.GetValueOrDefault(HardwareFeature.Power)?.Backend ?? "none";
+            Guid? scheme = Capabilities.PowerModes.FirstOrDefault(m => m.Value == mode)?.WindowsScheme;
+            var result = Write(HardwareFeature.Power,
+                Capabilities.AllowsPower(mode, IsOnAc),
+                () => backend switch
                 {
-                    await AcerAgentClient.SetOperatingModeAsync(mode);
+                    "windows-power-overlay" => _testIo?.SetWindowsPowerMode(mode) ?? ApplyWindowsPowerOverlay(mode),
+                    "windows-power-plan" => scheme.HasValue ? _testIo?.SetWindowsPowerPlan(scheme.Value) ?? WindowsPowerPlans.Set(scheme.Value)
+                        : new("failed", "No installed Windows power plan is mapped to this selection."),
+                    NitroSense3Protocol.OperationModePipeBackend => ApplyNitroOperationModePipe(mode),
+                    NitroSense3Protocol.OperationModeWmiBackend => ApplyNitroOperationModeWmi(mode),
+                    "acer-wmi-profile" => Acknowledged(SendCommand("SetGamingProfile", mode).success),
+                    _ => new("failed", "No compatible power implementation.")
+                });
+            if (result.Accepted && _testIo == null && backend == "acer-wmi-profile") SyncWindowsPowerMode(mode);
+            if (result.Confirmed && backend == "windows-power-plan")
+                lock (_probeLock)
+                {
+                    if (_cachedCapabilities != null) _cachedCapabilities = _cachedCapabilities with { ActiveWindowsPowerPlan = scheme, ActivePowerMode = mode };
+                    if (_discovery != null) _discovery = _discovery with { WindowsPowerPlans = _discovery.WindowsPowerPlans with { ActiveScheme = scheme } };
                 }
-                catch { }
-            });
-
-            // 2. Direct ACPI WMI dispatch on root\WMI\AcerGamingFunction
-            // Dual-profile dispatch: raw mode byte, configuration packet, and misc setting register 0x0B
-            SendCommand("SetGamingProfile", (ulong)mode);
-            SendCommand("SetGamingProfile", 0x01000000UL | (ulong)mode);
-            SendCommand("SetGamingMiscSetting", (ulong)0x0B | ((ulong)mode << 8));
-
-            // 3. Windows Power Plan Overlay synchronization
-            SyncWindowsPowerMode(mode);
+            else if (result.Confirmed && backend is NitroSense3Protocol.OperationModePipeBackend or NitroSense3Protocol.OperationModeWmiBackend)
+                lock (_probeLock)
+                {
+                    if (_cachedCapabilities != null) _cachedCapabilities = _cachedCapabilities with { ActivePowerMode = mode };
+                    if (_discovery != null) _discovery = _discovery with { NitroOperationMode = mode };
+                }
+            else if (result.Accepted && backend == "acer-wmi-profile")
+                lock (_probeLock)
+                {
+                    if (_cachedCapabilities != null) _cachedCapabilities = _cachedCapabilities with { ActivePowerMode = mode };
+                }
+            return result;
         }
+
+        private HardwareOperationResult ApplyNitroOperationModePipe(byte mode)
+        {
+            if (!NitroSense3Protocol.IsSupportedOperationMode(mode))
+                return new("failed", "Unsupported Nitro operation mode.");
+            ulong? Exchange(ushort cmd, ulong input, bool wide) => _testIo != null
+                ? _testIo.SendNitroSense(cmd, input, wide)
+                : NitroSense3Protocol.Exchange(cmd, input, wide).GetAwaiter().GetResult();
+            ulong? reply = Exchange(NitroSense3Protocol.CmdSetOperationMode, mode, false);
+            if (!reply.HasValue || (reply.Value & 255) != 0)
+                return new("failed", "NitroSense operation-mode command failed.");
+            byte? actual = NitroSense3Protocol.OperationModeState(
+                Exchange(NitroSense3Protocol.CmdWmiGetGamingMiscSetting, NitroSense3Protocol.MiscSubfunctionOperationMode, false));
+            return actual == mode ? new("confirmed", "Nitro operation mode confirmed by NitroSense readback.")
+                : actual.HasValue ? new("unverified", "Nitro operation-mode readback differs from the requested mode.")
+                : new("unverified", "Nitro operation mode acknowledged; readback unavailable. Preference was not saved.");
+        }
+
+        private HardwareOperationResult ApplyNitroOperationModeWmi(byte mode)
+        {
+            if (NitroSense3Protocol.EncodeOperationModeMiscInput(mode) is not ulong gmInput)
+                return new("failed", "Unsupported Nitro operation mode.");
+            if (!SendCommand("SetGamingMiscSetting", gmInput).success)
+                return new("failed", "Nitro WMI operation-mode command failed.");
+            byte? actual = NitroSense3Protocol.OperationModeState(
+                ReadGamingMiscSetting(NitroSense3Protocol.MiscSubfunctionOperationMode));
+            return actual == mode ? new("confirmed", "Nitro operation mode confirmed by WMI readback.")
+                : actual.HasValue ? new("unverified", "Nitro operation-mode WMI readback differs from the requested mode.")
+                : new("unverified", "Nitro operation mode acknowledged; WMI readback unavailable. Preference was not saved.");
+        }
+
+        public byte? ReadPowerMode()
+        {
+            var caps = Capabilities;
+            if (!caps.CanWrite(HardwareFeature.Power)) return null;
+            string backend = caps.Results[HardwareFeature.Power].Backend;
+            byte? actual = backend switch
+            {
+                "windows-power-plan" => (_testIo != null ? _testIo.ReadActiveWindowsPowerPlan() ?? caps.ActiveWindowsPowerPlan : WindowsPowerPlans.Read().ActiveScheme) is Guid activeGuid
+                    ? caps.PowerModes.FirstOrDefault(m => m.WindowsScheme == activeGuid)?.Value
+                    : null,
+                NitroSense3Protocol.OperationModePipeBackend => NitroSense3Protocol.OperationModeState(
+                    _testIo != null
+                        ? _testIo.SendNitroSense(NitroSense3Protocol.CmdWmiGetGamingMiscSetting, NitroSense3Protocol.MiscSubfunctionOperationMode, false)
+                        : NitroSense3Protocol.Exchange(NitroSense3Protocol.CmdWmiGetGamingMiscSetting, NitroSense3Protocol.MiscSubfunctionOperationMode, false).GetAwaiter().GetResult()),
+                NitroSense3Protocol.OperationModeWmiBackend => NitroSense3Protocol.OperationModeState(
+                    ReadGamingMiscSetting(NitroSense3Protocol.MiscSubfunctionOperationMode)),
+                _ => caps.ActivePowerMode
+            };
+            if (actual.HasValue && caps.PowerModes.Any(m => m.Value == actual.Value))
+            {
+                lock (_probeLock)
+                {
+                    if (_cachedCapabilities != null) _cachedCapabilities = _cachedCapabilities with { ActivePowerMode = actual };
+                }
+                return actual;
+            }
+            return null;
+        }
+
+        public HardwareOperationResult RestoreSavedPowerMode(int? savedMode, bool applyWhenAlreadyActive = false)
+        {
+            var caps = Capabilities;
+            if (!caps.CanWrite(HardwareFeature.Power))
+                return new("failed", "Power control path is not verified for this laptop.");
+            byte? current = ReadPowerMode();
+            if (!savedMode.HasValue)
+                return new("skipped", "No saved power preference to restore.");
+            if (savedMode.Value is < 0 or > 255 || !caps.PowerModes.Any(m => m.Value == (byte)savedMode.Value))
+                return new("failed", "Saved power profile is not supported by this model.");
+            byte target = (byte)savedMode.Value;
+            if (!caps.AllowsPower(target, IsOnAc))
+                return new("failed", "Saved power profile is not available on the current power source.");
+            if (!applyWhenAlreadyActive && current.HasValue && current.Value == target)
+                return new("confirmed", "Saved power profile is already active on hardware.");
+            return SetPowerMode(target);
+        }
+
 
         // ============================================================================================
         // SECTION 3: THERMAL MANAGEMENT, FAN SPEEDS & TACHOMETERS
@@ -678,96 +514,50 @@ namespace PredatorControlApp
 
         /// <summary>
         /// [TRIGGER]     : User changes fan profile (Auto, Max, Custom)
-        /// [HARDWARE I/O]: Calls SetGamingFanBehavior with mode bits and dual-dispatches to AcerAgentService
+        /// [HARDWARE I/O]: Calls SetGamingFanBehavior with mode bits and uses the selected compatibility backend
         /// [EFFECT]      : Switches EC between hardware thermal curve (Auto), 100% blast (Max), or manual PWM
         /// </summary>
-        public void SetFanBehavior(byte mode)
+        public HardwareOperationResult SetFanBehavior(byte mode)
         {
-            // 1. Direct ACPI WMI Fan Behavior command
-            SendCommand("SetGamingFanBehavior", (ulong)(0x09 | ((ulong)mode << 16) | ((ulong)mode << 22)));
-
-            // 2. Dual-dispatch to Acer OEM Agent Service
-            // Mode mapping: 0x02 (Max) -> 1, 0x03 (Custom) -> 2, 0x01 (Auto) -> 0
-            _ = Task.Run(async () =>
+            HardwareFeature feature = mode == 1 ? HardwareFeature.FanAuto : mode == 2 ? HardwareFeature.FanMax : HardwareFeature.FanManual;
+            var result = Write(feature, mode is >= 1 and <= 3, () =>
             {
-                try
+                if (mode == 3) _manualFanSession = true;
+                bool accepted = SendCommand("SetGamingFanBehavior", 0x09UL | ((ulong)mode << 16) | ((ulong)mode << 22)).success;
+                if (accepted && mode == 3)
                 {
-                    int agentFanMode = mode switch
-                    {
-                        0x02 => 1, // Max
-                        0x03 => 2, // Custom
-                        _ => 0     // Auto
-                    };
-                    await AcerAgentClient.SetFanModeAsync(agentFanMode);
+                    accepted = SendCommand("SetGamingFanSpeed", 1UL | ((ulong)_customCpuFanSpeed << 8)).success &&
+                        SendCommand("SetGamingFanSpeed", 4UL | ((ulong)_customGpuFanSpeed << 8)).success;
                 }
-                catch { }
+                return Acknowledged(accepted);
             });
-
-            if (mode == 0x03)
-                SetFanSpeed(_customCpuFanSpeed, _customGpuFanSpeed);
+            if (result.Accepted) _manualFanSession = mode == 3;
+            if (!result.Accepted && mode == 3) RecoverAutomaticFans();
+            return result;
         }
 
-        /// <summary>
-        /// [TRIGGER]     : User drags CPU/GPU custom fan sliders
-        /// [HARDWARE I/O]: Dispatches SetGamingFanSpeed with PWM duty cycle percentage (0-100%)
-        /// [EFFECT]      : EC overrides fan PWM driver circuit to maintain targeted RPM
-        /// </summary>
         public bool SetFanSpeed(byte cpuSpeed, byte gpuSpeed)
         {
-            _customCpuFanSpeed = cpuSpeed;
-            _customGpuFanSpeed = gpuSpeed;
-
-            _ = Task.Run(async () =>
+            var result = Write(HardwareFeature.FanManual, cpuSpeed is >= 10 and <= 100 && gpuSpeed is >= 10 and <= 100, () =>
             {
-                try
-                {
-                    await AcerAgentClient.SetCustomFanSpeedAsync(cpuSpeed, gpuSpeed);
-                }
-                catch { }
+                _manualFanSession = true; // Also recover if only the first of the two writes succeeds.
+                bool cpu = SendCommand("SetGamingFanSpeed", 1UL | ((ulong)cpuSpeed << 8)).success;
+                bool gpu = cpu && SendCommand("SetGamingFanSpeed", 4UL | ((ulong)gpuSpeed << 8)).success;
+                return Acknowledged(cpu && gpu);
             });
-
-            var (cpuOk, _) = SendCommand("SetGamingFanSpeed", 0x01UL | ((ulong)cpuSpeed << 8));
-            var (gpuOk, _) = SendCommand("SetGamingFanSpeed", 0x04UL | ((ulong)gpuSpeed << 8));
-            return cpuOk && gpuOk;
+            if (result.Accepted) { _customCpuFanSpeed = cpuSpeed; _customGpuFanSpeed = gpuSpeed; _manualFanSession = true; }
+            else if (_manualFanSession) RecoverAutomaticFans();
+            return result.Accepted;
         }
-
-        public bool SetCpuFanSpeed(byte speed)
+        public bool SetCpuFanSpeed(byte speed) => SetFanSpeed(speed, _customGpuFanSpeed);
+        public bool SetGpuFanSpeed(byte speed) => SetFanSpeed(_customCpuFanSpeed, speed);
+        public bool SetAuxFanSpeed(byte speed) => Write(HardwareFeature.AuxFan, speed is >= 10 and <= 100,
+            () => Acknowledged(SendCommand("SetGamingFanSpeed", 2UL | ((ulong)speed << 8)).success)).Accepted;
+        public void RecoverAutomaticFans()
         {
-            _customCpuFanSpeed = speed;
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    await AcerAgentClient.SetCustomFanSpeedAsync(_customCpuFanSpeed, _customGpuFanSpeed);
-                }
-                catch { }
-            });
-            var (ok, _) = SendCommand("SetGamingFanSpeed", 0x01UL | ((ulong)speed << 8));
-            return ok;
+            if (_manualFanSession && Capabilities.CanWrite(HardwareFeature.FanAuto)) SetFanBehavior(1);
         }
 
-        public bool SetGpuFanSpeed(byte speed)
-        {
-            _customGpuFanSpeed = speed;
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    await AcerAgentClient.SetCustomFanSpeedAsync(_customCpuFanSpeed, _customGpuFanSpeed);
-                }
-                catch { }
-            });
-            var (ok, _) = SendCommand("SetGamingFanSpeed", 0x04UL | ((ulong)speed << 8));
-            return ok;
-        }
-
-        public bool SetAuxFanSpeed(byte speed)
-        {
-            // Fan Index 3 (Auxiliary Fan on Helios 18 / Triton 17)
-            var (ok1, _) = SendCommand("SetGamingFanSpeed", 0x02UL | ((ulong)speed << 8));
-            var (ok2, _) = SendCommand("SetGamingFanSpeed", 0x06UL | ((ulong)speed << 8));
-            return ok1 || ok2;
-        }
 
         #region Non-blocking Asynchronous RGB Lighting
 
@@ -798,7 +588,7 @@ namespace PredatorControlApp
 
                     try
                     {
-                        next();
+                        lock (HardwareWriteGate.CommandLock) { if (!_disposed) next(); }
                     }
                     catch { }
 
@@ -811,14 +601,14 @@ namespace PredatorControlApp
 
         public void SetRgbMode(int mode, byte r, byte g, byte b, byte brightness, byte speed, byte direction)
         {
-            if (!Keyboard.SupportsRgb) return;
+            if (!Keyboard.SupportsRgb || Keyboard.Effects?.Contains(mode) != true || brightness > 100 || speed is < 1 or > 9 || direction > 1) return;
             _lastR = r; _lastG = g; _lastB = b;
             _brightness = brightness;
             _speed = speed;
             _direction = direction;
             _lastMode = mode;
 
-            for (int i = 0; i < 4; i++)
+            for (int i = 0; i < Keyboard.ZoneCount; i++)
                 _zoneColors[i] = Color.FromArgb(r, g, b);
 
             QueueLightingTask(() => ApplyLightingModeCore(mode));
@@ -826,8 +616,8 @@ namespace PredatorControlApp
 
         public void SetSingleZoneColor(int zoneIndex, Color color, int mode = 0)
         {
-            if (!Keyboard.SupportsRgb) return;
-            if (zoneIndex >= 0 && zoneIndex < 4)
+            if (!Keyboard.SupportsRgb || Keyboard.Effects?.Contains(mode) != true) return;
+            if (zoneIndex >= 0 && zoneIndex < Keyboard.ZoneCount)
             {
                 _zoneColors[zoneIndex] = color;
                 _lastMode = mode;
@@ -843,7 +633,7 @@ namespace PredatorControlApp
                     }
                     else // Animated: color applies to entire keyboard
                     {
-                        for (int i = 0; i < 4; i++) _zoneColors[i] = color;
+                        for (int i = 0; i < Keyboard.ZoneCount; i++) _zoneColors[i] = color;
                         _lastR = color.R; _lastG = color.G; _lastB = color.B;
                         ApplyLightingModeCore(mode);
                     }
@@ -853,7 +643,8 @@ namespace PredatorControlApp
 
         public void Set3ZoneCustomColor(int zoneIndex, Color color, int mode = 0)
         {
-            if (!Keyboard.SupportsRgb) return;
+            if (Keyboard.ZoneCount != 4) return; // This legacy visual mapping covers four physical zones.
+            if (!Keyboard.SupportsRgb || Keyboard.Effects?.Contains(mode) != true) return;
             _lastMode = mode;
             if (zoneIndex == 0)
             {
@@ -898,15 +689,15 @@ namespace PredatorControlApp
                 | ((ulong)color.R << 8)
                 | ((ulong)color.G << 16)
                 | ((ulong)color.B << 24);
-            SendCommand("SetGamingRgbKb", zonePayload);
+            Write(HardwareFeature.Rgb, zoneIndex >= 0 && zoneIndex < Keyboard.ZoneCount, () => Acknowledged(SendCommand("SetGamingRgbKb", zonePayload).success));
         }
 
         public void Set4ZoneColors(Color[] zones, int mode = 0, byte? brightness = null, byte? speed = null)
         {
-            if (!Keyboard.SupportsRgb) return;
-            if (zones != null && zones.Length >= 4)
+            if (!Keyboard.SupportsRgb || Keyboard.Effects?.Contains(mode) != true || brightness > 100 || speed is < 1 or > 9) return;
+            if (zones != null && zones.Length >= Keyboard.ZoneCount)
             {
-                for (int i = 0; i < 4; i++) _zoneColors[i] = zones[i];
+                for (int i = 0; i < Keyboard.ZoneCount; i++) _zoneColors[i] = zones[i];
                 _lastR = zones[0].R; _lastG = zones[0].G; _lastB = zones[0].B;
                 _lastMode = mode;
                 if (brightness.HasValue) _brightness = brightness.Value;
@@ -917,13 +708,14 @@ namespace PredatorControlApp
 
         public void Set3ZoneColors(Color zone1, Color zone2, Color zone3, int mode = 0)
         {
+            if (Keyboard.ZoneCount != 4) return;
             var zones4 = new Color[] { zone1, zone2, zone2, zone3 };
             Set4ZoneColors(zones4, mode);
         }
 
         public void SetBrightness(byte brightness)
         {
-            if (!Keyboard.SupportsBrightness) return;
+            if (!Keyboard.SupportsBrightness || brightness > 100) return;
             _brightness = brightness;
 
             QueueLightingTask(() =>
@@ -942,6 +734,7 @@ namespace PredatorControlApp
 
         public void SetSpeed(byte speed)
         {
+            if (!Keyboard.SupportsRgb || speed is < 1 or > 9) return;
             _speed = Math.Clamp(speed, (byte)1, (byte)9);
             QueueLightingTask(() =>
             {
@@ -958,16 +751,17 @@ namespace PredatorControlApp
 
         public void SetDirection(byte direction)
         {
+            if (!Keyboard.SupportsRgb || direction > 1) return;
             _direction = direction;
             QueueLightingTask(() => ApplyLightingModeCore(_lastMode));
         }
 
         public void SetKeyboardColor(Color c, int mode = 0)
         {
-            if (!Keyboard.SupportsRgb) return;
+            if (!Keyboard.SupportsRgb || Keyboard.Effects?.Contains(mode) != true) return;
             _lastR = c.R; _lastG = c.G; _lastB = c.B;
             _lastMode = mode;
-            for (int i = 0; i < 4; i++) _zoneColors[i] = c;
+            for (int i = 0; i < Keyboard.ZoneCount; i++) _zoneColors[i] = c;
 
             QueueLightingTask(() =>
             {
@@ -982,12 +776,12 @@ namespace PredatorControlApp
                 payload[7] = c.B;
                 payload[8] = 0x03;
                 payload[9] = (byte)(mode == 8 ? 0 : 1);
-                SendLedCommand(payload);
+                if (!SendLedCommand(payload)) return;
 
                 if (mode == 0)
                 {
                     Thread.Sleep(30);
-                    for (int z = 0; z < 4; z++)
+                    for (int z = 0; z < Keyboard.ZoneCount; z++)
                     {
                         ApplyZoneLightingCore(z, c);
                         Thread.Sleep(30);
@@ -1006,7 +800,7 @@ namespace PredatorControlApp
 
         public void SetKeyboardOff()
         {
-            if (!Keyboard.SupportsRgb) return; // Binary power uses the explicit keyboard controller.
+            if (!Keyboard.SupportsRgb || Keyboard.Effects?.Contains(8) != true) return; // Binary power uses the explicit keyboard controller.
             _brightness = 0;
             _lastMode = 8;
             QueueLightingTask(() => ApplyLightingModeCore(8));
@@ -1014,21 +808,21 @@ namespace PredatorControlApp
 
         public void ApplyLightingSynchronous(Color[] zones, int mode = 0, byte brightness = 100, byte speed = 5)
         {
-            if (!Keyboard.SupportsRgb) return;
-            if (zones != null && zones.Length >= 4)
+            if (!Keyboard.SupportsRgb || Keyboard.Effects?.Contains(mode) != true || brightness > 100 || speed is < 1 or > 9) return;
+            if (zones != null && zones.Length >= Keyboard.ZoneCount)
             {
-                for (int i = 0; i < 4; i++) _zoneColors[i] = zones[i];
+                for (int i = 0; i < Keyboard.ZoneCount; i++) _zoneColors[i] = zones[i];
                 _lastR = zones[0].R; _lastG = zones[0].G; _lastB = zones[0].B;
                 _lastMode = mode;
                 _brightness = brightness;
                 _speed = Math.Clamp(speed, (byte)1, (byte)9);
-                Apply4ZoneLightingCore(mode);
+                lock (HardwareWriteGate.CommandLock) Apply4ZoneLightingCore(mode);
             }
         }
 
         private void ApplyLightingModeCore(int mode)
         {
-            if (!Keyboard.SupportsRgb) return;
+            if (!Keyboard.SupportsRgb || Keyboard.Effects?.Contains(mode) != true) return;
             byte[] payload = new byte[16];
             payload[0] = (byte)(mode == 8 ? 0 : mode);
             payload[1] = _speed;
@@ -1040,26 +834,16 @@ namespace PredatorControlApp
             payload[7] = _lastB;
             payload[8] = 0x03;
             payload[9] = (byte)(mode == 8 ? 0 : 1);
-            SendLedCommand(payload);
+            if (!SendLedCommand(payload)) return;
 
             SyncLightingProfileIni();
 
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    if (mode != 0 && mode != 8)
-                    {
-                        await AcerAgentClient.SetRgbEffectAsync(mode, Color.FromArgb(_lastR, _lastG, _lastB), _brightness, _speed, _direction);
-                    }
-                }
-                catch { }
-            });
         }
+
 
         private void Apply4ZoneLightingCore(int mode)
         {
-            if (!Keyboard.SupportsRgb) return;
+            if (!Keyboard.SupportsRgb || Keyboard.Effects?.Contains(mode) != true) return;
             // 1. Send backlight mode & brightness configuration to controller first
             byte[] payload = new byte[16];
             payload[0] = (byte)(mode == 8 ? 0 : mode);
@@ -1072,14 +856,14 @@ namespace PredatorControlApp
             payload[7] = _zoneColors[0].B;
             payload[8] = 0x03;
             payload[9] = (byte)(mode == 8 ? 0 : 1);
-            SendLedCommand(payload);
+            if (!SendLedCommand(payload)) return;
 
             if (mode == 0)
             {
                 // 2. In static 4-zone mode, apply individual physical zone colors AFTER SendLedCommand
                 // with OEM driver 30ms inter-zone sleep so the EC controller does NOT overwrite per-zone colors
                 Thread.Sleep(30);
-                for (int z = 0; z < 4; z++)
+                for (int z = 0; z < Keyboard.ZoneCount; z++)
                 {
                     ApplyZoneLightingCore(z, _zoneColors[z]);
                     Thread.Sleep(30);
@@ -1089,66 +873,8 @@ namespace PredatorControlApp
             SyncLightingProfileIni();
         }
 
-        public void SyncLightingProfileIni()
-        {
-            if (!Keyboard.SupportsRgb) return;
-            try
-            {
-                string iniPath = @"C:\ProgramData\OEM\AcerLightingService\LightingProfile\LightingProfile.ini";
-                if (!File.Exists(iniPath)) return;
+        public void SyncLightingProfileIni() { /* Firmware readback is unavailable; do not overwrite OEM profiles. */ }
 
-                string modeSection = _lastMode switch
-                {
-                    0 => "AcerECKeyboard Device_STATIC",
-                    1 => "AcerECKeyboard Device_BREATHING",
-                    2 => "AcerECKeyboard Device_NEON",
-                    3 => "AcerECKeyboard Device_WAVE",
-                    4 => "AcerECKeyboard Device_SHIFTING",
-                    5 => "AcerECKeyboard Device_ZOOM",
-                    6 => "AcerECKeyboard Device_METEOR",
-                    7 => "AcerECKeyboard Device_TWINKLING",
-                    _ => "AcerECKeyboard Device_STATIC"
-                };
-
-                // AcerLightingService 1-based indexing: Mode1 is Direct, Mode2 is STATIC, Mode3 is BREATHING, etc.
-                // Mode 8 is Off -> ActiveMode 0.
-                // Mode 0 (Static) -> ActiveMode 2 (Mode2=STATIC).
-                // Mode 1..7 (Animated) -> ActiveMode _lastMode + 2 (3 to 9).
-                int activeModeVal = _lastMode switch
-                {
-                    8 => 0,
-                    _ => _lastMode + 2
-                };
-                WritePrivateProfileString("AcerECKeyboard Device", "ActiveMode", activeModeVal.ToString(), iniPath);
-
-                string colorHex = $"0X{_zoneColors[0].R:x2}{_zoneColors[0].G:x2}{_zoneColors[0].B:x2}";
-
-                // Always ensure STATIC section has valid user color and brightness (never 000000 or uninitialized)
-                WritePrivateProfileString("AcerECKeyboard Device_STATIC", "color", colorHex, iniPath);
-                WritePrivateProfileString("AcerECKeyboard Device_STATIC", "brightness", _brightness.ToString(), iniPath);
-                WritePrivateProfileString("AcerECKeyboard Device_STATIC", "speed", _speed.ToString(), iniPath);
-
-                if (_lastMode != 0 && _lastMode != 8)
-                {
-                    string animHex = $"0X{_lastR:x2}{_lastG:x2}{_lastB:x2}";
-                    WritePrivateProfileString(modeSection, "brightness", _brightness.ToString(), iniPath);
-                    WritePrivateProfileString(modeSection, "speed", _speed.ToString(), iniPath);
-                    WritePrivateProfileString(modeSection, "color", animHex, iniPath);
-                }
-
-                // Neutralize legacy Acer Amber presets in factory default sections so fallback never turns amber
-                WritePrivateProfileString("AcerECKeyboard Device_WAVE", "color", "0X00dcff", iniPath);
-                WritePrivateProfileString("AcerECKeyboard Device_BREATHING", "color", "0X00dcff", iniPath);
-                WritePrivateProfileString("AcerECKeyboard Device_SHIFTING", "color", "0X00dcff", iniPath);
-
-                for (int i = 0; i < 4; i++)
-                {
-                    Color c = _zoneColors[i];
-                    WritePrivateProfileString("AcerECKeyboard Device_PerKeyColor", $"Key{i + 1}", $"0X{c.R:x2}{c.G:x2}{c.B:x2}", iniPath);
-                }
-            }
-            catch { }
-        }
 
         #endregion
 
@@ -1167,135 +893,66 @@ namespace PredatorControlApp
             catch { }
         }
 
+        private static bool TryReadWindowsPowerOverlay(out Guid overlay)
+        {
+            overlay = default;
+            try { return PowerGetActualOverlayScheme(out overlay) == 0; }
+            catch { return false; }
+        }
+
+        private static HardwareOperationResult ApplyWindowsPowerOverlay(byte mode)
+        {
+            Guid wanted = mode switch { 0 => OVERLAY_EFFICIENCY, 4 => OVERLAY_PERFORMANCE, _ => OVERLAY_BALANCED };
+            if (PowerSetActiveOverlayScheme(wanted) != 0) return new("failed", "Windows rejected the requested power mode.");
+            return TryReadWindowsPowerOverlay(out var actual) && actual == wanted
+                ? new("confirmed", "Windows power mode confirmed. No Acer thermal-profile command was sent.")
+                : new("unverified", "Windows accepted the power mode, but readback did not confirm it.");
+        }
+
         // ============================================================================================
         // SECTION 4: BATTERY HEALTH & 80% CHARGE LIMITER
         // ============================================================================================
 
         /// <summary>
         /// [TRIGGER]     : User clicks "80% Battery Limit" toggle in UI
-        /// [HARDWARE I/O]: Invokes ACPI WMI SetBatteryHealthControl(uFunctionStatus=1) or sets ASMSvc registry
+        /// [HARDWARE I/O]: Invokes ACPI WMI SetBatteryHealthControl(uFunctionStatus=1) with status readback
         /// [EFFECT]      : Embedded Controller and battery charger IC cap charging circuit at 80% capacity
         /// </summary>
         public bool SetBatteryChargeLimit(bool enable, bool startServices = false)
         {
-            // 1. Primary: BIOS native ACPI WMI BatteryControl class (Predator & modern Nitro)
-            // Returns true ONLY when the ACPI call confirms success (uReturn == 0).
-            try
+            HardwareOperationResult Finish(string status, string message)
             {
+                lock (_probeLock)
+                    if (_cachedCapabilities != null) _cachedCapabilities = _cachedCapabilities with { BatteryLimitEnabled = status == "confirmed" ? enable : null };
+                return new(status, message);
+            }
+            var result = Write(HardwareFeature.BatteryLimit, true, () =>
+            {
+                if (_testIo != null)
+                {
+                    if (!_testIo.SetBatteryLimit(enable)) return new("failed", "Battery command rejected.");
+                    return _testIo.ReadBatteryLimit() == enable ? Finish("confirmed", "Battery state confirmed.") : Finish("unverified", "Battery state unverified.");
+                }
                 using var searcher = new ManagementObjectSearcher(@"root\WMI", "SELECT * FROM BatteryControl");
                 using var results = searcher.Get();
-                using var obj = results.Cast<ManagementObject>().FirstOrDefault();
-                if (obj != null)
+                using var iterator = results.GetEnumerator();
+                if (!iterator.MoveNext() || iterator.Current is not ManagementObject obj) return new("failed", "Battery interface unavailable.");
+                using (obj)
+                using (var args = obj.GetMethodParameters("SetBatteryHealthControl"))
                 {
-                    using var inParams = obj.GetMethodParameters("SetBatteryHealthControl");
-                    inParams["uBatteryNo"] = (byte)1;
-                    inParams["uFunctionMask"] = (byte)1;
-                    inParams["uFunctionStatus"] = (byte)(enable ? 1 : 0);
-                    inParams["uReservedIn"] = new byte[] { 0, 0, 0, 0, 0 };
-
-                    using var outParams = obj.InvokeMethod("SetBatteryHealthControl", inParams, null);
-                    if (outParams?["uReturn"] != null)
-                    {
-                        ushort result = Convert.ToUInt16(outParams["uReturn"]);
-                        if (result == 0) return true;
-                    }
+                    args["uBatteryNo"] = (byte)1; args["uFunctionMask"] = (byte)1;
+                    args["uFunctionStatus"] = (byte)(enable ? 1 : 0); args["uReservedIn"] = new byte[5];
+                    using var reply = obj.InvokeMethod("SetBatteryHealthControl", args, new InvokeMethodOptions { Timeout = TimeSpan.FromSeconds(2) });
+                    if (reply?["uReturn"] == null || Convert.ToUInt16(reply["uReturn"]) != 0) return new("failed", "Battery command rejected.");
                 }
-            }
-            catch { }
-
-            // 2. Fallback for Nitro and Acer systems using ASMSvc / AcerCareCenter registry keys.
-            // Registry writes alone do NOT confirm the hardware limit, so this path returns false.
-            try
-            {
-                int stopCharging = enable ? 80 : 100;
-                int healthControl = enable ? 1 : 0;
-
-                string[] paths = {
-                    @"SOFTWARE\OEM\AcerCareCenter\Battery",
-                    @"SOFTWARE\WOW6432Node\OEM\AcerCareCenter\Battery",
-                    @"SOFTWARE\OEM\AcerCareCenter",
-                    @"SOFTWARE\WOW6432Node\OEM\AcerCareCenter"
-                };
-
-                foreach (var path in paths)
-                {
-                    try
-                    {
-                        using var key = Registry.LocalMachine.CreateSubKey(path, true);
-                        if (key != null)
-                        {
-                            key.SetValue("StopCharging", stopCharging, RegistryValueKind.DWord);
-                            key.SetValue("HealthControl", healthControl, RegistryValueKind.DWord);
-                            key.SetValue("BatteryLimit", healthControl, RegistryValueKind.DWord);
-                            key.SetValue("LimitPercent", 80, RegistryValueKind.DWord);
-                        }
-                    }
-                    catch { }
-                }
-
-                // Only start Acer services when explicitly requested by the caller
-                if (startServices)
-                {
-                    string[] svcs = { "ASMSvc", "AcerServiceSvc", "AcerDeviceEnablingServiceV2", "AcerDeviceEnablingService" };
-                    foreach (var svc in svcs)
-                    {
-                        try
-                        {
-                            using var sc = new ServiceController(svc);
-                            if (sc.Status == ServiceControllerStatus.Stopped || sc.Status == ServiceControllerStatus.Paused)
-                            {
-                                sc.Start();
-                            }
-                        }
-                        catch { }
-                    }
-                }
-
-                Program.Report(new InvalidOperationException(
-                    $"Battery limit ({(enable ? "on" : "off")}) not confirmed by ACPI; registry fallback written only."), false);
-            }
-            catch { }
-
-            return false;
+                return TryReadBatteryLimit(out var actual) && actual == enable
+                    ? Finish("confirmed", "Charge-limit state confirmed by BatteryControl.")
+                    : Finish("unverified", "Battery command acknowledged, but charge-limit state could not be confirmed.");
+            });
+            return result.Confirmed;
         }
+        public bool IsBatteryControlSupported() => Capabilities.SupportsBatteryControl;
 
-        public bool IsBatteryControlSupported()
-        {
-            try
-            {
-                // Check 1: BIOS native ACPI WMI BatteryControl class (Predator & modern Nitro)
-                using (var searcher = new ManagementObjectSearcher(@"root\WMI", "SELECT * FROM BatteryControl"))
-                using (var results = searcher.Get())
-                {
-                    if (results.Count > 0) return true;
-                }
-
-                // Check 2: Acer OEM battery service or registry exists (Nitro / Acer Care Center)
-                string[] svcs = { "ASMSvc", "AcerServiceSvc", "AcerDeviceEnablingServiceV2", "AcerDeviceEnablingService" };
-                foreach (var svc in svcs)
-                {
-                    try
-                    {
-                        using var sc = new ServiceController(svc);
-                        _ = sc.Status;
-                        return true;
-                    }
-                    catch { }
-                }
-
-                using (var reg = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\OEM\AcerCareCenter"))
-                {
-                    if (reg != null) return true;
-                }
-
-                // Check 3: Running on genuine Acer gaming chassis (Nitro / Predator)
-                if (ChassisFamily is AcerChassisFamily.Nitro or AcerChassisFamily.Predator)
-                    return true;
-            }
-            catch { }
-
-            return false;
-        }
 
         // ============================================================================================
         // SECTION 5: GPU MUX SWITCH, LCD OVERDRIVE, STARTUP SOUND & USB CHARGING
@@ -1310,7 +967,7 @@ namespace PredatorControlApp
         /// </summary>
         public async Task<int?> GetGpuModeAsync()
         {
-            return await AcerAgentClient.GetGpuModeAsync();
+            return _testIo != null ? null : await AcerAgentClient.GetGpuModeAsync();
         }
 
         /// <summary>
@@ -1318,94 +975,41 @@ namespace PredatorControlApp
         /// [HARDWARE I/O]: Queries AASSvc TCP 46933 for supported modes bitmask
         /// [EFFECT]      : Bit 0 = Optimus, Bit 1 = Discrete, Bit 2 = Auto
         /// </summary>
-        public async Task<int> GetGpuModeCapabilityAsync()
-        {
-            try
-            {
-                int cap = await AcerAgentClient.GetGpuModeCapabilityAsync();
-                if (cap > 0) return cap;
-            }
-            catch { }
+        public Task<int> GetGpuModeCapabilityAsync() => Task.FromResult(Capabilities.GpuModeMask);
 
-            // Hardware capability probe fallback:
-            // If the chassis is a Predator laptop with physical MUX (PH16, PHN16, PT, etc.):
-            if (Capabilities.SupportsGpuMux)
-            {
-                // Physical MUX supports Optimus (1), Discrete (2), and Auto (4) -> bitmask 7
-                return 7;
-            }
-
-            return 0;
-        }
 
         /// <summary>
         /// [TRIGGER]     : User selects GPU Working Mode (Optimus, Discrete, Auto)
         /// [HARDWARE I/O]: Dual-dispatches to Acer OEM Agent Service and ACPI Feature ID 0x02
         /// [EFFECT]      : Writes MUX mode into BIOS NVRAM (takes effect after system reboot)
         /// </summary>
-        public async Task<bool> SetGpuModeAsync(int mode)
+        public Task<bool> SetGpuModeAsync(int mode)
         {
-            // 1. Primary: OEM Agent Service (syncs registry, state, and handles permissions)
-            bool agentOk = await AcerAgentClient.SetGpuModeAsync(mode);
-
-            // 2. Direct ACPI WMI fallback (Feature ID 0x02, value = mode + 1)
-            // Reverse-engineered from AcerAgentService RVA 0x3DD90:
-            // Optimus (mode 0) -> 0x0102
-            // Discrete (mode 1) -> 0x0202
-            // Auto (mode 2)     -> 0x0302
-            ulong wmiPayload = (ulong)0x02 | (((ulong)mode + 1) << 8);
-            var (wmiOk, _) = SendCommand("SetGamingMiscSetting", wmiPayload);
-
-            return agentOk || wmiOk;
+            var result = Write(HardwareFeature.GpuMux, mode is >= 0 and <= 2 && (Capabilities.GpuModeMask & (1 << mode)) != 0, () =>
+            {
+                bool ok = _testIo?.SetGpuMode(mode) ?? AcerAgentClient.SetGpuModeAsync(mode).GetAwaiter().GetResult();
+                if (!ok) return new("failed", "GPU mode request failed.");
+                return new("unverified", "GPU mode request acknowledged; active state can only be verified after the operator restarts Windows.");
+            });
+            return Task.FromResult(result.Accepted);
         }
+
 
         /// <summary>
         /// [TRIGGER]     : User toggles LCD Overdrive (3ms response time)
         /// [HARDWARE I/O]: Calls SetGamingMiscSetting with Feature ID 0x10 and state bit
         /// [EFFECT]      : Embedded Controller sets panel overdrive voltage to eliminate ghosting
         /// </summary>
-        public bool SetLcdOverdrive(bool enable)
-        {
-            // Reverse-engineered from AcerAgentService.exe / AcerHardwareService.exe:
-            // SetGamingMiscSetting takes 64-bit value where bits [31:0] = 0x10 (Feature ID for LCD Overdrive)
-            // and bits [63:32] = 1 (enable) or 0 (disable).
-            ulong payload = ((enable ? 1UL : 0UL) << 32) | 0x10UL;
-            var (ok, _) = SendCommand("SetGamingMiscSetting", payload);
-            return ok;
-        }
+        public bool SetLcdOverdrive(bool enable) => Write(HardwareFeature.LcdOverdrive, true,
+            () => Acknowledged(SendCommand("SetGamingMiscSetting", ((enable ? 1UL : 0UL) << 32) | 0x10UL).success)).Accepted;
 
-        /// <summary>
-        /// [TRIGGER]     : User toggles "Startup Animation & Sound"
-        /// [HARDWARE I/O]: Sends packet 102 ({"Function":"BOOT_SOUND","Parameter":{"status":1/0}}) to AASSvc (TCP 46933)
-        /// [EFFECT]      : Embedded Controller toggles firmware boot chime flag (requires BIOS POST enabled)
-        /// </summary>
-        public bool SetBootSound(bool enable)
-        {
-            // 1. Primary: OEM AcerAgentService (Port 46933) - exact socket used by official PredatorSense
-            bool agentOk = false;
-            try
-            {
-                var task = AcerAgentClient.SetBootSoundAsync(enable);
-                if (task.Wait(1000)) agentOk = task.Result;
-            }
-            catch { }
+        public bool SetBootSound(bool enable) => Write(HardwareFeature.BootSound, true,
+            () => Acknowledged(SendCommand("SetGamingMiscSetting", ((enable ? 1UL : 0UL) << 32) | 0x0EUL).success)).Accepted;
 
-            // 2. Secondary: Direct WMI SetGamingMiscSetting (Feature ID 0x0E)
-            ulong payload = ((enable ? 1UL : 0UL) << 32) | 0x0EUL;
-            var (ok, _) = SendCommand("SetGamingMiscSetting", payload);
-
-            try
-            {
-                using var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(@"SOFTWARE\PredatorControl");
-                key?.SetValue("BootSound", enable ? 1 : 0);
-            }
-            catch { }
-
-            return ok;
-        }
 
         public bool GetBootSound()
         {
+            if (_testIo != null) return false;
             try
             {
                 var task = AcerAgentClient.GetBootSoundAsync();
@@ -1430,48 +1034,18 @@ namespace PredatorControlApp
         /// [HARDWARE I/O]: Calls SetGamingMiscSetting with Feature ID 0x0C (state) and 0x0D (cutoff) and syncs settings.json
         /// [EFFECT]      : Embedded Controller energizes designated high-power USB port while laptop is off/sleeping
         /// </summary>
-        public bool SetUsbCharging(bool enable, int cutoffPercent = 10)
-        {
-            // Feature ID 0x0C (Power-off USB Charging Enable/Disable)
-            ulong payloadState = ((enable ? 1UL : 0UL) << 32) | 0x0CUL;
-            var (ok1, _) = SendCommand("SetGamingMiscSetting", payloadState);
-
-            // Feature ID 0x0D (Battery cutoff threshold percentage: 10, 20, 30%)
-            ulong payloadCutoff = (((ulong)cutoffPercent) << 32) | 0x0DUL;
-            SendCommand("SetGamingMiscSetting", payloadCutoff);
-
-            // Synchronize with Acer Quick Access settings.json if present
-            try
+        public bool SetUsbCharging(bool enable, int cutoffPercent = 10) => Write(HardwareFeature.UsbCharging,
+            cutoffPercent is 10 or 20 or 30, () =>
             {
-                string qaSettingsPath = @"C:\ProgramData\Acer\QA\settings.json";
-                if (File.Exists(qaSettingsPath))
-                {
-                    string json = File.ReadAllText(qaSettingsPath);
-                    var dict = JsonSerializer.Deserialize<Dictionary<string, object>>(json);
-                    if (dict != null)
-                    {
-                        dict["USBChargeState"] = enable ? 15 : 0;
-                        dict["USBChargeSwitch"] = enable;
-                        dict["USBChargeLimit"] = cutoffPercent;
-                        File.WriteAllText(qaSettingsPath, JsonSerializer.Serialize(dict, new JsonSerializerOptions { WriteIndented = true }));
-                    }
-                }
-            }
-            catch { }
+                bool state = SendCommand("SetGamingMiscSetting", ((enable ? 1UL : 0UL) << 32) | 0x0CUL).success;
+                bool cutoff = state && SendCommand("SetGamingMiscSetting", ((ulong)cutoffPercent << 32) | 0x0DUL).success;
+                return Acknowledged(state && cutoff);
+            }).Accepted;
 
-            try
-            {
-                using var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(@"SOFTWARE\PredatorControl");
-                key?.SetValue("UsbCharging", enable ? 1 : 0);
-                key?.SetValue("UsbChargingCutoff", cutoffPercent);
-            }
-            catch { }
-
-            return ok1;
-        }
 
         public bool GetUsbCharging()
         {
+            if (_testIo != null) return false;
             try
             {
                 string qaSettingsPath = @"C:\ProgramData\Acer\QA\settings.json";
@@ -1505,140 +1079,44 @@ namespace PredatorControlApp
 
         public bool SetBacklight30s(bool enable) => KeyboardControl.Apply(null, enable).Confirmed;
 
-        public bool SetWinKeyLock(bool lockKeys)
-        {
-            byte val = (byte)(lockKeys ? 0 : 3);
-            byte[] kbPayload = new byte[8] { 0x03, val, 0x00, 0x00, 0x00, 0x00, 0x00, (byte)(0xFC - val) };
-            return SendGamingRgbKbCommand(kbPayload);
-        }
+        // Windows key filtering is provided by the existing OS hook; no guessed RGB firmware packet.
+        public bool SetWinKeyLock(bool lockKeys) => false;
+
 
         #endregion
 
         #region Hardware Capability & Diagnostic Probe
 
-        private static (string Manufacturer, string Model, string BiosVersion, bool IsAcerGaming)? _cachedSystemIdentity;
-        private static readonly object _identityLock = new();
-
-        public static (string Manufacturer, string Model, string BiosVersion, bool IsAcerGaming) GetSystemIdentity()
-        {
-            if (_cachedSystemIdentity.HasValue) return _cachedSystemIdentity.Value;
-
-            lock (_identityLock)
-            {
-                if (_cachedSystemIdentity.HasValue) return _cachedSystemIdentity.Value;
-
-                string manufacturer = "Acer", model = "Unknown", bios = "Unknown";
-                bool isGaming = false;
-                try
-                {
-                    using var csSearcher = new ManagementObjectSearcher(@"root\CIMV2", "SELECT Manufacturer, Model FROM Win32_ComputerSystem");
-                    using var csResults = csSearcher.Get();
-                    foreach (ManagementObject mo in csResults)
-                    {
-                        using (mo)
-                        {
-                            manufacturer = mo["Manufacturer"]?.ToString()?.Trim() ?? manufacturer;
-                            model = mo["Model"]?.ToString()?.Trim() ?? model;
-                            break;
-                        }
-                    }
-
-                    using var biosSearcher = new ManagementObjectSearcher(@"root\CIMV2", "SELECT SMBIOSBIOSVersion FROM Win32_BIOS");
-                    using var biosResults = biosSearcher.Get();
-                    foreach (ManagementObject mo in biosResults)
-                    {
-                        using (mo)
-                        {
-                            bios = mo["SMBIOSBIOSVersion"]?.ToString()?.Trim() ?? bios;
-                            break;
-                        }
-                    }
-
-                    isGaming = manufacturer.Contains("Acer", StringComparison.OrdinalIgnoreCase) &&
-                        (model.Contains("Predator", StringComparison.OrdinalIgnoreCase) ||
-                         model.Contains("Helios", StringComparison.OrdinalIgnoreCase) ||
-                         model.Contains("Triton", StringComparison.OrdinalIgnoreCase) ||
-                         model.Contains("Nitro", StringComparison.OrdinalIgnoreCase) ||
-                         model.Contains("PH", StringComparison.OrdinalIgnoreCase) ||
-                         model.Contains("PT", StringComparison.OrdinalIgnoreCase) ||
-                         model.Contains("AN", StringComparison.OrdinalIgnoreCase) ||
-                         model.Contains("AV", StringComparison.OrdinalIgnoreCase));
-                }
-                catch { }
-
-                _cachedSystemIdentity = (manufacturer, model, bios, isGaming);
-                return _cachedSystemIdentity.Value;
-            }
-        }
+        private static readonly Lazy<DeviceIdentity> Identity = new(DeviceDetector.Read);
+        public static DeviceIdentity GetSystemIdentity() => Identity.Value;
 
         public string ExportDiagnosticReport()
         {
-            var (mfg, model, bios, isGaming) = GetSystemIdentity();
-            var sb = new System.Text.StringBuilder();
-            sb.AppendLine("{");
-            sb.AppendLine($"  \"TimestampUtc\": \"{DateTime.UtcNow:O}\",");
-            sb.AppendLine($"  \"Manufacturer\": \"{mfg}\",");
-            sb.AppendLine($"  \"Model\": \"{model}\",");
-            sb.AppendLine($"  \"BiosVersion\": \"{bios}\",");
-            sb.AppendLine($"  \"IsAcerGamingChassis\": {isGaming.ToString().ToLowerInvariant()},");
-            sb.AppendLine($"  \"DiscoveredWmiClass\": \"{DiscoveredWmiClass}\",");
-
-            // Probe available Acer WMI classes
-            var availableClasses = new List<string>();
-            foreach (var cls in KnownWmiClasses)
-            {
-                try
-                {
-                    using var s = new ManagementObjectSearcher(@"root\WMI", $"SELECT * FROM {cls}");
-                    using var res = s.Get();
-                    using var en = res.GetEnumerator();
-                    if (en.MoveNext()) availableClasses.Add(cls);
-                }
-                catch { }
-            }
-            sb.AppendLine($"  \"AvailableGamingWmiClasses\": [ {string.Join(", ", availableClasses.Select(c => $"\"{c}\""))} ],");
-
-            // Check AASSvc Named Pipe
-            bool pipeAvailable = false;
-            try
-            {
-                using var pipe = new NamedPipeClientStream(".", "AcerAgentPipe", PipeDirection.InOut);
-                pipe.Connect(100);
-                pipeAvailable = pipe.IsConnected;
-            }
-            catch { }
-            sb.AppendLine($"  \"AcerAgentPipeAvailable\": {pipeAvailable.ToString().ToLowerInvariant()},");
-
-            // Fan readings check
-            int? cpuRpm = CpuFanRpm;
-            int? gpuRpm = GpuFanRpm;
-            int? auxRpm = AuxFanRpm;
-            sb.AppendLine($"  \"ChassisFamily\": \"{ChassisFamily}\",");
-            sb.AppendLine($"  \"SupportsRgbLighting\": {Capabilities.SupportsRgbLighting.ToString().ToLowerInvariant()},");
-            sb.AppendLine($"  \"SupportsCoolBoost\": {Capabilities.SupportsCoolBoost.ToString().ToLowerInvariant()},");
-            sb.AppendLine($"  \"SupportsBatteryControl\": {Capabilities.SupportsBatteryControl.ToString().ToLowerInvariant()},");
-            sb.AppendLine($"  \"CpuFanRpm\": {(cpuRpm.HasValue ? cpuRpm.Value.ToString() : "null")},");
-            sb.AppendLine($"  \"GpuFanRpm\": {(gpuRpm.HasValue ? gpuRpm.Value.ToString() : "null")},");
-            sb.AppendLine($"  \"HasAuxFan\": {HasAuxFan.ToString().ToLowerInvariant()},");
-            sb.AppendLine($"  \"AuxFanRpm\": {(auxRpm.HasValue ? auxRpm.Value.ToString() : "null")}");
-            sb.AppendLine("}");
-
-            return sb.ToString();
+            var caps = Capabilities;
+            var sample = GetAllSensors(IsOnAc);
+            return CompatibilityDiagnostics.Export(caps, Updater.CurrentText,
+                new { wmiClass = _discovery?.WmiClass, methods = _discovery?.Methods, keyboardReadable = _discovery?.KeyboardConfigurationReadable,
+                    batteryStatusReadable = _discovery?.BatteryStatusReadable, windowsPowerOverlayReadable = _discovery?.WindowsPowerOverlayReadable,
+                    nitroSense3ReadStatus = _testIo == null ? NitroSense3Protocol.LastReadFailure : null,
+                    windowsPowerPlans = _discovery?.WindowsPowerPlans,
+                    supportedSensorMask = _discovery?.SupportedSensorMask,
+                    sensorReadings = new { sample.cpuTemp, sample.gpuTemp, sample.cpuFanRpm, sample.gpuFanRpm, sample.auxFanRpm, sample.gpuPowerW } },
+                LastOperation, revision: Updater.BuildRevision);
         }
 
         #endregion
 
+
         public void Dispose()
         {
-            lock (_lock)
+            lock (HardwareWriteGate.CommandLock)
             {
-                if (!_disposed)
+                RecoverAutomaticFans();
+                lock (_lock)
                 {
+                    if (_disposed) return;
                     _disposed = true;
-                    lock (_lightingLock)
-                    {
-                        _pendingLightingAction = null;
-                    }
+                    lock (_lightingLock) _pendingLightingAction = null;
                     _cachedObj?.Dispose();
                     _cachedObj = null;
                 }

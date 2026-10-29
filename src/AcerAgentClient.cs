@@ -30,7 +30,7 @@ namespace PredatorControlApp
     /// Lightweight, asynchronous IPC client for Acer OEM hardware services:
     /// - Primary: AcerAgentService TCP socket at 127.0.0.1:46933
     /// - Fallback: Named pipe \\.\pipe\predatorsense_agent_service_
-    /// 
+    ///
     /// Dispatches hardware commands:
     /// - OPERATING_MODE: Quiet (0), Balanced (1), Performance (4), Turbo (5), Eco (6)
     /// - FAN_CONTROL: Auto (0), Max (1), Custom (2)
@@ -73,100 +73,38 @@ namespace PredatorControlApp
         /// </summary>
         public static async Task<string?> SendCommandAsync(uint packetId, string jsonPayload, int timeoutMs = 1500)
         {
-            if (!await _sendLock.WaitAsync(timeoutMs))
-                return null;
-
+            bool write = packetId == CMD_SET_DEVICE_DATA;
+            if (write && !HardwareWriteGate.InScope(HardwareFeature.GpuMux, "acer-agent")) return null;
+            if (!write && packetId is not (CMD_INITIALIZATION or CMD_GET_MONITOR_DATA or CMD_GET_UPDATED_DATA or CMD_GET_CONNECTED_DEVICE)) return null;
+            if (!await _sendLock.WaitAsync(timeoutMs)) return null;
             try
             {
-                // Attempt 1: TCP Socket to AcerAgentService (127.0.0.1:46933)
-                try
+                using var deadline = new CancellationTokenSource(timeoutMs);
+                byte[] payload = Encoding.UTF8.GetBytes(jsonPayload);
+                if (payload.Length > 16384) return null;
+                byte[] packet = new byte[8 + payload.Length];
+                MagicBytes.CopyTo(packet, 0); BitConverter.GetBytes(packetId).CopyTo(packet, 4); payload.CopyTo(packet, 8);
+                // Select a trusted endpoint before sending. Never retry a dispatched write on another transport.
+                if (AcerAgentEndpoint.TcpTrusted(TcpPort))
                 {
-                    using var cts = new CancellationTokenSource(timeoutMs);
                     using var tcp = new TcpClient();
-                    
-                    var connectTask = tcp.ConnectAsync(Host, TcpPort);
-                    var delayTask = Task.Delay(timeoutMs, cts.Token);
-                    if (await Task.WhenAny(connectTask, delayTask) == connectTask && tcp.Connected)
-                    {
-                        using var stream = tcp.GetStream();
-                        stream.ReadTimeout = timeoutMs;
-                        stream.WriteTimeout = timeoutMs;
-
-                        byte[] idBytes = BitConverter.GetBytes(packetId);
-                        byte[] payloadBytes = Encoding.UTF8.GetBytes(jsonPayload);
-
-                        byte[] fullPacket = new byte[MagicBytes.Length + idBytes.Length + payloadBytes.Length];
-                        Buffer.BlockCopy(MagicBytes, 0, fullPacket, 0, MagicBytes.Length);
-                        Buffer.BlockCopy(idBytes, 0, fullPacket, MagicBytes.Length, idBytes.Length);
-                        Buffer.BlockCopy(payloadBytes, 0, fullPacket, MagicBytes.Length + idBytes.Length, payloadBytes.Length);
-
-                        await stream.WriteAsync(fullPacket, cts.Token);
-                        await stream.FlushAsync(cts.Token);
-
-                        byte[] buffer = new byte[8192];
-                        int bytesRead = await stream.ReadAsync(buffer, cts.Token);
-                        if (bytesRead > 0)
-                        {
-                            if (bytesRead > 8 && buffer[0] == 'A' && buffer[1] == 'C' && buffer[2] == 'E' && buffer[3] == 'R')
-                            {
-                                return Encoding.UTF8.GetString(buffer, 8, bytesRead - 8);
-                            }
-                            return Encoding.UTF8.GetString(buffer, 0, bytesRead);
-                        }
-                        return null;
-                    }
+                    await tcp.ConnectAsync(Host, TcpPort, deadline.Token);
+                    using var stream = tcp.GetStream();
+                    await stream.WriteAsync(packet, deadline.Token);
+                    return await AcerAgentProtocol.ReadReply(stream, packetId, deadline.Token);
                 }
-                catch
+                foreach (string name in new[] { "predatorsense_agent_service_", "nitrosense_agent_service_" })
                 {
-                    // Fall back to Named Pipes if TCP is unavailable or busy
-                }
-
-                // Attempt 2: Named Pipes (NitroSense and PredatorSense candidates)
-                foreach (var pipeName in PipeCandidates)
-                {
-                    try
-                    {
-                        using var ctsPipe = new CancellationTokenSource(timeoutMs);
-                        using var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
-                        
-                        var connectTask = pipe.ConnectAsync(ctsPipe.Token);
-                        var delayTask = Task.Delay(timeoutMs, ctsPipe.Token);
-                        if (await Task.WhenAny(connectTask, delayTask) == connectTask && pipe.IsConnected)
-                        {
-                            byte[] idBytes = BitConverter.GetBytes(packetId);
-                            byte[] payloadBytes = Encoding.UTF8.GetBytes(jsonPayload);
-
-                            byte[] fullPacket = new byte[MagicBytes.Length + idBytes.Length + payloadBytes.Length];
-                            Buffer.BlockCopy(MagicBytes, 0, fullPacket, 0, MagicBytes.Length);
-                            Buffer.BlockCopy(idBytes, 0, fullPacket, MagicBytes.Length, idBytes.Length);
-                            Buffer.BlockCopy(payloadBytes, 0, fullPacket, MagicBytes.Length + idBytes.Length, payloadBytes.Length);
-
-                            await pipe.WriteAsync(fullPacket, ctsPipe.Token);
-                            await pipe.FlushAsync(ctsPipe.Token);
-
-                            byte[] buffer = new byte[8192];
-                            int bytesRead = await pipe.ReadAsync(buffer, ctsPipe.Token);
-                            if (bytesRead > 0)
-                            {
-                                if (bytesRead > 8 && buffer[0] == 'A' && buffer[1] == 'C' && buffer[2] == 'E' && buffer[3] == 'R')
-                                {
-                                    return Encoding.UTF8.GetString(buffer, 8, bytesRead - 8);
-                                }
-                                return Encoding.UTF8.GetString(buffer, 0, bytesRead);
-                            }
-                        }
-                    }
-                    catch
-                    {
-                        // Try next pipe candidate
-                    }
+                    using var pipe = new NamedPipeClientStream(".", name, PipeDirection.InOut, PipeOptions.Asynchronous);
+                    try { await pipe.ConnectAsync(150, deadline.Token); }
+                    catch (TimeoutException) { continue; }
+                    if (!AcerAgentEndpoint.PipeTrusted(pipe.SafePipeHandle)) continue;
+                    await pipe.WriteAsync(packet, deadline.Token);
+                    return await AcerAgentProtocol.ReadReply(pipe, packetId, deadline.Token);
                 }
             }
-            finally
-            {
-                _sendLock.Release();
-            }
-
+            catch { /* Failure, cancellation or ambiguous acknowledgement must never cause a second write. */ }
+            finally { _sendLock.Release(); }
             return null;
         }
 
@@ -178,6 +116,7 @@ namespace PredatorControlApp
         /// </summary>
         public static async Task<bool> SetDeviceDataAsync(string function, object parameter)
         {
+            if (function != "GPU_MODE" || !HardwareWriteGate.InScope(HardwareFeature.GpuMux, "acer-agent")) return false;
             var payloadObj = new
             {
                 Function = function,
@@ -200,7 +139,7 @@ namespace PredatorControlApp
             }
             catch { }
 
-            return resp.Contains("\"result\" : \"0\"") || resp.Contains("\"result\":\"0\"");
+            return false;
         }
 
         /// <summary>
@@ -210,40 +149,8 @@ namespace PredatorControlApp
         /// Bit 2 (4): Auto / Advanced Optimus
         /// Returns e.g. 7 (all 3 supported) or 3 (Optimus + Discrete).
         /// </summary>
-        public static async Task<int> GetGpuModeCapabilityAsync()
-        {
-            try
-            {
-                string? resp = await SendCommandAsync(CMD_INITIALIZATION, "{}");
-                if (!string.IsNullOrEmpty(resp))
-                {
-                    using var doc = JsonDocument.Parse(resp);
-                    if (doc.RootElement.TryGetProperty("SUPPORT_GPU_MODE_CAPABILITY", out var capProp) &&
-                        capProp.ValueKind == JsonValueKind.Array &&
-                        capProp.GetArrayLength() > 0)
-                    {
-                        return capProp[0].GetInt32();
-                    }
-                }
-            }
-            catch { }
-
-            // Secondary check: Query current GPU_MODE from service.
-            // On models like PHN16-71, Acer OEM service answers packet 20 with {"data": {"mode": 1}, "result": "0"}.
-            // If the service can query or report GPU_MODE, MUX switching is functional.
-            try
-            {
-                int? currentMode = await GetGpuModeAsync();
-                if (currentMode.HasValue)
-                {
-                    // Modes: 0=Optimus (1), 1=Discrete (2), 2=Auto (4) -> 1 | 2 | 4 = 7
-                    return 7;
-                }
-            }
-            catch { }
-
-            return 0; // Default to 0 when service is unavailable or unsupported
-        }
+        public static async Task<int> GetGpuModeCapabilityAsync() =>
+            AcerAgentProtocol.GpuMask(await SendCommandAsync(CMD_INITIALIZATION, "{}"));
 
         /// <summary>
         /// Queries device data via GET_UPDATED_DATA (Packet 20).

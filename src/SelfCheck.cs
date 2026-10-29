@@ -114,7 +114,13 @@ namespace PredatorControlApp
             var caps = new HardwareCapabilities
             {
                 ChassisFamily = AcerChassisFamily.Predator,
-                Features = f
+                Features = f,
+                Results = new Dictionary<HardwareFeature, CapabilityEvidence>
+                {
+                    [HardwareFeature.CoolBoost] = new(CapabilityStatus.Supported, "test", "synthetic", Writable: true),
+                    [HardwareFeature.LcdOverdrive] = new(CapabilityStatus.Supported, "test", "synthetic", Writable: true),
+                    [HardwareFeature.BootSound] = new(CapabilityStatus.Supported, "test", "synthetic", Writable: true)
+                }
             };
             Debug.Assert(caps.SupportsCoolBoost, "HardwareCapabilities.SupportsCoolBoost must be true");
             Debug.Assert(caps.SupportsLcdOverdrive, "HardwareCapabilities.SupportsLcdOverdrive must be true");

@@ -57,7 +57,9 @@ namespace PredatorControlApp
         {
             try
             {
-                bool enableLimit = RegistryConfig.ReadInt("BatteryLimit") == 1;
+                int? preference = RegistryConfig.ReadInt("BatteryLimit");
+                if (!preference.HasValue) return;
+                bool enableLimit = preference == 1;
                 using var wmiEarly = new WmiController();
                 wmiEarly.SetBatteryChargeLimit(enableLimit);
 
@@ -82,6 +84,28 @@ namespace PredatorControlApp
         [STAThread]
         static void Main(string[] args)
         {
+            if (args.Length == 2 && args[0] == "--diagnostics")
+            {
+                // Read-only compatibility mode: bypass startup preferences, service optimization and UI hooks.
+                try
+                {
+                    using var controller = new WmiController();
+                    File.WriteAllText(Path.GetFullPath(args[1]), controller.ExportDiagnosticReport());
+                }
+                catch { Environment.ExitCode = 1; }
+                return;
+            }
+            if (args.Length == 1 && args[0] is "--repair-services" or "--optimize-services")
+            {
+                ApplicationConfiguration.Initialize();
+                bool success;
+                if (args[0] == "--repair-services")
+                    success = OemServiceManager.AutoRepairForChassis(WmiController.DetectChassisFamily(), forcePrompt: true).success;
+                else
+                    success = OemServiceManager.OptimizeTelemetryServices();
+                Environment.ExitCode = success ? 0 : 1;
+                return;
+            }
             // Enforce High Process Priority Class for responsive background fan/RGB polling and zero latency during heavy gaming
             try
             {
@@ -150,11 +174,14 @@ namespace PredatorControlApp
             }
 
             // Only the primary instance writes hardware state (secondary IPC launches exit above).
-            ApplyHardwarePreferences();
+            // Preferences are restored by Form1 after capability resolution.
 
             try
             {
-                form = new Form1(ipc);
+                var hardware = new WmiController();
+                // Read-only discovery runs on a worker before a UI is constructed; telemetry reuses its snapshot.
+                Task.Run(() => hardware.Capabilities).GetAwaiter().GetResult();
+                form = new Form1(ipc, hardware);
                 _ = form.Handle;
                 syncContext = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
             }

@@ -45,21 +45,33 @@ namespace PredatorControlApp
 
         private GameProfile? _editingProfile;
 
-        private static readonly string[] PowerModeNames = { "Quiet", "Balanced", "Performance", "Turbo", "Eco" };
-        private static readonly byte[] PowerModeValues = { 0x00, 0x01, 0x04, 0x05, 0x06 };
-        private static readonly string[] FanModeNames = { "Auto", "Max", "Custom" };
-        private static readonly byte[] FanModeValues = { 0x01, 0x02, 0x03 };
+        private readonly string[] PowerModeNames;
+        private readonly byte[] PowerModeValues;
+        private readonly string[] FanModeNames;
+        private readonly byte[] FanModeValues;
+        private readonly HardwareCapabilities _capabilities;
+        private readonly int[] _rgbValues;
         private readonly bool _supportsRgb;
 
-        private static readonly string[] RgbModeNames = { "Don't Change", "Static", "Breathing", "Neon", "Wave", "Shifting", "Zoom", "Meteor", "Twinkling" };
+        private readonly string[] RgbModeNames;
 
         #endregion
 
         #region Constructor
 
-        public GameSyncForm(GameSyncController controller, int maxHz, bool supportsRgb)
+        public GameSyncForm(GameSyncController controller, int maxHz, HardwareCapabilities capabilities)
         {
-            _supportsRgb = supportsRgb;
+            _capabilities = capabilities;
+            _supportsRgb = capabilities.SupportsRgbLighting;
+            PowerModeNames = capabilities.PowerModeLabels.Concat(new[] { "Keep saved preference (may be unavailable)" }).ToArray();
+            PowerModeValues = capabilities.PowerModeValues;
+            var fans = new[] { (HardwareFeature.FanAuto, (byte)1, "Auto"), (HardwareFeature.FanMax, (byte)2, "Max"), (HardwareFeature.FanManual, (byte)3, "Custom") }
+                .Where(f => capabilities.CanWrite(f.Item1)).ToArray();
+            FanModeNames = fans.Select(f => f.Item3).Concat(new[] { "Keep saved preference (may be unavailable)" }).ToArray();
+            FanModeValues = fans.Select(f => f.Item2).ToArray();
+            _rgbValues = new[] {-1}.Concat(capabilities.Keyboard.Effects ?? Array.Empty<int>()).ToArray();
+            string[] effects = ["Static", "Breathing", "Neon", "Wave", "Shifting", "Zoom", "Meteor", "Twinkling", "Off"];
+            RgbModeNames = _rgbValues.Select(v => v < 0 ? "Don't Change" : effects[v]).Concat(new[] { "Keep saved lighting preference" }).ToArray();
             _controller = controller;
             _maxHz = maxHz;
 
@@ -123,7 +135,7 @@ namespace PredatorControlApp
             MakeLabel("CONFIGURED APPS", pad, contentY, FontSection, HeaderColor);
 
             int btnAddH = 34;
-            int listH = listAreaH - 26 - (btnAddH * 3) - 28; 
+            int listH = listAreaH - 26 - (btnAddH * 3) - 28;
 
             _lstProfiles = new ListBox
             {
@@ -172,7 +184,7 @@ namespace PredatorControlApp
             };
 
             int ey = 0;
-            int sectionGap = 50; 
+            int sectionGap = 50;
 
             _lblExeName = new Label { Text = "", Font = FontTitle, ForeColor = AccentColor, AutoSize = true, Location = new Point(0, ey), MaximumSize = new Size(editorW, 0), BackColor = Color.Transparent };
             _pnlEditor.Controls.Add(_lblExeName);
@@ -219,7 +231,7 @@ namespace PredatorControlApp
             _trkGpuFan.Visible = false;
             _cboFan.SelectedIndexChanged += (s, e) =>
             {
-                bool isCustom = _cboFan.SelectedIndex == 2; 
+                bool isCustom = _cboFan.SelectedIndex >= 0 && _cboFan.SelectedIndex < FanModeValues.Length && FanModeValues[_cboFan.SelectedIndex] == 3;
                 _lblCpuFanHdr.Visible = isCustom;
                 _lblGpuFanHdr.Visible = isCustom;
                 _trkCpuFan.Visible = isCustom;
@@ -234,6 +246,7 @@ namespace PredatorControlApp
             MakeLabelIn(_pnlEditor, "LCD OVERDRIVE", 0, ey, FontSection, HeaderColor);
             ey += 24;
             _cboLcdOverdrive = MakeComboIn(_pnlEditor, new[] { "Don't Change", "Enable (3ms Boost)", "Disable" }, 0, ey, editorW);
+            _cboLcdOverdrive.Enabled = _capabilities.SupportsLcdOverdrive;
             ey += sectionGap;
 
             MakeLabelIn(_pnlEditor, "WINDOWS & MENU KEYS", 0, ey, FontSection, HeaderColor);
@@ -244,6 +257,7 @@ namespace PredatorControlApp
             MakeLabelIn(_pnlEditor, "BATTERY CHARGE LIMIT", 0, ey, FontSection, HeaderColor);
             ey += 24;
             _cboBattery = MakeComboIn(_pnlEditor, new[] { "Don't Change", "Full Charge (100%)", "Limit to 80% (Health)" }, 0, ey, editorW);
+            _cboBattery.Enabled = _capabilities.SupportsBatteryControl;
             ey += sectionGap;
 
             int lightingStart = ey;
@@ -423,12 +437,12 @@ namespace PredatorControlApp
             _lblExeName.Text = p.ExecutableName;
 
             int powerIdx = Array.IndexOf(PowerModeValues, p.PowerMode);
-            _cboPower.SelectedIndex = powerIdx >= 0 ? powerIdx : 1;
+            _cboPower.SelectedIndex = powerIdx >= 0 ? powerIdx : PowerModeValues.Length;
 
             int fanIdx = Array.IndexOf(FanModeValues, p.FanMode);
-            _cboFan.SelectedIndex = fanIdx >= 0 ? fanIdx : 0;
+            _cboFan.SelectedIndex = fanIdx >= 0 ? fanIdx : FanModeValues.Length;
 
-            bool isCustomFan = p.FanMode == 0x03;
+            bool isCustomFan = p.FanMode == 0x03 && _capabilities.CanWrite(HardwareFeature.FanManual);
             _trkCpuFan.Value = p.CpuFanSpeed >= 10 ? Math.Clamp(p.CpuFanSpeed, 10, 100) : 50;
             _trkGpuFan.Value = p.GpuFanSpeed >= 10 ? Math.Clamp(p.GpuFanSpeed, 10, 100) : 50;
             _lblCpuFanHdr.Text = $"CPU FAN: {_trkCpuFan.Value}%";
@@ -455,7 +469,7 @@ namespace PredatorControlApp
             else _cboBattery.SelectedIndex = 2;
 
             if (p.RgbMode == -1) _cboRgbMode.SelectedIndex = 0;
-            else _cboRgbMode.SelectedIndex = Math.Clamp(p.RgbMode + 1, 0, RgbModeNames.Length - 1);
+            else _cboRgbMode.SelectedIndex = Array.IndexOf(_rgbValues, p.RgbMode) is int rgbIndex && rgbIndex >= 0 ? rgbIndex : _rgbValues.Length;
 
             _trkBrightness.Value = p.RgbBrightness >= 0 ? Math.Clamp(p.RgbBrightness, 0, 100) : 100;
             _trkSpeed.Value = p.RgbSpeed >= 0 ? Math.Clamp(p.RgbSpeed, 1, 100) : 50;
@@ -473,10 +487,10 @@ namespace PredatorControlApp
             {
                 ExecutableName = _editingProfile?.ExecutableName ?? "",
                 DisplayName = _editingProfile?.DisplayName ?? "",
-                PowerMode = PowerModeValues[_cboPower.SelectedIndex],
-                FanMode = FanModeValues[_cboFan.SelectedIndex],
-                CpuFanSpeed = _cboFan.SelectedIndex == 2 ? _trkCpuFan.Value : -1,
-                GpuFanSpeed = _cboFan.SelectedIndex == 2 ? _trkGpuFan.Value : -1,
+                PowerMode = _cboPower.SelectedIndex >= 0 && _cboPower.SelectedIndex < PowerModeValues.Length ? PowerModeValues[_cboPower.SelectedIndex] : _editingProfile?.PowerMode ?? (byte)255,
+                FanMode = _cboFan.SelectedIndex >= 0 && _cboFan.SelectedIndex < FanModeValues.Length ? FanModeValues[_cboFan.SelectedIndex] : _editingProfile?.FanMode ?? (byte)255,
+                CpuFanSpeed = _capabilities.CanWrite(HardwareFeature.FanManual) && _cboFan.SelectedIndex >= 0 && _cboFan.SelectedIndex < FanModeValues.Length && FanModeValues[_cboFan.SelectedIndex] == 3 ? _trkCpuFan.Value : _editingProfile?.CpuFanSpeed ?? -1,
+                GpuFanSpeed = _capabilities.CanWrite(HardwareFeature.FanManual) && _cboFan.SelectedIndex >= 0 && _cboFan.SelectedIndex < FanModeValues.Length && FanModeValues[_cboFan.SelectedIndex] == 3 ? _trkGpuFan.Value : _editingProfile?.GpuFanSpeed ?? -1,
             };
 
             p.RefreshRate = _cboRefresh.SelectedIndex switch
@@ -507,13 +521,15 @@ namespace PredatorControlApp
                 _ => -1
             };
 
-            p.RgbMode = _cboRgbMode.SelectedIndex == 0 ? -1 : _cboRgbMode.SelectedIndex - 1;
-            p.RgbBrightness = _trkBrightness.Value;
-            p.RgbSpeed = _trkSpeed.Value;
-            p.RgbR = _selectedColor.R;
-            p.RgbG = _selectedColor.G;
-            p.RgbB = _selectedColor.B;
+            p.RgbMode = _supportsRgb && _cboRgbMode.SelectedIndex >= 0 && _cboRgbMode.SelectedIndex < _rgbValues.Length ? _rgbValues[_cboRgbMode.SelectedIndex] : _editingProfile?.RgbMode ?? -1;
+            p.RgbBrightness = _supportsRgb ? _trkBrightness.Value : _editingProfile?.RgbBrightness ?? -1;
+            p.RgbSpeed = _supportsRgb ? _trkSpeed.Value : _editingProfile?.RgbSpeed ?? -1;
+            p.RgbR = _supportsRgb ? _selectedColor.R : _editingProfile?.RgbR ?? -1;
+            p.RgbG = _supportsRgb ? _selectedColor.G : _editingProfile?.RgbG ?? -1;
+            p.RgbB = _supportsRgb ? _selectedColor.B : _editingProfile?.RgbB ?? -1;
 
+            if (!_capabilities.SupportsBatteryControl) p.BatteryLimit = _editingProfile?.BatteryLimit ?? -1;
+            if (!_capabilities.SupportsLcdOverdrive) p.LcdOverdrive = _editingProfile?.LcdOverdrive ?? -1;
             return p;
         }
 

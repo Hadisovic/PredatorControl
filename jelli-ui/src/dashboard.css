@@ -36,6 +36,8 @@
 .hardware-card, .dashboard-content > section { min-width: 0; border: 1px solid #acc7db15; border-radius: 10px; padding: 11px 12px; background: #ffffff03; margin: 0; }
 .card-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 7px; }
 .card-heading h2 { margin: 0; font-size: 10px; letter-spacing: .1em; line-height: 1.6; }
+.card-heading .status-pill { max-width: none; white-space: nowrap; flex-shrink: 0; }
+.card-power .control-shell:not(.control-select) { flex-basis: 100%; }
 .card-indicator { flex-shrink: 0; width: 5px; height: 5px; background: var(--jelli-accent); opacity: .5; border-radius: 50%; }
 .card-rgb, .card-keyboard, .card-keyboardProfile, .card-games, .card-hardware { grid-column: 1 / -1; }
 .section-intro, .keyboard-intro { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 9px; padding: 3px 2px 8px; border-bottom: 1px solid #ffffff0c; }

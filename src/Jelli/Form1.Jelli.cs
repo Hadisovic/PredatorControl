@@ -62,40 +62,34 @@ public partial class Form1 : IJelliBackend
             };
             return new(id, label, "range", b?.Value ?? 0, b?.Enabled ?? false, Min: b?.Minimum ?? 0, Max: b?.Maximum ?? 100);
         }
-        var powerControls = new List<JelliControl>
+        var powerControls = new List<JelliControl>();
+        foreach (var mode in _wmi.Capabilities.PowerModes)
+            powerControls.Add(Button(NitroPowerProfileCoordinator.ControlId(mode.Value), mode.Label, PowerByteToBtn(mode.Value)));
+        if (powerControls.Count > 0 || _wmi.Capabilities.PowerPlanNotice != null)
         {
-            Button("power.quiet", "Quiet", _btnQuiet),
-            Button("power.balanced", _wmi.Capabilities.ChassisFamily == AcerChassisFamily.Nitro ? "Default" : "Balanced", _btnBalanced),
-            Button("power.performance", "Performance", _btnPerform)
-        };
-        if (_wmi.Capabilities.ChassisFamily != AcerChassisFamily.Nitro)
-        {
-            if (_btnTurbo != null) powerControls.Add(Button("power.turbo", "Turbo", _btnTurbo));
-            if (_btnEco != null) powerControls.Add(Button("power.eco", "Eco", _btnEco));
+            powerControls.Add(Select("power.ac", "When plugged in", _cboAcProfile));
+            powerControls.Add(Select("power.battery", "On battery", _cboBatteryProfile));
+            string powerSectionTitle = _wmi.Capabilities.ChassisFamily == AcerChassisFamily.Nitro ? "Nitro performance" : "Performance";
+            sections.Add(new("power", powerSectionTitle, powerControls.ToArray()));
         }
-        powerControls.Add(Select("power.ac", "When plugged in", _cboAcProfile));
-        powerControls.Add(Select("power.battery", "On battery", _cboBatteryProfile));
-        sections.Add(new("power", "Performance", powerControls.ToArray()));
-        /*
-            Button("power.quiet", "Quiet", _btnQuiet), Button("power.balanced", "Balanced", _btnBalanced),
-            Button("power.performance", "Performance", _btnPerform), Button("power.turbo", "Turbo", _btnTurbo),
-            Button("power.eco", "Eco", _btnEco), Select("power.ac", "When plugged in", _cboAcProfile),
-        */
-        var fans = new List<JelliControl> { Button("fans.auto", "Auto", _btnAutoFan), Button("fans.max", "Maximum", _btnMaxFan), Button("fans.custom", "Custom", _btnCustomFan) };
+        var fans = new List<JelliControl>();
+        if (_wmi.Capabilities.CanWrite(HardwareFeature.FanAuto)) fans.Add(Button("fans.auto", "Auto", _btnAutoFan));
+        if (_wmi.Capabilities.CanWrite(HardwareFeature.FanMax)) fans.Add(Button("fans.max", "Maximum", _btnMaxFan));
+        if (_wmi.Capabilities.CanWrite(HardwareFeature.FanManual)) fans.Add(Button("fans.custom", "Custom", _btnCustomFan));
         if (_wmi.Capabilities.SupportsCoolBoost && _switchCoolBoost != null)
         {
             fans.Add(Toggle("fans.coolboost", "Acer CoolBoost", _switchCoolBoost));
         }
-        if (GetCurrentFanByte() == 3)
+        if (_wmi.Capabilities.CanWrite(HardwareFeature.FanManual) && GetCurrentFanByte() == 3)
         {
             fans.Add(Button("fans.fixed", "Fixed speed", _btnFixedSpeed));
-            fans.Add(Button("fans.curve", "Edit fan curve ↗", _btnFanCurve));
+            if (_wmi.Capabilities.CanWrite(HardwareFeature.FanCurve)) fans.Add(Button("fans.curve", "Edit fan curve ↗", _btnFanCurve));
             fans.Add(Range("fans.cpu", "CPU fan", _cpuFanSlider));
             fans.Add(Range("fans.gpu", "GPU fan", _gpuFanSlider));
             if (_wmi.HasAuxFan && _auxFanSlider != null)
                 fans.Add(Range("fans.aux", "Aux fan", _auxFanSlider));
         }
-        sections.Add(new("fans", "Cooling", fans.ToArray()));
+        if (fans.Count > 0) sections.Add(new("fans", "Cooling", fans.ToArray()));
         if (_wmi.Capabilities.SupportsGpuMux)
         {
             var gpu = new List<JelliControl>();
@@ -133,7 +127,7 @@ public partial class Form1 : IJelliBackend
 
         var batteryControls = new List<JelliControl>
         {
-            new("battery.limit", "Stop charging at 80%", "toggle", _switchBatteryLimit.Checked)
+            new("battery.limit", "Stop charging at 80%", "toggle", _wmi.Capabilities.BatteryLimitEnabled, _wmi.Capabilities.SupportsBatteryControl)
         };
 
         var batInfo = BatteryHealthMonitor.GetBatteryHealth();
@@ -160,7 +154,7 @@ public partial class Form1 : IJelliBackend
         {
             var rgb = new List<JelliControl> { Select("rgb.mode", "Lighting effect", _rgbDropDown) };
         rgb.Add(Button("rgb.all", "All zones", _btnAllZones));
-        for (int i = 0; i < 4; i++) rgb.Add(Button($"rgb.zone{i}", $"Zone {i + 1}", _btnZones[i]));
+        for (int i = 0; i < _wmi.Keyboard.ZoneCount; i++) rgb.Add(Button($"rgb.zone{i}", $"Zone {i + 1}", _btnZones[i]));
         _jelliActions["rgb.color"] = d => {
             if (!_btnCustomColor.Enabled) throw new InvalidOperationException("This lighting effect uses firmware colors.");
             var text = d.GetString() ?? "";
@@ -278,14 +272,9 @@ public partial class Form1 : IJelliBackend
         sections.Add(new("games", "Game Sync", [Toggle("games.enabled", "Apply profiles when games launch", _switchGameSync), Button("games.configure", "Configure game profiles ↗", _btnConfigureGames)]));
         sections.Add(new("app", "Application", [Toggle("app.startup", "Start with Windows", _switchStartWithWindows), Button("app.updates", "Check for updates", _btnCheckUpdates),
             Button("app.teal", "Teal", _btnThemeTeal), Button("app.crimson", "Crimson", _btnThemeCrimson), Button("app.oled", "OLED", _btnThemeOled)]));
-        using var keyboardKey = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"SOFTWARE\PredatorControl");
-        string profile = keyboardKey?.GetValue("KeyboardProfile") as string ?? "auto";
-        if (_wmi.Keyboard.FixedColor != null)
-            sections.Add(new("keyboardProfile", "Keyboard compatibility", Array.Empty<JelliControl>()));
-        else
-        sections.Add(new("keyboardProfile", "Keyboard compatibility", [new("keyboard.profile", "Keyboard type (restart required)", "select",
-            Array.IndexOf(new[] { "auto", "binary", "rgb", "none" }, profile), true,
-            [new("Automatic / safe default", 0), new("On/off backlight", 1), new("RGB keyboard", 2), new("No backlight", 3)])]));
+        _jelliActions["compatibility.export"] = _ => ExportCompatibility();
+        sections.Add(new("compatibility", "Device compatibility", [new("compatibility.export", "Export privacy-safe compatibility report", "button", false)]));
+        sections.Add(new("keyboardProfile", "Keyboard compatibility", Array.Empty<JelliControl>()));
         _jelliMenuActions.Clear();
         JelliMenu[] Menu(ToolStripItemCollection items, string prefix) => items.OfType<ToolStripMenuItem>().Where(i => i.Available).Select((item, index) => {
             string id = prefix + index;
@@ -295,6 +284,7 @@ public partial class Form1 : IJelliBackend
         return new {
             telemetry = _jelliTelemetry,
             powerMode = _lblPowerStatus?.Text ?? "",
+            powerPlanNotice = _wmi.Capabilities.PowerPlanNotice,
             fanMode = _lblFanStatus?.Text ?? "",
             gpuMode = _activeGpuModeBtn?.Text,
             gpuNotice = _lblGpuRestartNotice?.Text,
@@ -306,11 +296,16 @@ public partial class Form1 : IJelliBackend
             monitors = Screen.AllScreens.Select(s => new { id = s.DeviceName, label = s.DeviceName + (s.Primary ? " (primary)" : "") }),
             version = Updater.CurrentText,
             revision = Updater.BuildRevision,
-            device = WmiController.GetSystemIdentity().Model,
+            device = _wmi.Capabilities.Identity.Model,
+            identity = _wmi.Capabilities.Identity,
+            compatibility = _wmi.Capabilities,
+            lastOperation = _wmi.LastOperation,
             theme = ThemeManager.Current.Mode.ToString(),
             keyboard = new {
                 kind = _wmi.Keyboard.Kind.ToString().ToLowerInvariant(),
                 supportsRgb = _wmi.Keyboard.SupportsRgb,
+                zoneCount = _wmi.Keyboard.ZoneCount,
+                effects = _wmi.Keyboard.Effects,
                 fixedColor = _wmi.Keyboard.FixedColor,
                 supportsBrightness = _wmi.Keyboard.SupportsBrightness,
                 evidence = _wmi.Keyboard.Evidence,
@@ -404,6 +399,21 @@ public partial class Form1 : IJelliBackend
     object IJelliBackend.State(JelliSettings settings) => JelliState(settings);
     async Task<object?> IJelliBackend.Action(string id, JsonElement data)
     {
+        var toggleCommand = id switch
+        {
+            "fans.coolboost" => (_switchCoolBoost, "CoolBoostEnabled", HardwareFeature.CoolBoost, (Func<bool, bool>)_wmi.SetCoolBoost),
+            "display.overdrive" => (_switchLcdOverdrive, "LcdOverdrive", HardwareFeature.LcdOverdrive, (Func<bool, bool>)_wmi.SetLcdOverdrive),
+            "hardware.bootsound" => (_switchBootSound, "BootSound", HardwareFeature.BootSound, (Func<bool, bool>)_wmi.SetBootSound),
+            "hardware.usbcharging" => (_switchUsbCharging, "UsbCharging", HardwareFeature.UsbCharging, (Func<bool, bool>)(v => _wmi.SetUsbCharging(v))),
+            _ => ((PredatorToggle?)null, "", HardwareFeature.CoolBoost, (Func<bool, bool>)(_ => false))
+        };
+        if (toggleCommand.Item1 is PredatorToggle toggle)
+        {
+            if (!toggle.Enabled) throw new InvalidOperationException("Control is unavailable or busy.");
+            _changingHardwareToggle = true;
+            try { toggle.Checked = data.GetBoolean(); } finally { _changingHardwareToggle = false; }
+            return await ChangeHardwareToggle(toggle, toggleCommand.Item2, toggleCommand.Item3, toggleCommand.Item4);
+        }
         if (id is "keyboard.power" or "keyboard.timeout")
         {
             var result = await ChangeKeyboardAsync(id == "keyboard.power", data.GetBoolean());
@@ -419,18 +429,9 @@ public partial class Form1 : IJelliBackend
             return null;
         }
         if (id == "keyboard.profile")
-        {
-            if (_wmi.Keyboard.FixedColor != null)
-                throw new InvalidOperationException("Nitro keyboards use the fixed red On/Off profile.");
-            int index = data.GetInt32();
-            if (index is < 0 or > 3) throw new ArgumentException("Invalid keyboard type.");
-            using var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(@"SOFTWARE\PredatorControl");
-            key.SetValue("KeyboardProfile", new[] { "auto", "binary", "rgb", "none" }[index]);
-            _keyboardNotice = "Keyboard type saved. Restart Predator Control to apply it; no hardware command was sent.";
-            return new { status = "unverified", message = _keyboardNotice };
-        }
+            throw new InvalidOperationException("Keyboard preferences cannot override verified hardware capabilities.");
         JelliAction(id, data);
-        return null;
+        return _wmi.LastOperation;
     }
     void IJelliBackend.Fallback() => JelliFallback();
     void IJelliBackend.SetJelliEnabled(bool enabled) => SetJelliEnabled(enabled);
@@ -444,7 +445,7 @@ public partial class Form1 : IJelliBackend
     bool IJelliBackend.TryWriteColor(Color color) => WriteJelliColor(color);
     void IJelliBackend.RestoreColor() => RestoreJelliColor();
     void IJelliBackend.Exit() => HandleIpcCommand("EXIT");
-    internal void RestoreJelliColor() => ApplyRgbModeFromDropdown(_rgbDropDown.SelectedIndex);
+    internal void RestoreJelliColor() => ApplyRgbModeFromDropdown(SelectedRgbMode);
 
     private static void TerminateWebView2Processes()
     {

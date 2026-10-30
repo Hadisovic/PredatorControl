@@ -1,2 +1,1 @@
-13a43ec4709a1b6a5afeeb60731d9a68eb636f5486c748ae772054cd8ca89ac6  PredatorControl-standalone.exe
-7585443004df1c5bb1493c8c66985d1889288f6c8762abc602837f8a4bd78d65  PredatorControl-win-x64.exe
+﻿9d47f32bab01298803d4d88b7e5e23e3f1aadefb644a73e4c0a191be5bf08e78  PredatorControl-win-x64.zip

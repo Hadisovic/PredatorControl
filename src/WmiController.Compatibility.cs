@@ -227,7 +227,8 @@ public partial class WmiController
     {
         return method switch
         {
-            "SetGamingProfile" => input <= 255 && Capabilities.AllowsPower((byte)input, IsOnAc)
+            "SetGamingProfile" => (input <= 255 || ((input >> 24) == 1 && (input & 0xFFFFFF) <= 255))
+                && Capabilities.AllowsPower((byte)(input & 0xFF), IsOnAc)
                 && HardwareWriteGate.InScope(HardwareFeature.Power, "acer-wmi-profile"),
             "SetGamingFanBehavior" => HardwareWriteGate.InScope(HardwareFeature.FanAuto, "acer-wmi-fans") || HardwareWriteGate.InScope(HardwareFeature.FanMax, "acer-wmi-fans") ||
                 HardwareWriteGate.InScope(HardwareFeature.FanManual, "acer-wmi-fans") || HardwareWriteGate.InScope(HardwareFeature.CoolBoost, "acer-wmi-coolboost"),
@@ -239,9 +240,10 @@ public partial class WmiController
                 0x0E => HardwareWriteGate.InScope(HardwareFeature.BootSound, "acer-wmi-misc"),
                 0x0C or 0x0D => HardwareWriteGate.InScope(HardwareFeature.UsbCharging, "acer-wmi-misc"),
                 _ when (input & 0xFFUL) == NitroSense3Protocol.MiscSubfunctionOperationMode && (input >> 16) == 0 =>
-                    NitroSense3Protocol.IsSupportedOperationMode((byte)((input >> 8) & 0xFF)) &&
                     Capabilities.AllowsPower((byte)((input >> 8) & 0xFF), IsOnAc) &&
-                    HardwareWriteGate.InScope(HardwareFeature.Power, NitroSense3Protocol.OperationModeWmiBackend),
+                    ((NitroSense3Protocol.IsSupportedOperationMode((byte)((input >> 8) & 0xFF)) &&
+                      HardwareWriteGate.InScope(HardwareFeature.Power, NitroSense3Protocol.OperationModeWmiBackend)) ||
+                     HardwareWriteGate.InScope(HardwareFeature.Power, "acer-wmi-profile")),
                 _ => false
             },
             _ => false

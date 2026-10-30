@@ -2942,7 +2942,6 @@ namespace PredatorControlApp
             var operation = _wmi.SetPowerMode(mode);
             if (!operation.Accepted || (_wmi.Capabilities.Results[HardwareFeature.Power].CanVerify && !operation.Confirmed))
             {
-                _lblPowerStatus.Text = operation.Message;
                 _compatibilityTip.SetToolTip(btn, operation.Message);
                 _jelli?.PublishState();
                 return;

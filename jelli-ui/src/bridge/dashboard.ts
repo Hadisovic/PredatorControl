@@ -35,8 +35,9 @@ export interface PowerControlView {
 export function powerProfileSummary(powerMode: string | undefined, controls: PowerControlView[] = []) {
   const buttons = controls.filter(c => !c.kind || c.kind === 'button')
   const active = buttons.find(c => c.active)
+  const validPowerMode = powerMode && buttons.some(b => b.label === powerMode) ? powerMode : undefined
   return {
-    activeLabel: active?.label ?? powerMode ?? 'Unavailable',
+    activeLabel: active?.label ?? validPowerMode ?? buttons.find(b => b.id === 'power.balanced')?.label ?? buttons[0]?.label ?? 'Balanced',
     enabledIds: buttons.filter(c => c.enabled).map(c => c.id),
     disabledIds: buttons.filter(c => !c.enabled).map(c => c.id),
   }

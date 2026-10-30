@@ -100,7 +100,9 @@ public partial class Form1
             ? caps.PowerModes.FirstOrDefault(m => m.Value == activeMode)
             : UsesWindowsPowerPlans && caps.ActiveWindowsPowerPlan.HasValue
                 ? caps.PowerModes.FirstOrDefault(m => m.WindowsScheme == caps.ActiveWindowsPowerPlan)
-                : null;
+                : _activePowerBtn == null && caps.PowerModes.Count > 0
+                    ? caps.PowerModes.FirstOrDefault(m => m.Value == 1) ?? caps.PowerModes[0]
+                    : null;
         if (current != null && _lblPowerStatus != null)
         {
             _lblPowerStatus.Text = current.Label;

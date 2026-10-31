@@ -149,8 +149,36 @@ namespace PredatorControlApp
         /// Bit 2 (4): Auto / Advanced Optimus
         /// Returns e.g. 7 (all 3 supported) or 3 (Optimus + Discrete).
         /// </summary>
-        public static async Task<int> GetGpuModeCapabilityAsync() =>
-            AcerAgentProtocol.GpuMask(await SendCommandAsync(CMD_INITIALIZATION, "{}"));
+        public static async Task<int> GetGpuModeCapabilityAsync()
+        {
+            try
+            {
+                int mask = AcerAgentProtocol.GpuMask(await SendCommandAsync(CMD_INITIALIZATION, "{}"));
+                if (mask is > 0 and <= 7) return mask;
+            }
+            catch { }
+
+            try
+            {
+                using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\OEM\AcerAgentService\AdvanceSettings");
+                if (key?.GetValue("dgpu_mode_capability") is int dgpuCap && dgpuCap is > 0 and <= 7)
+                    return dgpuCap;
+            }
+            catch { }
+
+            try
+            {
+                int? currentMode = await GetGpuModeAsync();
+                if (currentMode.HasValue)
+                {
+                    // Live mode confirms MUX is active: 0=Optimus (1), 1=Discrete (2), 2=Auto (4) -> 7
+                    return 7;
+                }
+            }
+            catch { }
+
+            return 0;
+        }
 
         /// <summary>
         /// Queries device data via GET_UPDATED_DATA (Packet 20).

@@ -1041,8 +1041,11 @@ namespace PredatorControlApp
         {
             var result = Write(HardwareFeature.GpuMux, mode is >= 0 and <= 2 && (Capabilities.GpuModeMask & (1 << mode)) != 0, () =>
             {
-                bool ok = _testIo?.SetGpuMode(mode) ?? AcerAgentClient.SetGpuModeAsync(mode).GetAwaiter().GetResult();
-                if (!ok) return new("failed", "GPU mode request failed.");
+                if (_testIo != null) return _testIo.SetGpuMode(mode) ? new("unverified", "GPU mode set.") : new("failed", "GPU mode rejected.");
+                bool agentOk = AcerAgentClient.SetGpuModeAsync(mode).GetAwaiter().GetResult();
+                ulong wmiPayload = (ulong)0x02 | (((ulong)mode + 1) << 8);
+                bool wmiOk = SendCommand("SetGamingMiscSetting", wmiPayload).success;
+                if (!agentOk && !wmiOk) return new("failed", "GPU mode request failed.");
                 return new("unverified", "GPU mode request acknowledged; active state can only be verified after the operator restarts Windows.");
             });
             return Task.FromResult(result.Accepted);

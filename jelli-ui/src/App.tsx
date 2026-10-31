@@ -71,7 +71,7 @@ export function App() {
   const context = () => { clicks.current.cancel(); send('surface', 'menu') }
   const sections = state?.sections.filter(s => sectionTab(s.id) === tab) ?? []
   const brand = deviceBrand(state?.compatibility?.chassisFamily)
-  const versionLabel = state ? `${state.version}${state.revision ? ` rev ${state.revision}` : ''}` : '1.4.0'
+  const versionLabel = state ? `${state.version}${state.revision ? ` rev ${state.revision}` : ''}` : '1.4.1'
   return <main className={`${state?.theme === 'NitroCrimson' ? 'theme-crimson' : state?.theme === 'OledBlack' ? 'theme-oled' : 'theme-teal'} ${layout.surface} ${layout.flyout ? 'flyout' : ''} ${suspended ? 'suspended' : ''}`} onPointerDown={e => { if (e.target === e.currentTarget) send('surface', 'compact') }}>
     <div className="creature" style={{left: layout.creatureX, top: layout.creatureY}}>
       <BlobCanvas onActivate={activate} onContext={context} onDrag={() => clicks.current.cancel()}/>

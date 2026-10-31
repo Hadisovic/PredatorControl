@@ -437,6 +437,15 @@ using (var controller = new WmiController(predator, io))
 {
     controller.SetPowerMode(4);
     Check(io.Writes.SequenceEqual([("SetGamingProfile", 4UL)]) && io.NitroCalls.Count==0,"Predator backend isolation: Predator uses SetGamingProfile and never sends NitroSense SetOperationMode or SetGamingMiscSetting(0x0B)");
+    io.Writes.Clear();
+    Check(controller.Capabilities.SupportsWinKey && controller.SetWinKeyLock(true) && io.Writes.SequenceEqual([("SetGamingRgbKb", 0xFC00000000000003UL)]), "Predator WinKey lock dispatches exact EC SetGamingRgbKb lock payload");
+    io.Writes.Clear();
+    Check(controller.SetWinKeyLock(false) && io.Writes.SequenceEqual([("SetGamingRgbKb", 0xF900000000000303UL)]), "Predator WinKey unlock dispatches exact EC SetGamingRgbKb unlock payload");
+}
+using (var io = new FakeIo())
+using (var controller = new WmiController(fixedRed, io))
+{
+    Check(!controller.Capabilities.SupportsWinKey && !controller.SetWinKeyLock(true) && io.Writes.Count == 0, "Unverified WinKey profile rejects firmware WinKey writes");
 }
 Console.WriteLine($"{passed} compatibility checks passed. All identities, services, sensors and command outcomes were synthetic. No hardware accessed.");
 

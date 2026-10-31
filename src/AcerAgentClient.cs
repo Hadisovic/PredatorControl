@@ -45,13 +45,10 @@ namespace PredatorControlApp
     {
         private const string Host = "127.0.0.1";
         private const int TcpPort = 46933;
-        private static readonly string[] PipeCandidates =
+        private static readonly string[] AgentPipes =
         {
-            "nitrosense_hardware_service_",
-            "nitrosense_agent_service_",
             "predatorsense_agent_service_",
-            "predatorsense_hardware_service_",
-            "systemmonitoring_hardware_service_"
+            "nitrosense_agent_service_"
         };
         private static readonly byte[] MagicBytes = Encoding.ASCII.GetBytes("ACER");
 
@@ -67,6 +64,49 @@ namespace PredatorControlApp
 
         private static readonly SemaphoreSlim _sendLock = new(1, 1);
 
+        private static bool IsAuthorizedWrite(string? function = null) => function switch
+        {
+            "GPU_MODE" => HardwareWriteGate.InScope(HardwareFeature.GpuMux, "acer-agent"),
+            "WIN_KEY" => HardwareWriteGate.InScope(HardwareFeature.WinKey, "acer-wmi-winkey"),
+            "OPERATING_MODE" => HardwareWriteGate.InScope(HardwareFeature.Power, "acer-wmi-profile"),
+            "FAN_CONTROL" => HardwareWriteGate.InScope(HardwareFeature.FanAuto, "acer-wmi-fans") ||
+                             HardwareWriteGate.InScope(HardwareFeature.FanMax, "acer-wmi-fans") ||
+                             HardwareWriteGate.InScope(HardwareFeature.FanManual, "acer-wmi-fans"),
+            "LCD_OVERDRIVE" => HardwareWriteGate.InScope(HardwareFeature.LcdOverdrive, "acer-wmi-misc"),
+            "BOOT_SOUND" or "CUSTOM_BOOT_LOGO" => HardwareWriteGate.InScope(HardwareFeature.BootSound, "acer-wmi-misc"),
+            null => HardwareWriteGate.InScope(HardwareFeature.GpuMux, "acer-agent") ||
+                    HardwareWriteGate.InScope(HardwareFeature.WinKey, "acer-wmi-winkey") ||
+                    HardwareWriteGate.InScope(HardwareFeature.Power, "acer-wmi-profile") ||
+                    HardwareWriteGate.InScope(HardwareFeature.FanAuto, "acer-wmi-fans") ||
+                    HardwareWriteGate.InScope(HardwareFeature.FanMax, "acer-wmi-fans") ||
+                    HardwareWriteGate.InScope(HardwareFeature.FanManual, "acer-wmi-fans") ||
+                    HardwareWriteGate.InScope(HardwareFeature.LcdOverdrive, "acer-wmi-misc") ||
+                    HardwareWriteGate.InScope(HardwareFeature.BootSound, "acer-wmi-misc"),
+            _ => false
+        };
+
+        private static int? ReadIntProperty(string? json, string propertyName)
+        {
+            if (string.IsNullOrEmpty(json)) return null;
+            try
+            {
+                using var doc = JsonDocument.Parse(json);
+                if (doc.RootElement.TryGetProperty("data", out var dataProp) &&
+                    dataProp.TryGetProperty(propertyName, out var nested) &&
+                    nested.ValueKind == JsonValueKind.Number)
+                {
+                    return nested.GetInt32();
+                }
+                if (doc.RootElement.TryGetProperty(propertyName, out var direct) &&
+                    direct.ValueKind == JsonValueKind.Number)
+                {
+                    return direct.GetInt32();
+                }
+            }
+            catch { }
+            return null;
+        }
+
         /// <summary>
         /// Sends a command to Acer OEM Services (AcerAgentService / NitroSenseService) and returns response.
         /// Resilient: gracefully handles disconnected service without exceptions.
@@ -74,7 +114,7 @@ namespace PredatorControlApp
         public static async Task<string?> SendCommandAsync(uint packetId, string jsonPayload, int timeoutMs = 1500)
         {
             bool write = packetId == CMD_SET_DEVICE_DATA;
-            if (write && !HardwareWriteGate.InScope(HardwareFeature.GpuMux, "acer-agent")) return null;
+            if (write && !IsAuthorizedWrite()) return null;
             if (!write && packetId is not (CMD_INITIALIZATION or CMD_GET_MONITOR_DATA or CMD_GET_UPDATED_DATA or CMD_GET_CONNECTED_DEVICE)) return null;
             if (!await _sendLock.WaitAsync(timeoutMs)) return null;
             try
@@ -93,7 +133,7 @@ namespace PredatorControlApp
                     await stream.WriteAsync(packet, deadline.Token);
                     return await AcerAgentProtocol.ReadReply(stream, packetId, deadline.Token);
                 }
-                foreach (string name in new[] { "predatorsense_agent_service_", "nitrosense_agent_service_" })
+                foreach (string name in AgentPipes)
                 {
                     using var pipe = new NamedPipeClientStream(".", name, PipeDirection.InOut, PipeOptions.Asynchronous);
                     try { await pipe.ConnectAsync(150, deadline.Token); }
@@ -116,13 +156,8 @@ namespace PredatorControlApp
         /// </summary>
         public static async Task<bool> SetDeviceDataAsync(string function, object parameter)
         {
-            if (function != "GPU_MODE" || !HardwareWriteGate.InScope(HardwareFeature.GpuMux, "acer-agent")) return false;
-            var payloadObj = new
-            {
-                Function = function,
-                Parameter = parameter
-            };
-            string json = JsonSerializer.Serialize(payloadObj);
+            if (!IsAuthorizedWrite(function)) return false;
+            string json = JsonSerializer.Serialize(new { Function = function, Parameter = parameter });
             string? resp = await SendCommandAsync(CMD_SET_DEVICE_DATA, json);
             if (string.IsNullOrEmpty(resp)) return false;
 
@@ -131,10 +166,8 @@ namespace PredatorControlApp
                 using var doc = JsonDocument.Parse(resp);
                 if (doc.RootElement.TryGetProperty("result", out var resProp))
                 {
-                    if (resProp.ValueKind == JsonValueKind.String && resProp.GetString() == "0")
-                        return true;
-                    if (resProp.ValueKind == JsonValueKind.Number && resProp.GetInt32() == 0)
-                        return true;
+                    return (resProp.ValueKind == JsonValueKind.String && resProp.GetString() == "0") ||
+                           (resProp.ValueKind == JsonValueKind.Number && resProp.GetInt32() == 0);
                 }
             }
             catch { }
@@ -206,28 +239,8 @@ namespace PredatorControlApp
         /// <summary>
         /// Queries current Operating Power Mode from Acer OEM Service.
         /// </summary>
-        public static async Task<int?> GetOperatingModeAsync()
-        {
-            string? resp = await GetDeviceDataAsync("OPERATING_MODE");
-            if (string.IsNullOrEmpty(resp)) return null;
-
-            try
-            {
-                using var doc = JsonDocument.Parse(resp);
-                if (doc.RootElement.TryGetProperty("data", out var dataProp) &&
-                    dataProp.TryGetProperty("mode", out var modeProp))
-                {
-                    return modeProp.GetInt32();
-                }
-                if (doc.RootElement.TryGetProperty("mode", out var directMode))
-                {
-                    return directMode.GetInt32();
-                }
-            }
-            catch { }
-
-            return null;
-        }
+        public static async Task<int?> GetOperatingModeAsync() =>
+            ReadIntProperty(await GetDeviceDataAsync("OPERATING_MODE"), "mode");
 
         /// <summary>
         /// Sets Fan Mode in Acer OEM Service:
@@ -279,28 +292,8 @@ namespace PredatorControlApp
         /// <summary>
         /// Queries the current GPU MUX working mode.
         /// </summary>
-        public static async Task<int?> GetGpuModeAsync()
-        {
-            string? resp = await GetDeviceDataAsync("GPU_MODE");
-            if (string.IsNullOrEmpty(resp)) return null;
-
-            try
-            {
-                using var doc = JsonDocument.Parse(resp);
-                if (doc.RootElement.TryGetProperty("data", out var dataProp) &&
-                    dataProp.TryGetProperty("mode", out var modeProp))
-                {
-                    return modeProp.GetInt32();
-                }
-                if (doc.RootElement.TryGetProperty("mode", out var directMode))
-                {
-                    return directMode.GetInt32();
-                }
-            }
-            catch { }
-
-            return null;
-        }
+        public static async Task<int?> GetGpuModeAsync() =>
+            ReadIntProperty(await GetDeviceDataAsync("GPU_MODE"), "mode");
 
         /// <summary>
         /// Sets LCD panel overdrive (response time acceleration).
@@ -313,28 +306,8 @@ namespace PredatorControlApp
         /// <summary>
         /// Queries LCD overdrive status.
         /// </summary>
-        public static async Task<bool?> GetLcdOverdriveAsync()
-        {
-            string? resp = await GetDeviceDataAsync("LCD_OVERDRIVE");
-            if (string.IsNullOrEmpty(resp)) return null;
-
-            try
-            {
-                using var doc = JsonDocument.Parse(resp);
-                if (doc.RootElement.TryGetProperty("data", out var dataProp) &&
-                    dataProp.TryGetProperty("status", out var statusProp))
-                {
-                    return statusProp.GetInt32() == 1;
-                }
-                if (doc.RootElement.TryGetProperty("status", out var directStatus))
-                {
-                    return directStatus.GetInt32() == 1;
-                }
-            }
-            catch { }
-
-            return null;
-        }
+        public static async Task<bool?> GetLcdOverdriveAsync() =>
+            ReadIntProperty(await GetDeviceDataAsync("LCD_OVERDRIVE"), "status") is int s ? s == 1 : null;
 
         /// <summary>
         /// Sets Keyboard Backlight 30-Second Idle Sleep timeout.
@@ -347,28 +320,8 @@ namespace PredatorControlApp
         /// <summary>
         /// Queries Keyboard Backlight 30-Second Idle Sleep status.
         /// </summary>
-        public static async Task<bool?> GetBacklight30sAsync()
-        {
-            string? resp = await GetDeviceDataAsync("BACKLIGHT_30S");
-            if (string.IsNullOrEmpty(resp)) return null;
-
-            try
-            {
-                using var doc = JsonDocument.Parse(resp);
-                if (doc.RootElement.TryGetProperty("data", out var dataProp) &&
-                    dataProp.TryGetProperty("status", out var statusProp))
-                {
-                    return statusProp.GetInt32() == 1;
-                }
-                if (doc.RootElement.TryGetProperty("status", out var directStatus))
-                {
-                    return directStatus.GetInt32() == 1;
-                }
-            }
-            catch { }
-
-            return null;
-        }
+        public static async Task<bool?> GetBacklight30sAsync() =>
+            ReadIntProperty(await GetDeviceDataAsync("BACKLIGHT_30S"), "status") is int s ? s == 1 : null;
 
         /// <summary>
         /// Sets BIOS Boot Sound (Startup Chime).
@@ -381,28 +334,8 @@ namespace PredatorControlApp
         /// <summary>
         /// Queries BIOS Boot Sound status.
         /// </summary>
-        public static async Task<bool?> GetBootSoundAsync()
-        {
-            string? resp = await GetDeviceDataAsync("BOOT_SOUND");
-            if (string.IsNullOrEmpty(resp)) return null;
-
-            try
-            {
-                using var doc = JsonDocument.Parse(resp);
-                if (doc.RootElement.TryGetProperty("data", out var dataProp) &&
-                    dataProp.TryGetProperty("status", out var statusProp))
-                {
-                    return statusProp.GetInt32() == 1;
-                }
-                if (doc.RootElement.TryGetProperty("status", out var directStatus))
-                {
-                    return directStatus.GetInt32() == 1;
-                }
-            }
-            catch { }
-
-            return null;
-        }
+        public static async Task<bool?> GetBootSoundAsync() =>
+            ReadIntProperty(await GetDeviceDataAsync("BOOT_SOUND"), "status") is int s ? s == 1 : null;
 
         /// <summary>
         /// Sets BIOS boot startup animation / logo.
@@ -441,9 +374,16 @@ namespace PredatorControlApp
         /// </summary>
         public static async Task<bool> SetWinKeyLockAsync(bool lockKeys)
         {
-            // Note: OEM status 1 = lock enabled, 0 = lock disabled
-            return await SetDeviceDataAsync("WIN_KEY", new { status = lockKeys ? 1 : 0 });
+            // Verified against AcerAgentService PSSocket::Set_Win_Key:
+            // status 0 = Windows & Menu keys disabled (locked), status 1 = enabled (unlocked)
+            return await SetDeviceDataAsync("WIN_KEY", new { status = lockKeys ? 0 : 1 });
         }
+
+        /// <summary>
+        /// Queries Windows and Menu Key Lock status from OEM service.
+        /// </summary>
+        public static async Task<bool?> GetWinKeyLockAsync() =>
+            ReadIntProperty(await GetDeviceDataAsync("WIN_KEY"), "status") is int s ? s == 0 : null;
 
         /// <summary>
         /// Sets CoolBoost™ Fan Ceiling Boost.
@@ -456,24 +396,8 @@ namespace PredatorControlApp
         /// <summary>
         /// Queries CoolBoost™ status from OEM service.
         /// </summary>
-        public static async Task<bool?> GetCoolBoostAsync()
-        {
-            try
-            {
-                string? resp = await GetDeviceDataAsync("COOL_BOOST");
-                if (!string.IsNullOrEmpty(resp))
-                {
-                    using var doc = JsonDocument.Parse(resp);
-                    if (doc.RootElement.TryGetProperty("data", out var dataProp) &&
-                        dataProp.TryGetProperty("status", out var statProp))
-                    {
-                        return statProp.GetInt32() == 1;
-                    }
-                }
-            }
-            catch { }
-            return null;
-        }
+        public static async Task<bool?> GetCoolBoostAsync() =>
+            ReadIntProperty(await GetDeviceDataAsync("COOL_BOOST"), "status") is int s ? s == 1 : null;
 
         /// <summary>
         /// Sets 4-zone static keyboard RGB lighting via OEM Agent Service LIGHTING command.

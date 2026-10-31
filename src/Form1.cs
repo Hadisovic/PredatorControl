@@ -277,6 +277,7 @@ namespace PredatorControlApp
         private Label _lblBacklight30s = null!;
 
         private PredatorToggle _switchWinKeyLock = null!;
+        private ToolStripMenuItem? _trayWinKey;
         private Label? _lblJelliEnabled;
         private PredatorToggle? _switchJelliEnabled;
         private ToolStripMenuItem? _trayJelliToggle;
@@ -1306,7 +1307,7 @@ namespace PredatorControlApp
             if (_wmi.Capabilities.SupportsRgbLighting) _trayMenu.Items.Add(rgbMenu);
 
             var hardwareMenu = new ToolStripMenuItem("  Hardware Features");
-            var trayWinKey = new ToolStripMenuItem("Lock Windows Key", null, (s, e) =>
+            _trayWinKey = new ToolStripMenuItem("Lock Windows Key", null, (s, e) =>
             {
                 if (_switchWinKeyLock != null) _switchWinKeyLock.Checked = !_switchWinKeyLock.Checked;
             });
@@ -1314,7 +1315,7 @@ namespace PredatorControlApp
             {
                 if (_switchLcdOverdrive != null) _switchLcdOverdrive.Checked = !_switchLcdOverdrive.Checked;
             });
-            hardwareMenu.DropDownItems.AddRange([trayWinKey, trayLcdOverdrive]);
+            hardwareMenu.DropDownItems.AddRange([_trayWinKey, trayLcdOverdrive]);
             _trayMenu.Items.Add(hardwareMenu);
 
             _trayJelliToggle = new ToolStripMenuItem("  Jelli Desktop Companion", null, (s, e) => SetJelliEnabled(!(_trayJelliToggle?.Checked ?? !_jelliFallback)))
@@ -2141,13 +2142,28 @@ namespace PredatorControlApp
 
             _switchWinKeyLock.CheckedChanged += (s, e) =>
             {
+                if (_changingHardwareToggle) return;
                 bool lockKeys = _switchWinKeyLock.Checked;
+                if (_trayWinKey != null) _trayWinKey.Checked = lockKeys;
                 PredatorKeyHook.SetWinKeyLocked(lockKeys);
+                if (_loadingPreferences) return;
                 SaveState("LockWinKey", lockKeys ? 1 : 0);
-                Task.Run(() =>
+                if (_wmi.Capabilities.SupportsWinKey)
                 {
-                    try { _wmi.SetWinKeyLock(lockKeys); } catch { }
-                });
+                    Task.Run(() =>
+                    {
+                        try
+                        {
+                            _wmi.SetWinKeyLock(lockKeys);
+                            if (!IsDisposed && IsHandleCreated) BeginInvoke(() => _jelli?.PublishState());
+                        }
+                        catch { }
+                    });
+                }
+                else
+                {
+                    _jelli?.PublishState();
+                }
             };
 
             // Jelli Desktop Companion Toggle
@@ -3880,12 +3896,15 @@ namespace PredatorControlApp
                 // Windows Key Lock
                 int savedWinKeyLock = GetInt(key, "LockWinKey", 0, 0, 1);
                 if (_switchWinKeyLock != null) _switchWinKeyLock.Checked = (savedWinKeyLock == 1);
+                if (_trayWinKey != null) _trayWinKey.Checked = (savedWinKeyLock == 1);
                 PredatorKeyHook.SetWinKeyLocked(savedWinKeyLock == 1);
-                Task.Run(() => { try { _wmi.SetWinKeyLock(savedWinKeyLock == 1); } catch { } });
+                if (_wmi.Capabilities.SupportsWinKey && (CompatibilitySettings.Read(key, "LockWinKey") != null || savedWinKeyLock == 1))
+                    Task.Run(() => { try { _wmi.SetWinKeyLock(savedWinKeyLock == 1); } catch { } });
 
                 // GPU Working Mode (MUX Switch)
+                bool hasExplicitGpuMode = key.GetValue("GpuMode") != null;
                 int savedGpuMode = GetInt(key, "GpuMode", AcerAgentClient.GPU_MODE_OPTIMUS, 0, 2);
-                _currentGpuMode = savedGpuMode;
+                _currentGpuMode = hasExplicitGpuMode ? savedGpuMode : null;
                 PredatorButton? targetBtn = savedGpuMode switch
                 {
                     AcerAgentClient.GPU_MODE_OPTIMUS => _btnGpuOptimus,
@@ -4018,6 +4037,8 @@ namespace PredatorControlApp
                                     }
                                 }
                             }
+
+                            _jelli?.PublishState();
                         }
 
                         if (IsHandleCreated)

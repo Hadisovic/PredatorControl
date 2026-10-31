@@ -1136,8 +1136,81 @@ namespace PredatorControlApp
 
         public bool SetBacklight30s(bool enable) => KeyboardControl.Apply(null, enable).Confirmed;
 
-        // Windows key filtering is provided by the existing OS hook; no guessed RGB firmware packet.
-        public bool SetWinKeyLock(bool lockKeys) => false;
+        /// <summary>
+        /// [TRIGGER]     : User toggles "Lock Windows &amp; Menu Keys" in UI, Tray, Jelli, or GameSync
+        /// [HARDWARE I/O]: Dispatches EC keyboard lock via SetGamingRgbKb, OEM Agent WIN_KEY, and APGeAction.SetFunction(2)
+        /// [EFFECT]      : Locks/unlocks physical Windows &amp; Menu keys in keyboard controller firmware
+        /// </summary>
+        public bool SetWinKeyLock(bool lockKeys)
+        {
+            byte val = (byte)(lockKeys ? 0 : 3);
+            ulong packed = 0x03UL | ((ulong)val << 8) | ((ulong)(byte)(0xFC - val) << 56);
+            return Write(HardwareFeature.WinKey, true, () =>
+            {
+                if (_testIo != null)
+                    return Acknowledged(SendCommand("SetGamingRgbKb", packed).success);
+
+                bool agentOk = false;
+                try { agentOk = AcerAgentClient.SetWinKeyLockAsync(lockKeys).GetAwaiter().GetResult(); }
+                catch { }
+
+                bool apgeOk = !agentOk && TrySetApgeWinKey(lockKeys);
+                bool wmiOk = SendWinKeyRgbKb(val, packed);
+                return Acknowledged(agentOk || apgeOk || wmiOk);
+            }).Accepted;
+        }
+
+        private bool SendWinKeyRgbKb(byte val, ulong packed)
+        {
+            if (_disposed || !AuthorizeWmi("SetGamingRgbKb", packed)) return false;
+            lock (_lock)
+            {
+                try
+                {
+                    var obj = GetWmiObject();
+                    if (obj == null) return false;
+                    using var inParams = obj.GetMethodParameters("SetGamingRgbKb");
+                    if (inParams == null) return false;
+                    if (inParams.Properties["gmInput"]?.IsArray == true)
+                        inParams["gmInput"] = new byte[8] { 0x03, val, 0x00, 0x00, 0x00, 0x00, 0x00, (byte)(0xFC - val) };
+                    else
+                        inParams["gmInput"] = packed;
+
+                    using var outParams = obj.InvokeMethod("SetGamingRgbKb", inParams, new InvokeMethodOptions { Timeout = TimeSpan.FromSeconds(2) });
+                    if (outParams?["gmOutput"] == null) return false;
+                    bool ok = (Convert.ToUInt64(outParams["gmOutput"]) & 0xFF) == 0;
+                    if (ok) _consecutiveFailures = 0;
+                    return ok;
+                }
+                catch
+                {
+                    InvalidateCache();
+                    return false;
+                }
+            }
+        }
+
+        private static bool TrySetApgeWinKey(bool lockKeys)
+        {
+            if (!HardwareWriteGate.InScope(HardwareFeature.WinKey, "acer-wmi-winkey")) return false;
+            try
+            {
+                using var searcher = new ManagementObjectSearcher(new ManagementScope(@"root\WMI"), new ObjectQuery("SELECT * FROM APGeAction"),
+                    new System.Management.EnumerationOptions { Timeout = TimeSpan.FromSeconds(2) });
+                using var rows = searcher.Get();
+                using var iterator = rows.GetEnumerator();
+                if (!iterator.MoveNext() || iterator.Current is not ManagementObject obj) return false;
+                using (obj)
+                using (var args = obj.GetMethodParameters("SetFunction"))
+                {
+                    ulong input = lockKeys ? 0x00000002UL : 0x01000002UL;
+                    args["uiInput"] = args.Properties["uiInput"].Type == CimType.UInt32 ? (object)(uint)input : input;
+                    using var reply = obj.InvokeMethod("SetFunction", args, new InvokeMethodOptions { Timeout = TimeSpan.FromSeconds(2) });
+                    return reply?["uiOutput"] != null && (Convert.ToUInt64(reply["uiOutput"]) & 0xFF) == 0;
+                }
+            }
+            catch { return false; }
+        }
 
 
         #endregion

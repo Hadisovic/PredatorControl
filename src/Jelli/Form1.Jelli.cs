@@ -428,10 +428,39 @@ public partial class Form1 : IJelliBackend
             }
             return null;
         }
+        if (id == "hardware.keyLock")
+        {
+            bool wanted = data.GetBoolean();
+            void ApplyUiState()
+            {
+                _changingHardwareToggle = true;
+                try
+                {
+                    if (_switchWinKeyLock != null) _switchWinKeyLock.Checked = wanted;
+                    if (_trayWinKey != null) _trayWinKey.Checked = wanted;
+                }
+                finally { _changingHardwareToggle = false; }
+                PredatorKeyHook.SetWinKeyLocked(wanted);
+                SaveState("LockWinKey", wanted ? 1 : 0);
+            }
+            if (InvokeRequired) Invoke(new Action(ApplyUiState));
+            else ApplyUiState();
+
+            if (_wmi.Capabilities.SupportsWinKey)
+            {
+                await Task.Run(() =>
+                {
+                    try { _wmi.SetWinKeyLock(wanted); } catch { }
+                });
+            }
+            _jelli?.PublishState();
+            return new HardwareOperationResult("unverified", wanted ? "Windows and Menu keys locked." : "Windows and Menu keys unlocked.");
+        }
         if (id == "keyboard.profile")
             throw new InvalidOperationException("Keyboard preferences cannot override verified hardware capabilities.");
+        var previousOp = _wmi.LastOperation;
         JelliAction(id, data);
-        return _wmi.LastOperation;
+        return ReferenceEquals(_wmi.LastOperation, previousOp) ? null : _wmi.LastOperation;
     }
     void IJelliBackend.Fallback() => JelliFallback();
     void IJelliBackend.SetJelliEnabled(bool enabled) => SetJelliEnabled(enabled);

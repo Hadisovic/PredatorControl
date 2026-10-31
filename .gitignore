@@ -45,6 +45,8 @@ publish_out/
 publish_test/
 publish-standalone/
 publish-win-x64/
+dist-release/
+release-*/
 
 # Private transcripts, exports & credentials
 *_EXPORT.md

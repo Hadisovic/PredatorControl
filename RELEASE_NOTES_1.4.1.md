@@ -1,14 +1,15 @@
-# Predator Control 1.4.1
+# Predator Control v1.4.1
 
-Compact dashboard refinement. File/assembly version: 1.4.1.0.
+Release version `1.4.1` (`1.4.1.0`).
 
-- Expanded dashboard reduced from 760 × 760 to 480 × 560 logical pixels, approximately 53% less screen area. Windows display scaling still applies.
-- Attached flyout panel reduced to 480 pixels wide, plus Jelli's existing 180-pixel companion area.
-- Short tab headings replace oversized slogans. Telemetry, buttons, navigation and cards use tighter spacing and smaller corner radii.
-- Keyboard On/Off choices sit alongside their labels. Compatibility explanations and keyboard-type selection remain accessible in an expandable section.
-- Overview quick actions are concise; detailed battery health moves into an expandable row.
-- Jelli, themes, keyboard startup protection, on/off control and independent timeout behavior from 1.4.0 are retained.
+## Highlights & Fixes
+- **Windows & Menu Key Lock Restored**: Re-enabled hardware keyboard matrix & EC firmware lock (`SetGamingRgbKb` + `APGeAction.SetFunction(2)` + OEM Agent `WIN_KEY` synchronization with verified polarity), alongside the Win32 low-level keyboard hook (`WH_KEYBOARD_LL`). Marked `winKey` as `supported` on Predator Helios / Helios Neo profiles (`PH16-71`, `PHN16-71`) and synchronized Classic UI, Tray menu, Jelli UI, and GameSync.
+- **GPU MUX Switch Support (`PH16-71` / `PHN16-71`)**: Full runtime MUX capability detection across `AcerAgentService` initialization packets, OEM registry (`dgpu_mode_capability`), and live `GPU_MODE` readback, enabling Hybrid (Optimus), Discrete GPU, and Automatic (Advanced Optimus) switching with dual OEM Agent + ACPI WMI (`SetGamingMiscSetting` `0x02`) dispatch. Fixed startup GPU mode indicator when no local override has been saved yet.
+- **Predator Performance Profile Switching & Jelli Status Badges**: Restored multi-target Predator thermal/power profile dispatch (`SetGamingProfile`, `0x01000000 | mode`, `SetGamingMiscSetting 0x0B`, and OEM Agent `OPERATING_MODE`) and isolated Jelli UI header status pills from transient error banners or stale operation results.
+- **IPC Cleanup & Optimization**: Unified `AcerAgentClient` write-gate authorization across supported hardware features, removed duplicate JSON parsing boilerplate, and cleaned up intermediate build artifacts.
 
-Validation: full Release publish, frontend build, lint and all six frontend tests. Browser checks use simulated Nitro data at 480 × 560 and narrow layouts; no hardware commands are issued during UI testing. Physical model/BIOS validation remains pending as documented in the 1.4.0 release notes.
-
-Close any older running instance before launching `PredatorControlApp.exe` from this release. Existing 1.4.0 binaries are preserved. The self-contained Windows x64 build includes .NET; Jelli still needs the installed WebView2 Runtime.
+## Packages
+- **`PredatorControl-standalone.exe`** — Self-contained single-file Windows x64 executable (includes .NET runtime).
+- **`PredatorControl-win-x64.exe`** — Lightweight framework-dependent single-file Windows x64 executable.
+- **`PredatorControl-win-x64.zip`** — Archive distribution.
+- **`checksums.txt`** — SHA-256 checksums for automatic updater and manual verification.

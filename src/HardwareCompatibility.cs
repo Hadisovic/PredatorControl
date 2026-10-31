@@ -182,6 +182,7 @@ public record HardwareCapabilities
     public bool SupportsLcdOverdrive => CanWrite(HardwareFeature.LcdOverdrive);
     public bool SupportsBootSound => CanWrite(HardwareFeature.BootSound);
     public bool SupportsUsbCharging => CanWrite(HardwareFeature.UsbCharging);
+    public bool SupportsWinKey => CanWrite(HardwareFeature.WinKey);
     public bool HasAuxFan => Sensors.ContainsKey("auxFanRpm");
     public int PowerModeCount => PowerModes.Count;
     public string[] PowerModeLabels => PowerModes.Select(m => m.Label).ToArray();
@@ -240,7 +241,8 @@ public static class DeviceProfileResolver
         new(HardwareFeature.Rgb, "acer-wmi-rgb", "SetGamingKBBacklight"),
         new(HardwareFeature.LcdOverdrive, "acer-wmi-misc", "SetGamingMiscSetting"),
         new(HardwareFeature.BootSound, "acer-wmi-misc", "SetGamingMiscSetting"),
-        new(HardwareFeature.UsbCharging, "acer-wmi-misc", "SetGamingMiscSetting")
+        new(HardwareFeature.UsbCharging, "acer-wmi-misc", "SetGamingMiscSetting"),
+        new(HardwareFeature.WinKey, "acer-wmi-winkey", "SetGamingRgbKb")
     ];
     private static readonly PowerMode[] LegacyModes =
     [new(0, "Quiet"), new(1, "Balanced"), new(4, "Performance", OnBattery: false), new(5, "Turbo", OnBattery: false), new(6, "Eco", OnAc: false)];

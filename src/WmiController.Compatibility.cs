@@ -233,7 +233,9 @@ public partial class WmiController
             "SetGamingFanBehavior" => HardwareWriteGate.InScope(HardwareFeature.FanAuto, "acer-wmi-fans") || HardwareWriteGate.InScope(HardwareFeature.FanMax, "acer-wmi-fans") ||
                 HardwareWriteGate.InScope(HardwareFeature.FanManual, "acer-wmi-fans") || HardwareWriteGate.InScope(HardwareFeature.CoolBoost, "acer-wmi-coolboost"),
             "SetGamingFanSpeed" => HardwareWriteGate.InScope(HardwareFeature.FanManual, "acer-wmi-fans") || HardwareWriteGate.InScope(HardwareFeature.AuxFan, "acer-wmi-aux"),
-            "SetGamingRgbKb" => HardwareWriteGate.InScope(HardwareFeature.Rgb, "acer-wmi-rgb"),
+            "SetGamingRgbKb" => HardwareWriteGate.InScope(HardwareFeature.Rgb, "acer-wmi-rgb") ||
+                (HardwareWriteGate.InScope(HardwareFeature.WinKey, "acer-wmi-winkey") &&
+                 input is 0xFC00000000000003UL or 0xF900000000000303UL),
             "SetGamingMiscSetting" => (input & 0xFFFFFFFFUL) switch
             {
                 0x10 => HardwareWriteGate.InScope(HardwareFeature.LcdOverdrive, "acer-wmi-misc"),

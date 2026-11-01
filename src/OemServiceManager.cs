@@ -73,38 +73,67 @@ namespace PredatorControlApp
                 string image = Environment.ExpandEnvironmentVariables(key?.GetValue("ImagePath") as string ?? "").Trim();
                 int extension = image.IndexOf(".exe", StringComparison.OrdinalIgnoreCase);
                 string path = image.StartsWith('"') ? image.Split('"')[1] : extension >= 0 ? image[..(extension + 4)] : "";
-                bool trusted;
-                lock (ServiceTrust)
-                {
-                    DateTime stamp = File.GetLastWriteTimeUtc(path);
-                    if (!ServiceTrust.TryGetValue(path, out var cached) || cached.Stamp != stamp)
-                    {
-                        trusted = false;
-                        if (File.Exists(path) && VerifyWinTrust(path) == 0)
-                        {
-#pragma warning disable SYSLIB0057
-                            using var cert = new X509Certificate2(X509Certificate.CreateFromSignedFile(path));
-#pragma warning restore SYSLIB0057
-                            trusted = cert.GetNameInfo(X509NameType.SimpleName, false).Equals("Acer Incorporated", StringComparison.OrdinalIgnoreCase);
-                        }
-                        ServiceTrust[path] = (stamp, trusted);
-                    }
-                    else trusted = cached.Trusted;
-                }
-                return new(name, true, running, trusted);
+                return new(name, true, running, IsAcerSignedBinary(path));
             }
             catch { return new(name, false, false, false); }
         }
+
+        private static bool IsAcerSignedBinary(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return false;
+            lock (ServiceTrust)
+            {
+                DateTime stamp = File.GetLastWriteTimeUtc(path);
+                if (ServiceTrust.TryGetValue(path, out var cached) && cached.Stamp == stamp) return cached.Trusted;
+                bool trusted = false;
+                if (File.Exists(path) && VerifyWinTrust(path) == 0)
+                {
+#pragma warning disable SYSLIB0057
+                    using var cert = new X509Certificate2(X509Certificate.CreateFromSignedFile(path));
+#pragma warning restore SYSLIB0057
+                    trusted = cert.GetNameInfo(X509NameType.SimpleName, false).Equals("Acer Incorporated", StringComparison.OrdinalIgnoreCase);
+                }
+                ServiceTrust[path] = (stamp, trusted);
+                return trusted;
+            }
+        }
+
+        // AASSvc (AcerCentralService.exe) spawns AcerAgentService.exe, which owns the TCP port and pipe.
+        private static readonly string[] AgentWorkerImages = { "AcerAgentService.exe" };
 
         internal static bool IsTrustedAgentProcess(uint pid, string service = "AASSvc")
         {
             if (service is not ("AASSvc" or "PSSvc") || pid == 0 || ReadServiceEvidence(service) is not { Running: true, Trusted: true }) return false;
             try
             {
-                using var query = new ManagementObjectSearcher($"SELECT ProcessId FROM Win32_Service WHERE Name='{service}'");
-                using var rows = query.Get();
-                foreach (ManagementObject row in rows)
-                    using (row) if (Convert.ToUInt32(row["ProcessId"]) == pid) return true;
+                uint servicePid = 0; string servicePath = "";
+                using (var query = new ManagementObjectSearcher($"SELECT ProcessId, PathName FROM Win32_Service WHERE Name='{service}'"))
+                using (var rows = query.Get())
+                    foreach (ManagementObject row in rows)
+                        using (row) { servicePid = Convert.ToUInt32(row["ProcessId"]); servicePath = row["PathName"]?.ToString() ?? ""; }
+                if (servicePid == 0) return false;
+                if (servicePid == pid) return true;
+                if (service != "AASSvc") return false;
+
+                // Accept only the service's own signed worker child, located beside the service binary.
+                string expanded = Environment.ExpandEnvironmentVariables(servicePath).Trim();
+                int ext = expanded.IndexOf(".exe", StringComparison.OrdinalIgnoreCase);
+                string servicePathExe = expanded.StartsWith('"') ? expanded.Split('"')[1] : ext >= 0 ? expanded[..(ext + 4)] : "";
+                string? serviceDir = Path.GetDirectoryName(servicePathExe);
+                if (string.IsNullOrEmpty(serviceDir)) return false;
+                using var child = new ManagementObjectSearcher($"SELECT Name, ParentProcessId, ExecutablePath FROM Win32_Process WHERE ProcessId={pid}");
+                using var childRows = child.Get();
+                foreach (ManagementObject row in childRows)
+                    using (row)
+                    {
+                        if (Convert.ToUInt32(row["ParentProcessId"]) != servicePid) return false;
+                        string name = row["Name"]?.ToString() ?? "";
+                        if (!AgentWorkerImages.Contains(name, StringComparer.OrdinalIgnoreCase)) return false;
+                        string image = row["ExecutablePath"]?.ToString() ?? "";
+                        string candidate = string.IsNullOrEmpty(image) ? Path.Combine(serviceDir, name) : image;
+                        if (!string.Equals(Path.GetDirectoryName(candidate), serviceDir, StringComparison.OrdinalIgnoreCase)) return false;
+                        return IsAcerSignedBinary(candidate);
+                    }
             }
             catch { }
             return false;
@@ -834,7 +863,7 @@ namespace PredatorControlApp
             {
                 using var p = Process.Start(new ProcessStartInfo
                 {
-                    FileName = exe,
+                    FileName = SecureLaunch.System32(exe),
                     Arguments = args,
                     CreateNoWindow = true,
                     UseShellExecute = false

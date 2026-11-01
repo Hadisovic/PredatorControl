@@ -50,7 +50,7 @@ internal sealed class JelliHostForm : Form
         _anchor = new(_settings.X, _settings.Y);
         SetSurface("compact");
         _cursor.Tick += (_, _) => SendCursor();
-        _state.Tick += (_, _) => PublishState();
+        _state.Tick += (_, _) => PublishTick();
         _rgb.Tick += (_, _) => FlushColor();
         Deactivate += (_, _) => { if (_surface is "menu" or "summary") SetSurface("compact"); };
         DpiChanged += (_, _) => SetSurface(_surface);
@@ -164,11 +164,12 @@ internal sealed class JelliHostForm : Form
         string profile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PredatorControl", _persist ? "WebView2" : "WebView2-Test");
         var options = new CoreWebView2EnvironmentOptions
         {
-            AdditionalBrowserArguments = "--disable-gpu --js-flags=\"--max-old-space-size=16 --max-semi-space-size=1 --optimize-for-size\""
+            AdditionalBrowserArguments = "--disable-gpu --disable-features=AudioServiceOutOfProcess,IsolateOrigins,site-per-process --renderer-process-limit=1 --disable-background-networking --disable-component-update --disable-extensions --disable-speech-api --js-flags=\"--max-old-space-size=16 --max-semi-space-size=1 --optimize-for-size\""
         };
         var env = await CoreWebView2Environment.CreateAsync(userDataFolder: profile, options: options);
         await _web.EnsureCoreWebView2Async(env);
         var core = _web.CoreWebView2;
+        try { core.MemoryUsageTargetLevel = CoreWebView2MemoryUsageTargetLevel.Low; } catch { }
         core.AddWebResourceRequestedFilter(Origin + "*", CoreWebView2WebResourceContext.All);
         core.WebResourceRequested += (_, e) => {
             var uri = new Uri(e.Request.Uri);
@@ -253,6 +254,12 @@ internal sealed class JelliHostForm : Form
     internal void PublishState()
     {
         if (_ready && !_gaming) Send(new { version = 1, type = "state", data = _backend.State(_settings) });
+    }
+    private void PublishTick()
+    {
+        if (!_ready || _gaming) return;
+        if (_surface == "compact") Send(new { version = 1, type = "telemetry", data = _backend.Telemetry() });
+        else PublishState();
     }
 
     private async void Receive(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
@@ -358,6 +365,8 @@ internal sealed class JelliHostForm : Form
         _creatureX = flyout ? (_anchor.X - Left) / scale + 20 : surface == "compact" ? 20 : (width - 140) / 2d;
         _creatureY = flyout ? Math.Clamp((_anchor.Y - Top) / scale, 0, height - 180) : 0;
         SendLayout();
+        if (surface != "compact") PublishState();
+        else if (_ready) Program.TrimWorkingSet(forceGc: false);
     }
     internal static Point Clamp(Point point, Size size, Rectangle work) => new(
         Math.Clamp(point.X, work.Left, Math.Max(work.Left, work.Right - size.Width)),

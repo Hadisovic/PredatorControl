@@ -81,16 +81,21 @@ namespace PredatorControlApp
         private long _lastPredatorTriggerTick = 0;
         private long _lastModeTriggerTick = 0;
         private bool _disposed;
+        private readonly AcerChassisFamily _chassisFamily;
 
         public event Action? PredatorKeyPressed;
         public event Action? ModeKeyPressed;
 
-        public PredatorKeyHook()
+        public PredatorKeyHook(AcerChassisFamily chassisFamily = AcerChassisFamily.Predator)
         {
+            _chassisFamily = chassisFamily;
             _proc = HookCallback;
             InstallHook();
-            StartWmiWatchers();
-            RegisterAppKeyInRegistry();
+            if (_chassisFamily is AcerChassisFamily.Predator or AcerChassisFamily.Nitro)
+            {
+                StartWmiWatchers();
+                RegisterAppKeyInRegistry();
+            }
         }
 
         private void InstallHook()
@@ -203,20 +208,30 @@ namespace PredatorControlApp
             });
         }
 
-        public static bool IsModeKey(uint vkCode, uint scanCode, uint flags)
+        public static bool IsModeKey(uint vkCode, uint scanCode, uint flags) =>
+            IsModeKey(vkCode, scanCode, flags, AcerChassisFamily.Predator);
+
+        public static bool IsModeKey(uint vkCode, uint scanCode, uint flags, AcerChassisFamily chassisFamily)
         {
-            // Match virtual key code AND scan code together
+            if (chassisFamily is not (AcerChassisFamily.Predator or AcerChassisFamily.Nitro))
+                return false;
+
+            // Match confirmed virtual key code AND scan code together
             if (vkCode == VK_OEM_PREDATOR && scanCode == ACER_SCANCODE_MODE_KEY) // 0x76
-                return true;
-            if (vkCode == VK_OEM_PREDATOR && scanCode == ACER_SCANCODE_MODE_EXT) // 0x54 // TODO: verify on hardware
                 return true;
 
             return false;
         }
 
-        public static bool IsPredatorKey(uint vkCode, uint scanCode, uint flags)
+        public static bool IsPredatorKey(uint vkCode, uint scanCode, uint flags) =>
+            IsPredatorKey(vkCode, scanCode, flags, AcerChassisFamily.Predator);
+
+        public static bool IsPredatorKey(uint vkCode, uint scanCode, uint flags, AcerChassisFamily chassisFamily)
         {
-            // Match virtual key code AND scan code together
+            if (chassisFamily is not (AcerChassisFamily.Predator or AcerChassisFamily.Nitro))
+                return false;
+
+            // Match confirmed virtual key code AND scan code together
             // Confirmed hardware: VK=0xFF + SC=0x75 — actual Predator logo key on this unit (captured via sniffer)
             if (vkCode == VK_OEM_PREDATOR && scanCode == ACER_SCANCODE_PREDATOR_ACTUAL) // 0x75
                 return true;
@@ -224,17 +239,11 @@ namespace PredatorControlApp
             // Physical Predator key scan codes (older firmware / other Acer models)
             if (vkCode == VK_OEM_PREDATOR && scanCode == ACER_SCANCODE_PREDATOR_KEY) // 0x71
                 return true;
-            if (vkCode == VK_OEM_PREDATOR && scanCode == ACER_SCANCODE_PREDATOR_ALT) // 0x6C // TODO: verify on hardware
-                return true;
 
             // Nitro OEM App 1 key
             if (vkCode == VK_LAUNCH_APP1 && scanCode == ACER_SCANCODE_NITRO_1) // 0x6E
                 return true;
-            if (vkCode == VK_LAUNCH_APP1 && scanCode == ACER_SCANCODE_NITRO_2) // 0x6D // TODO: verify on hardware
-                return true;
             if (vkCode == VK_OEM_PREDATOR && scanCode == ACER_SCANCODE_NITRO_1) // 0x6E
-                return true;
-            if (vkCode == VK_OEM_PREDATOR && scanCode == ACER_SCANCODE_NITRO_2) // 0x6D // TODO: verify on hardware
                 return true;
 
             return false;
@@ -279,7 +288,7 @@ namespace PredatorControlApp
                 }
 
                 // 1. Check Mode Button
-                if (IsModeKey(kb.vkCode, kb.scanCode, kb.flags))
+                if (IsModeKey(kb.vkCode, kb.scanCode, kb.flags, _chassisFamily))
                 {
                     if (wParam == (IntPtr)WM_KEYDOWN || wParam == (IntPtr)WM_SYSKEYDOWN)
                     {
@@ -289,7 +298,7 @@ namespace PredatorControlApp
                 }
 
                 // 2. Check Predator App Key
-                if (IsPredatorKey(kb.vkCode, kb.scanCode, kb.flags))
+                if (IsPredatorKey(kb.vkCode, kb.scanCode, kb.flags, _chassisFamily))
                 {
                     if (wParam == (IntPtr)WM_KEYDOWN || wParam == (IntPtr)WM_SYSKEYDOWN)
                     {

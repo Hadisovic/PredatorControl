@@ -15,5 +15,6 @@ internal interface IHardwareTestIo
     bool SetBatteryLimit(bool enabled);
     bool? ReadBatteryLimit();
     bool SetGpuMode(int mode);
+    bool ManualFanActiveFlag { get => false; set { } }
     IKeyboardFirmware Keyboard { get; }
 }

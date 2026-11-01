@@ -129,6 +129,7 @@ namespace PredatorControlApp
         private volatile bool _isFastPolling = true;
         private volatile bool _includeGpu = true;
         private volatile bool _isOverlayActive = false;
+        private volatile bool _includeCpuPower = false;
         private bool _disposed;
 
         private long _prevIdleTime;
@@ -142,6 +143,8 @@ namespace PredatorControlApp
             StartWorkerLoop();
         }
 
+        public void SetCpuPowerEnabled(bool enabled) => _includeCpuPower = enabled;
+
         public void SetPollingState(bool isFast)
         {
             _isFastPolling = isFast;
@@ -151,7 +154,7 @@ namespace PredatorControlApp
         public void SetOverlayActive(bool active)
         {
             _isOverlayActive = active;
-            if (active) _includeGpu = true;
+            if (active) { _includeGpu = true; _includeCpuPower = true; }
             UpdatePollInterval();
         }
 
@@ -257,7 +260,7 @@ namespace PredatorControlApp
                         // Power and temperature stay separate readings; they are not turned into a fake percentage.
                         int? gpuUsage = nvmlGpuUsage;
 
-                        float? cpuPowerW = GetCpuPower();
+                        float? cpuPowerW = _includeCpuPower ? GetCpuPower() : null;
                         var (ramUsedGb, ramTotalGb, _) = GetMemoryStatus();
 
                         var snapshot = new TelemetrySnapshot(

@@ -111,7 +111,7 @@ namespace PredatorControlApp
         /// Sends a command to Acer OEM Services (AcerAgentService / NitroSenseService) and returns response.
         /// Resilient: gracefully handles disconnected service without exceptions.
         /// </summary>
-        public static async Task<string?> SendCommandAsync(uint packetId, string jsonPayload, int timeoutMs = 1500)
+        public static async Task<string?> SendCommandAsync(uint packetId, string jsonPayload, int timeoutMs = 350)
         {
             bool write = packetId == CMD_SET_DEVICE_DATA;
             if (write && !IsAuthorizedWrite()) return null;
@@ -125,10 +125,12 @@ namespace PredatorControlApp
                 byte[] packet = new byte[8 + payload.Length];
                 MagicBytes.CopyTo(packet, 0); BitConverter.GetBytes(packetId).CopyTo(packet, 4); payload.CopyTo(packet, 8);
                 // Select a trusted endpoint before sending. Never retry a dispatched write on another transport.
-                if (AcerAgentEndpoint.TcpTrusted(TcpPort))
+                if (AcerAgentEndpoint.TcpTrusted(TcpPort, out uint trustedListenerPid))
                 {
                     using var tcp = new TcpClient();
                     await tcp.ConnectAsync(Host, TcpPort, deadline.Token);
+                    if (!AcerAgentEndpoint.TcpConnectedToTrustedServer(tcp.Client, TcpPort, trustedListenerPid))
+                        return null;
                     using var stream = tcp.GetStream();
                     await stream.WriteAsync(packet, deadline.Token);
                     return await AcerAgentProtocol.ReadReply(stream, packetId, deadline.Token);
@@ -136,7 +138,7 @@ namespace PredatorControlApp
                 foreach (string name in AgentPipes)
                 {
                     using var pipe = new NamedPipeClientStream(".", name, PipeDirection.InOut, PipeOptions.Asynchronous);
-                    try { await pipe.ConnectAsync(150, deadline.Token); }
+                    try { await pipe.ConnectAsync(25, deadline.Token); }
                     catch (TimeoutException) { continue; }
                     if (!AcerAgentEndpoint.PipeTrusted(pipe.SafePipeHandle)) continue;
                     await pipe.WriteAsync(packet, deadline.Token);
@@ -342,7 +344,13 @@ namespace PredatorControlApp
         /// </summary>
         public static async Task<bool> SetBootAnimationAsync(bool enable)
         {
-            string img = enable ? @"C:\ProgramData\oem\AcerAgentService\BIOSLogo\AcerLogo.gif" : "";
+            string img = "";
+            if (enable)
+            {
+                const string logoPath = @"C:\ProgramData\oem\AcerAgentService\BIOSLogo\AcerLogo.gif";
+                if (!File.Exists(logoPath) || !SecureLaunch.IsAdminOnly(logoPath)) return false;
+                img = logoPath;
+            }
             return await SetDeviceDataAsync("CUSTOM_BOOT_LOGO", new { imageSource = img });
         }
 

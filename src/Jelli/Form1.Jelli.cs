@@ -232,13 +232,14 @@ public partial class Form1 : IJelliBackend
             new("keyboard.timeout", "Turn off after 30 seconds of inactivity", "toggle", _wmi.KeyboardControl.State.IdleTimeout, !_keyboardBusy)]);
             sections.Add(new("rgb", "Keyboard light", rgb.ToArray()));
         }
-                _jelliActions["overlay.mode"] = d => {
+        _jelliActions["overlay.mode"] = d => {
             string m = d.GetString() ?? "default";
             OverlayMode mode = m.ToLowerInvariant() switch { "light" => OverlayMode.Light, "full" => OverlayMode.Full, "complete" => OverlayMode.Complete, _ => OverlayMode.Default };
-            _overlayForm?.SetMode(mode);
+            SetOverlayMode(mode);
         };
         _jelliActions["overlay.scale"] = d => {
             int s = d.GetInt32();
+            SaveState("OverlayScale", s);
             _overlayForm?.SetScale(s);
         };
         _jelliActions["overlay.settings"] = _ => {
@@ -387,7 +388,14 @@ public partial class Form1 : IJelliBackend
         SetJelliEnabled(false);
     }
 
-    internal void ApplyJelliOverlaySettings(JelliSettings settings) => _overlayForm?.Configure(settings);
+    internal void ApplyJelliOverlaySettings(JelliSettings settings)
+    {
+        _telemetryService?.SetCpuPowerEnabled(
+            _overlayForm?.Visible == true ||
+            settings.Metric1 == "cpuPowerW" ||
+            settings.Metric2 == "cpuPowerW");
+        _overlayForm?.Configure(settings);
+    }
     internal bool WriteJelliColor(Color color)
     {
         // A transient override: preserve all manual zone colors and persisted settings.
@@ -397,6 +405,15 @@ public partial class Form1 : IJelliBackend
         return true;
     }
     object IJelliBackend.State(JelliSettings settings) => JelliState(settings);
+    object IJelliBackend.Telemetry() => new
+    {
+        telemetry = _jelliTelemetry,
+        powerMode = _lblPowerStatus?.Text ?? "",
+        fanMode = _lblFanStatus?.Text ?? "",
+        gpuMode = _activeGpuModeBtn?.Text,
+        fps = _overlayForm?.Visible == true ? _overlayForm.CurrentFps : null,
+        overlay = _overlayForm?.Visible == true
+    };
     async Task<object?> IJelliBackend.Action(string id, JsonElement data)
     {
         var toggleCommand = id switch

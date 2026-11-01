@@ -138,11 +138,18 @@ namespace PredatorControlApp
             Debug.Assert(!PredatorKeyHook.IsModeKey(0, PredatorKeyHook.ACER_SCANCODE_MODE_KEY, 0), "Scan code 0x76 alone must not match Mode key");
             Debug.Assert(!PredatorKeyHook.IsPredatorKey(0, PredatorKeyHook.ACER_SCANCODE_PREDATOR, 0), "Scan code 0x71 alone must not match Predator key");
 
-            // Valid VK + Scan Code pairs must match
-            Debug.Assert(PredatorKeyHook.IsModeKey(PredatorKeyHook.VK_OEM_PREDATOR, PredatorKeyHook.ACER_SCANCODE_MODE_KEY, 0), "VK_OEM_PREDATOR + Mode key scan code must match Mode key");
-            Debug.Assert(PredatorKeyHook.IsPredatorKey(PredatorKeyHook.VK_OEM_PREDATOR, PredatorKeyHook.ACER_SCANCODE_PREDATOR_ACTUAL, 0), "VK_OEM_PREDATOR + SC 0x75 must match Predator key");
-            Debug.Assert(PredatorKeyHook.IsPredatorKey(PredatorKeyHook.VK_OEM_PREDATOR, PredatorKeyHook.ACER_SCANCODE_PREDATOR_KEY, 0), "VK_OEM_PREDATOR + SC 0x71 must match Predator key");
-            Debug.Assert(PredatorKeyHook.IsPredatorKey(PredatorKeyHook.VK_LAUNCH_APP1, PredatorKeyHook.ACER_SCANCODE_NITRO_1, 0), "VK_LAUNCH_APP1 + SC 0x6E must match Nitro key");
+            // Valid VK + Scan Code pairs must match on Predator/Nitro
+            Debug.Assert(PredatorKeyHook.IsModeKey(PredatorKeyHook.VK_OEM_PREDATOR, PredatorKeyHook.ACER_SCANCODE_MODE_KEY, 0, AcerChassisFamily.Predator), "VK_OEM_PREDATOR + Mode key scan code must match Mode key");
+            Debug.Assert(PredatorKeyHook.IsPredatorKey(PredatorKeyHook.VK_OEM_PREDATOR, PredatorKeyHook.ACER_SCANCODE_PREDATOR_ACTUAL, 0, AcerChassisFamily.Predator), "VK_OEM_PREDATOR + SC 0x75 must match Predator key");
+            Debug.Assert(PredatorKeyHook.IsPredatorKey(PredatorKeyHook.VK_OEM_PREDATOR, PredatorKeyHook.ACER_SCANCODE_PREDATOR_KEY, 0, AcerChassisFamily.Predator), "VK_OEM_PREDATOR + SC 0x71 must match Predator key");
+            Debug.Assert(PredatorKeyHook.IsPredatorKey(PredatorKeyHook.VK_LAUNCH_APP1, PredatorKeyHook.ACER_SCANCODE_NITRO_1, 0, AcerChassisFamily.Nitro), "VK_LAUNCH_APP1 + SC 0x6E must match Nitro key");
+
+            // H4: Unverified speculative scan codes and non-gaming chassis must NOT match
+            Debug.Assert(!PredatorKeyHook.IsModeKey(PredatorKeyHook.VK_OEM_PREDATOR, PredatorKeyHook.ACER_SCANCODE_MODE_EXT, 0), "Unconfirmed SC 0x54 must not match Mode key");
+            Debug.Assert(!PredatorKeyHook.IsPredatorKey(PredatorKeyHook.VK_OEM_PREDATOR, PredatorKeyHook.ACER_SCANCODE_PREDATOR_ALT, 0), "Unconfirmed SC 0x6C must not match Predator key");
+            Debug.Assert(!PredatorKeyHook.IsPredatorKey(PredatorKeyHook.VK_LAUNCH_APP1, PredatorKeyHook.ACER_SCANCODE_NITRO_2, 0), "Unconfirmed SC 0x6D must not match Nitro key");
+            Debug.Assert(!PredatorKeyHook.IsPredatorKey(PredatorKeyHook.VK_OEM_PREDATOR, PredatorKeyHook.ACER_SCANCODE_PREDATOR_ACTUAL, 0, AcerChassisFamily.GenericAcer), "GenericAcer must not intercept Predator hotkeys");
+            Debug.Assert(!PredatorKeyHook.IsModeKey(PredatorKeyHook.VK_OEM_PREDATOR, PredatorKeyHook.ACER_SCANCODE_MODE_KEY, 0, AcerChassisFamily.Unsupported), "Unsupported chassis must not intercept Mode hotkeys");
 
             // Unrelated keys must never match
             Debug.Assert(!PredatorKeyHook.IsPredatorKey(0x5B, 0x5B, 0), "Left Windows key must not match Predator key");

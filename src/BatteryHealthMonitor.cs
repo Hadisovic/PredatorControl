@@ -102,7 +102,7 @@ namespace PredatorControlApp
                 string tempXml = Path.Combine(Path.GetTempPath(), $"bat_rep_{Guid.NewGuid():N}.xml");
                 using (var p = Process.Start(new ProcessStartInfo
                 {
-                    FileName = "powercfg.exe",
+                    FileName = SecureLaunch.System32("powercfg.exe"),
                     Arguments = $"/batteryreport /xml /output \"{tempXml}\"",
                     CreateNoWindow = true,
                     UseShellExecute = false
@@ -157,7 +157,7 @@ namespace PredatorControlApp
                     string reportPath = Path.Combine(Path.GetTempPath(), "battery-report.html");
                     using (var p = Process.Start(new ProcessStartInfo
                     {
-                        FileName = "powercfg.exe",
+                        FileName = SecureLaunch.System32("powercfg.exe"),
                         Arguments = $"/batteryreport /output \"{reportPath}\"",
                         CreateNoWindow = true,
                         UseShellExecute = false

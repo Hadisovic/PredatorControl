@@ -447,6 +447,44 @@ using (var controller = new WmiController(fixedRed, io))
 {
     Check(!controller.Capabilities.SupportsWinKey && !controller.SetWinKeyLock(true) && io.Writes.Count == 0, "Unverified WinKey profile rejects firmware WinKey writes");
 }
+
+// v1.4.2 Hardware Logic & Security Review checks (H1, H2, H3, H4, S1, S2, S3, S4)
+Check(FanCurveSafety.FloorSpeed(79, 75) == 0 && FanCurveSafety.FloorSpeed(80, 60) == 55 &&
+      FanCurveSafety.FloorSpeed(70, 85) == 70 && FanCurveSafety.FloorSpeed(90, 70) == 85 &&
+      FanCurveSafety.FloorSpeed(65, 95) == 100, "H2: Thermal floor escalates fan percentage at 80/85/90/95C across CPU and GPU");
+using (var io = new FakeIo { Succeed = false })
+using (var controller = new WmiController(predator, io))
+{
+    Check(!controller.SetFanBehavior(2).Accepted && !controller.SetFanBehavior(3).Accepted && !controller.SetFanSpeed(60, 60) && !controller.SetPowerMode(4).Accepted,
+        "H1: Failed Predator fan and power writes never report success");
+}
+using (var io = new FakeIo())
+using (var controller = new WmiController(predator, io))
+{
+    Check(!controller.RecoverCrashLeftoverManualFans() && io.Writes.Count == 0, "H3: Clean startup does not send unnecessary fan recovery writes");
+    controller.SetFanBehavior(3);
+    Check(io.ManualFanActiveFlag, "H3: Entering manual fan mode persists ManualFanActive flag");
+    io.Writes.Clear();
+    using var restarted = new WmiController(predator, io);
+    Check(restarted.RecoverCrashLeftoverManualFans() && !io.ManualFanActiveFlag && io.Writes.SequenceEqual([("SetGamingFanBehavior", 0x09UL | (1UL << 16) | (1UL << 22))]),
+        "H3: Startup after unclean exit with ManualFanActive=true restores firmware Auto and clears flag");
+}
+Check(!PredatorKeyHook.IsModeKey(PredatorKeyHook.VK_OEM_PREDATOR, PredatorKeyHook.ACER_SCANCODE_MODE_EXT, 0) &&
+      !PredatorKeyHook.IsPredatorKey(PredatorKeyHook.VK_OEM_PREDATOR, PredatorKeyHook.ACER_SCANCODE_PREDATOR_ALT, 0) &&
+      !PredatorKeyHook.IsPredatorKey(PredatorKeyHook.VK_LAUNCH_APP1, PredatorKeyHook.ACER_SCANCODE_NITRO_2, 0) &&
+      !PredatorKeyHook.IsPredatorKey(PredatorKeyHook.VK_OEM_PREDATOR, PredatorKeyHook.ACER_SCANCODE_PREDATOR_ACTUAL, 0, AcerChassisFamily.GenericAcer) &&
+      !PredatorKeyHook.IsModeKey(PredatorKeyHook.VK_OEM_PREDATOR, PredatorKeyHook.ACER_SCANCODE_MODE_KEY, 0, AcerChassisFamily.Unsupported),
+      "H4: Unconfirmed hotkey scan-code pairs and non-gaming chassis are rejected");
+Check(SecureLaunch.System32("sc.exe").EndsWith(@"\System32\sc.exe", StringComparison.OrdinalIgnoreCase) &&
+      Path.IsPathRooted(SecureLaunch.System32("schtasks.exe")), "S2: Elevated system utilities resolve to rooted System32 paths");
+Check(SecureLaunch.IsAdminOnly(SecureLaunch.System32("sc.exe")) && !SecureLaunch.IsAdminOnly(Path.GetTempPath()),
+      "S1/S4: ACL validator accepts System32 binary and rejects user-writable TEMP path");
+Check(Updater.IsTrustedUpdateUri(new Uri("https://github.com/Hadisovic/PredatorControl/releases/download/v1.4.2/PredatorControl.exe")) &&
+      Updater.IsTrustedUpdateUri(new Uri("https://objects.githubusercontent.com/github-production-release-asset/123")) &&
+      !Updater.IsTrustedUpdateUri(new Uri("http://github.com/Hadisovic/PredatorControl/releases/download/v1.4.2/PredatorControl.exe")) &&
+      !Updater.IsTrustedUpdateUri(new Uri("https://evil.example.com/PredatorControl.exe")),
+      "S3: Updater URI validator enforces HTTPS and trusted GitHub hosts for binaries, checksums and redirects");
+
 Console.WriteLine($"{passed} compatibility checks passed. All identities, services, sensors and command outcomes were synthetic. No hardware accessed.");
 
 sealed class FakeKeyboard : IKeyboardFirmware
@@ -519,6 +557,7 @@ sealed class FakeIo : IHardwareTestIo, IDisposable
     public bool SetBatteryLimit(bool enabled) { BatteryWrites++; return Succeed; }
     public bool? ReadBatteryLimit() => BatteryReadback;
     public bool SetGpuMode(int mode) { GpuWrites++; return Succeed; }
+    public bool ManualFanActiveFlag { get; set; }
     public void Dispose() { }
 }
 sealed class FragmentedStream(byte[] bytes) : MemoryStream(bytes)

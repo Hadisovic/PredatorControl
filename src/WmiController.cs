@@ -435,16 +435,22 @@ namespace PredatorControlApp
             if (_testIo != null)
                 return Acknowledged(SendCommand("SetGamingProfile", mode).success);
 
-            _ = Task.Run(async () =>
-            {
-                try { await AcerAgentClient.SetOperatingModeAsync(mode); }
-                catch { }
-            });
-
+            var agentTask = Task.Run(() => AcerAgentClient.SetOperatingModeAsync(mode));
             bool ok1 = SendCommand("SetGamingProfile", (ulong)mode).success;
             bool ok2 = SendCommand("SetGamingProfile", 0x01000000UL | (ulong)mode).success;
             bool ok3 = SendCommand("SetGamingMiscSetting", 0x0BUL | ((ulong)mode << 8)).success;
-            return Acknowledged(ok1 || ok2 || ok3 || _cachedObj != null);
+            bool agentOk = WaitAgent(agentTask);
+            if (!(agentOk || ok1 || ok2 || ok3)) return Acknowledged(false);
+            // Independent readback through the OEM agent upgrades an acknowledgement to a confirmation.
+            int? live = null;
+            if (agentOk)
+            {
+                try { var read = Task.Run(AcerAgentClient.GetOperatingModeAsync); if (read.Wait(250)) live = read.Result; }
+                catch { }
+            }
+            return live == mode
+                ? new HardwareOperationResult("confirmed", "Performance profile confirmed by OEM agent readback.")
+                : Acknowledged(true);
         }
 
         private HardwareOperationResult ApplyNitroOperationModePipe(byte mode)
@@ -540,42 +546,32 @@ namespace PredatorControlApp
             var result = Write(feature, mode is >= 1 and <= 3, () =>
             {
                 if (mode == 3) _manualFanSession = true;
-                bool accepted = SendCommand("SetGamingFanBehavior", 0x09UL | ((ulong)mode << 16) | ((ulong)mode << 22)).success;
-                if (_testIo == null && Capabilities.ChassisFamily == AcerChassisFamily.Predator)
+                bool predator = _testIo == null && Capabilities.ChassisFamily == AcerChassisFamily.Predator;
+                Task<bool>? agentModeTask = null;
+                if (predator)
                 {
-                    _ = Task.Run(async () =>
-                    {
-                        try
-                        {
-                            int agentFanMode = mode switch { 0x02 => 1, 0x03 => 2, _ => 0 };
-                            await AcerAgentClient.SetFanModeAsync(agentFanMode);
-                        }
-                        catch { }
-                    });
-                    accepted = accepted || _cachedObj != null;
+                    int agentFanMode = mode switch { 0x02 => 1, 0x03 => 2, _ => 0 };
+                    agentModeTask = Task.Run(() => AcerAgentClient.SetFanModeAsync(agentFanMode));
                 }
+                bool accepted = SendCommand("SetGamingFanBehavior", 0x09UL | ((ulong)mode << 16) | ((ulong)mode << 22)).success;
+                if (agentModeTask != null)
+                    accepted = WaitAgent(agentModeTask) || accepted;
+
                 if (accepted && mode == 3)
                 {
-                    bool cpuOk = SendCommand("SetGamingFanSpeed", 1UL | ((ulong)_customCpuFanSpeed << 8)).success;
-                    bool gpuOk = SendCommand("SetGamingFanSpeed", 4UL | ((ulong)_customGpuFanSpeed << 8)).success;
-                    if (_testIo == null && Capabilities.ChassisFamily == AcerChassisFamily.Predator)
-                    {
-                        byte cpu = _customCpuFanSpeed, gpu = _customGpuFanSpeed;
-                        _ = Task.Run(async () =>
-                        {
-                            try { await AcerAgentClient.SetCustomFanSpeedAsync(cpu, gpu); }
-                            catch { }
-                        });
-                        accepted = (cpuOk && gpuOk) || _cachedObj != null;
-                    }
-                    else
-                    {
-                        accepted = cpuOk && gpuOk;
-                    }
+                    byte cpu = _customCpuFanSpeed, gpu = _customGpuFanSpeed;
+                    Task<bool>? agentSpeedTask = predator
+                        ? Task.Run(() => AcerAgentClient.SetCustomFanSpeedAsync(cpu, gpu))
+                        : null;
+                    bool cpuOk = SendCommand("SetGamingFanSpeed", 1UL | ((ulong)cpu << 8)).success;
+                    bool gpuOk = SendCommand("SetGamingFanSpeed", 4UL | ((ulong)gpu << 8)).success;
+                    accepted = agentSpeedTask != null
+                        ? WaitAgent(agentSpeedTask) || (cpuOk && gpuOk)
+                        : (cpuOk && gpuOk);
                 }
                 return Acknowledged(accepted);
             });
-            if (result.Accepted) _manualFanSession = mode == 3;
+            if (result.Accepted) { _manualFanSession = mode == 3; SetPersistedManualFanActive(mode == 3); }
             if (!result.Accepted && mode == 3) RecoverAutomaticFans();
             return result;
         }
@@ -585,21 +581,17 @@ namespace PredatorControlApp
             var result = Write(HardwareFeature.FanManual, cpuSpeed is >= 10 and <= 100 && gpuSpeed is >= 10 and <= 100, () =>
             {
                 _manualFanSession = true; // Also recover if only the first of the two writes succeeds.
-                if (_testIo == null && Capabilities.ChassisFamily == AcerChassisFamily.Predator)
-                {
-                    _ = Task.Run(async () =>
-                    {
-                        try { await AcerAgentClient.SetCustomFanSpeedAsync(cpuSpeed, gpuSpeed); }
-                        catch { }
-                    });
-                }
+                SetPersistedManualFanActive(true);
+                bool predator = _testIo == null && Capabilities.ChassisFamily == AcerChassisFamily.Predator;
+                Task<bool>? agentTask = predator
+                    ? Task.Run(() => AcerAgentClient.SetCustomFanSpeedAsync(cpuSpeed, gpuSpeed))
+                    : null;
                 bool cpu = SendCommand("SetGamingFanSpeed", 1UL | ((ulong)cpuSpeed << 8)).success;
-                bool gpu = (cpu || (_testIo == null && Capabilities.ChassisFamily == AcerChassisFamily.Predator)) &&
-                    SendCommand("SetGamingFanSpeed", 4UL | ((ulong)gpuSpeed << 8)).success;
-                bool accepted = (cpu && gpu) || (_testIo == null && Capabilities.ChassisFamily == AcerChassisFamily.Predator && _cachedObj != null);
-                return Acknowledged(accepted);
+                bool gpu = SendCommand("SetGamingFanSpeed", 4UL | ((ulong)gpuSpeed << 8)).success;
+                bool agentOk = agentTask != null && WaitAgent(agentTask);
+                return Acknowledged((cpu && gpu) || agentOk);
             });
-            if (result.Accepted) { _customCpuFanSpeed = cpuSpeed; _customGpuFanSpeed = gpuSpeed; _manualFanSession = true; }
+            if (result.Accepted) { _customCpuFanSpeed = cpuSpeed; _customGpuFanSpeed = gpuSpeed; _manualFanSession = true; SetPersistedManualFanActive(true); }
             else if (_manualFanSession) RecoverAutomaticFans();
             return result.Accepted;
         }
@@ -607,9 +599,51 @@ namespace PredatorControlApp
         public bool SetGpuFanSpeed(byte speed) => SetFanSpeed(_customCpuFanSpeed, speed);
         public bool SetAuxFanSpeed(byte speed) => Write(HardwareFeature.AuxFan, speed is >= 10 and <= 100,
             () => Acknowledged(SendCommand("SetGamingFanSpeed", 2UL | ((ulong)speed << 8)).success)).Accepted;
+        // Awaits the OEM agent result with a tight localhost timeout so success is never inferred from a cached WMI object.
+        private static bool WaitAgent(Task<bool> task, int timeoutMs = 350)
+        {
+            try { return task.Wait(timeoutMs) && task.Result; }
+            catch { return false; }
+        }
+
         public void RecoverAutomaticFans()
         {
-            if (_manualFanSession && Capabilities.CanWrite(HardwareFeature.FanAuto)) SetFanBehavior(1);
+            if ((_manualFanSession || IsPersistedManualFanActive()) && Capabilities.CanWrite(HardwareFeature.FanAuto))
+            {
+                SetFanBehavior(1);
+                SetPersistedManualFanActive(false);
+            }
+        }
+
+        // H3: If a crash or force-kill skipped Dispose while manual fan control was active, return fans to Auto first.
+        public bool RecoverCrashLeftoverManualFans()
+        {
+            if (!IsPersistedManualFanActive()) return false;
+            _manualFanSession = true;
+            RecoverAutomaticFans();
+            return !_manualFanSession;
+        }
+
+        private bool IsPersistedManualFanActive()
+        {
+            if (_testIo != null) return _testIo.ManualFanActiveFlag;
+            try
+            {
+                using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"SOFTWARE\PredatorControl");
+                return key?.GetValue("ManualFanActive") is int v && v == 1;
+            }
+            catch { return false; }
+        }
+
+        private void SetPersistedManualFanActive(bool active)
+        {
+            if (_testIo != null) { _testIo.ManualFanActiveFlag = active; return; }
+            try
+            {
+                using var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(@"SOFTWARE\PredatorControl");
+                key?.SetValue("ManualFanActive", active ? 1 : 0, Microsoft.Win32.RegistryValueKind.DWord);
+            }
+            catch { }
         }
 
 
@@ -1106,7 +1140,7 @@ namespace PredatorControlApp
             try
             {
                 string qaSettingsPath = @"C:\ProgramData\Acer\QA\settings.json";
-                if (File.Exists(qaSettingsPath))
+                if (File.Exists(qaSettingsPath) && SecureLaunch.IsAdminOnly(qaSettingsPath))
                 {
                     string json = File.ReadAllText(qaSettingsPath);
                     using var doc = JsonDocument.Parse(json);

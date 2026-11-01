@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.Drawing;
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 
 namespace PredatorControlApp
@@ -6,6 +8,36 @@ namespace PredatorControlApp
     [SupportedOSPlatform("windows")]
     internal static class Program
     {
+        [DllImport("psapi.dll", SetLastError = true)]
+        private static extern bool EmptyWorkingSet(IntPtr hProcess);
+
+        private static long _lastTrimTick;
+
+        /// <summary>
+        /// Compacts the managed heap and asks the Windows Memory Manager to trim unused working-set pages.
+        /// Rate-limited to at most once every 3 seconds.
+        /// </summary>
+        internal static void TrimWorkingSet(bool forceGc = false)
+        {
+            long now = Environment.TickCount64;
+            if (!forceGc && now - Interlocked.Read(ref _lastTrimTick) < 3000) return;
+            Interlocked.Exchange(ref _lastTrimTick, now);
+
+            _ = Task.Run(() =>
+            {
+                try
+                {
+                    if (forceGc)
+                    {
+                        GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
+                        GC.WaitForPendingFinalizers();
+                    }
+                    using var proc = Process.GetCurrentProcess();
+                    EmptyWorkingSet(proc.Handle);
+                }
+                catch { }
+            });
+        }
         private static readonly HashSet<string> _reported = new();
         private static bool _dialogOpen;
         private static Form1? form;

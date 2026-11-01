@@ -104,6 +104,16 @@ public static class FanCurveSafety
 {
     public static bool MustRecover(int? cpuTemp, int? gpuTemp, long sampleAgeMs) =>
         !cpuTemp.HasValue || !gpuTemp.HasValue || sampleAgeMs > 5000 || sampleAgeMs < 0;
+
+    /// <summary>
+    /// Minimum fan percentage (0 = no floor) enforced regardless of the user's curve or manual slider.
+    /// CPU and GPU share heat pipes, so the hottest sensor drives the floor for both fans.
+    /// </summary>
+    public static int FloorSpeed(int? cpuTemp, int? gpuTemp)
+    {
+        int hottest = Math.Max(cpuTemp ?? 0, gpuTemp ?? 0);
+        return hottest >= 95 ? 100 : hottest >= 90 ? 85 : hottest >= 85 ? 70 : hottest >= 80 ? 55 : 0;
+    }
 }
 
 public sealed record ServiceEvidence(string Name, bool Exists, bool Running, bool Trusted, bool InterfaceWorking = false);

@@ -47,6 +47,12 @@ export function App() {
     retry()
     const unsub = subscribe(m => {
       if (m.type === 'state') {setState(m.data as State); setConnected(true); lastState.current = Date.now()}
+      if (m.type === 'telemetry') {
+        const t = m.data as Partial<State>
+        setState(prev => prev ? {...prev, ...t} : prev)
+        setConnected(true)
+        lastState.current = Date.now()
+      }
       if (m.type === 'layout') { setLayout(m.data as Layout); setClosing(false) }
       if (m.type === 'suspend') setSuspended(!!m.data)
       if (m.type === 'error') setError(m.error ?? 'Backend error')
@@ -71,7 +77,7 @@ export function App() {
   const context = () => { clicks.current.cancel(); send('surface', 'menu') }
   const sections = state?.sections.filter(s => sectionTab(s.id) === tab) ?? []
   const brand = deviceBrand(state?.compatibility?.chassisFamily)
-  const versionLabel = state ? `${state.version}${state.revision ? ` rev ${state.revision}` : ''}` : '1.4.1'
+  const versionLabel = state ? `${state.version}${state.revision ? ` rev ${state.revision}` : ''}` : '1.4.2'
   return <main className={`${state?.theme === 'NitroCrimson' ? 'theme-crimson' : state?.theme === 'OledBlack' ? 'theme-oled' : 'theme-teal'} ${layout.surface} ${layout.flyout ? 'flyout' : ''} ${suspended ? 'suspended' : ''}`} onPointerDown={e => { if (e.target === e.currentTarget) send('surface', 'compact') }}>
     <div className="creature" style={{left: layout.creatureX, top: layout.creatureY}}>
       <BlobCanvas onActivate={activate} onContext={context} onDrag={() => clicks.current.cancel()}/>

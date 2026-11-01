@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Net.Http;
 using System.Reflection;
 using System.Runtime.InteropServices;
@@ -149,12 +149,38 @@ namespace PredatorControlApp
 
         #region Apply
 
-        private static readonly string[] TrustedUpdateHosts =
+        // GitHub serves release assets from github.com and from *.githubusercontent.com (objects/release-assets/releases).
+        internal static bool IsTrustedUpdateUri(Uri uri) =>
+            string.Equals(uri.Scheme, "https", StringComparison.OrdinalIgnoreCase) &&
+            (uri.Host.Equals("github.com", OIC) || uri.Host.EndsWith(".githubusercontent.com", OIC));
+
+        private static HttpClient NewTrustedClient(TimeSpan timeout)
         {
-            "github.com",
-            "objects.githubusercontent.com",
-            "releases.githubusercontent.com"
-        };
+            // Redirects are followed manually so every hop is checked against the allowlist.
+            var http = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = timeout };
+            http.DefaultRequestHeaders.UserAgent.ParseAdd("PredatorControl");
+            return http;
+        }
+
+        private static async Task<HttpResponseMessage> GetTrustedAsync(HttpClient http, string url)
+        {
+            var uri = new Uri(url);
+            for (int hop = 0; hop < 5; hop++)
+            {
+                if (!IsTrustedUpdateUri(uri))
+                    throw new InvalidOperationException("Update download refused: untrusted URL or redirect target '" + uri.Host + "'.");
+                var resp = await http.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead);
+                if ((int)resp.StatusCode is >= 300 and < 400 && resp.Headers.Location is Uri next)
+                {
+                    resp.Dispose();
+                    uri = next.IsAbsoluteUri ? next : new Uri(uri, next);
+                    continue;
+                }
+                resp.EnsureSuccessStatusCode();
+                return resp;
+            }
+            throw new InvalidOperationException("Update download refused: too many redirects.");
+        }
 
         internal static async Task ApplyAsync(UpdateInfo info)
         {
@@ -164,10 +190,10 @@ namespace PredatorControlApp
             if (!string.Equals(downloadUri.Scheme, "https", StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException("Update download refused: URL must use HTTPS (got '" + downloadUri.Scheme + "').");
 
-            bool trustedHost = Array.Exists(TrustedUpdateHosts,
-                h => downloadUri.Host.Equals(h, StringComparison.OrdinalIgnoreCase));
-            if (!trustedHost)
+            if (!IsTrustedUpdateUri(downloadUri))
                 throw new InvalidOperationException("Update download refused: untrusted host '" + downloadUri.Host + "'.");
+            if (!Uri.TryCreate(info.ChecksumUrl, UriKind.Absolute, out var checksumUri) || !IsTrustedUpdateUri(checksumUri))
+                throw new InvalidOperationException("Mandatory checksum verification failed: checksum URL is missing or untrusted.");
 
             string target = Environment.ProcessPath ?? Application.ExecutablePath;
 
@@ -185,10 +211,10 @@ namespace PredatorControlApp
 
                 string stagedHash;
                 // Download and hash through ONE exclusive handle so nothing can modify the file between download and verification.
-                using (var http = new HttpClient { Timeout = TimeSpan.FromMinutes(10) })
+                using (var http = NewTrustedClient(TimeSpan.FromMinutes(10)))
                 {
-                    http.DefaultRequestHeaders.UserAgent.ParseAdd("PredatorControl");
-                    using var src = await http.GetStreamAsync(info.DownloadUrl);
+                    using var response = await GetTrustedAsync(http, info.DownloadUrl);
+                    using var src = await response.Content.ReadAsStreamAsync();
                     using var dst = new FileStream(staged, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
                     await src.CopyToAsync(dst);
                     await dst.FlushAsync();
@@ -202,10 +228,10 @@ namespace PredatorControlApp
                 }
 
                 string checksumData;
-                using (var http = new HttpClient { Timeout = TimeSpan.FromMinutes(2) })
+                using (var http = NewTrustedClient(TimeSpan.FromMinutes(2)))
                 {
-                    http.DefaultRequestHeaders.UserAgent.ParseAdd("PredatorControl");
-                    checksumData = await http.GetStringAsync(info.ChecksumUrl);
+                    using var response = await GetTrustedAsync(http, info.ChecksumUrl);
+                    checksumData = await response.Content.ReadAsStringAsync();
                 }
 
                 string? expectedHash = null;
@@ -245,20 +271,17 @@ namespace PredatorControlApp
                 catch { }
 
                 // Persistent backup of the version being replaced (kept after a successful update for manual rollback).
-                string backupDir = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "PredatorControl", "backup");
-                Directory.CreateDirectory(backupDir);
+                string backupDir = SecureSubdirectory("backup");
                 string backup = Path.Combine(backupDir, "PredatorControl.previous.exe");
 
                 File.WriteAllText(script, BuildUpdateScript(Environment.ProcessId, staged, target, backup, stageDir, stagedHash),
                     new UTF8Encoding(false));
 
-                Process.Start(new ProcessStartInfo("cmd.exe", $"/c \"{script}\"")
+                Process.Start(new ProcessStartInfo(SecureLaunch.System32("cmd.exe"), $"/c \"{script}\"")
                 {
                     CreateNoWindow = true,
                     UseShellExecute = false,
-                    WorkingDirectory = Path.GetTempPath()
+                    WorkingDirectory = Environment.SystemDirectory
                 });
             }
             catch
@@ -269,12 +292,29 @@ namespace PredatorControlApp
             }
         }
 
+        // The elevated update script and staged exe must not be replaceable by other processes of the same user,
+        // so they live under ProgramData with a SYSTEM/Administrators-only ACL. Falls back to the per-user profile
+        // only when that cannot be created (the script then is not elevated either).
+        private static string SecureSubdirectory(string name)
+        {
+            try
+            {
+                SecureLaunch.CreateAdminOnlyDirectory(SecureLaunch.ProgramDataDir);
+                string dir = Path.Combine(SecureLaunch.ProgramDataDir, name);
+                Directory.CreateDirectory(dir);
+                return dir;
+            }
+            catch
+            {
+                string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PredatorControl", name);
+                Directory.CreateDirectory(dir);
+                return dir;
+            }
+        }
+
         private static string CreateStagingDirectory()
         {
-            string root = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "PredatorControl", "update");
-            Directory.CreateDirectory(root);
+            string root = SecureSubdirectory("update");
 
             // Clear leftovers from previous attempts (best effort).
             try
@@ -297,7 +337,8 @@ namespace PredatorControlApp
                         System.Security.AccessControl.PropagationFlags.None,
                         System.Security.AccessControl.AccessControlType.Allow));
 
-                Allow(System.Security.Principal.WindowsIdentity.GetCurrent().User!);
+                bool adminOnlyRoot = root.StartsWith(SecureLaunch.ProgramDataDir, StringComparison.OrdinalIgnoreCase);
+                if (!adminOnlyRoot) Allow(System.Security.Principal.WindowsIdentity.GetCurrent().User!);
                 Allow(new System.Security.Principal.SecurityIdentifier(System.Security.Principal.WellKnownSidType.LocalSystemSid, null));
                 Allow(new System.Security.Principal.SecurityIdentifier(System.Security.Principal.WellKnownSidType.BuiltinAdministratorsSid, null));
 
@@ -319,7 +360,9 @@ namespace PredatorControlApp
             return """
                 @echo off
                 setlocal EnableExtensions
-                chcp 65001 >nul
+                set "SYS=%SystemRoot%\System32"
+                set "PATH=%SYS%;%SystemRoot%"
+                "%SYS%\chcp.com" 65001 >nul
                 set "PID=@@PID@@"
                 set "STAGED=@@STAGED@@"
                 set "TARGET=@@TARGET@@"
@@ -329,17 +372,17 @@ namespace PredatorControlApp
 
                 set /a WAITS=0
                 :wait
-                tasklist /fi "PID eq %PID%" /nh | find "%PID%" >nul
+                "%SYS%\tasklist.exe" /fi "PID eq %PID%" /nh | "%SYS%\find.exe" "%PID%" >nul
                 if not errorlevel 1 (
                     set /a WAITS+=1
                     if %WAITS% GEQ 60 goto fail
-                    timeout /t 1 /nobreak >nul
+                    "%SYS%\timeout.exe" /t 1 /nobreak >nul
                     goto wait
                 )
 
                 rem Re-verify the staged file immediately before it is used.
                 set "ACTUAL="
-                for /f "skip=1 tokens=* delims=" %%H in ('certutil -hashfile "%STAGED%" SHA256') do if not defined ACTUAL set "ACTUAL=%%H"
+                for /f "skip=1 tokens=* delims=" %%H in ('"%SYS%\certutil.exe" -hashfile "%STAGED%" SHA256') do if not defined ACTUAL set "ACTUAL=%%H"
                 if not defined ACTUAL goto fail
                 set "ACTUAL=%ACTUAL: =%"
                 if /i not "%ACTUAL%"=="%EXPECTED%" goto fail
@@ -354,7 +397,7 @@ namespace PredatorControlApp
                 if not errorlevel 1 goto done
                 set /a TRIES+=1
                 if %TRIES% GEQ 15 goto restore
-                timeout /t 1 /nobreak >nul
+                "%SYS%\timeout.exe" /t 1 /nobreak >nul
                 goto swap
 
                 :restore
@@ -369,7 +412,7 @@ namespace PredatorControlApp
                 :done
                 :launch
                 if exist "%TARGET%" start "" "%TARGET%"
-                cd /d "%TEMP%"
+                cd /d "%SYS%"
                 (goto) 2>nul & rd /s /q "%STAGEDIR%"
                 """
                 .Replace("@@PID@@", pid.ToString())

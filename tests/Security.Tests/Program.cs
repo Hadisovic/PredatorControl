@@ -82,6 +82,47 @@ await Check("updater validates redirects and caps redirect loops without network
     }
     return true;
 });
+await Check("malformed Game Sync entries cannot break polling", () =>
+{
+    const BindingFlags flags = BindingFlags.NonPublic | BindingFlags.Instance;
+    var type = typeof(GameSyncController);
+    var controller = (GameSyncController)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(type);
+    string path = Path.Combine(Path.GetTempPath(), "PredatorControl-profiles-test-" + Guid.NewGuid().ToString("N") + ".json");
+    try
+    {
+        File.WriteAllText(path, "{\"Enabled\":true,\"Profiles\":[null,{\"ExecutableName\":null},{\"ExecutableName\":\"..\\\\game.exe\"}]}");
+        type.GetField("_savePath", flags)!.SetValue(controller, path);
+        type.GetField("_profiles", flags)!.SetValue(controller, new List<GameProfile>());
+        type.GetMethod("Load", flags)!.Invoke(controller, null);
+        type.GetMethod("PollProcesses", flags)!.Invoke(controller, [null, EventArgs.Empty]);
+        return Task.FromResult(controller.Profiles.Count == 0);
+    }
+    finally { File.Delete(path); } // Never Dispose a constructor-free test fixture (no timer was created).
+});
+await Check("Game Sync edits reject invalid names and preserve a valid profile", () =>
+{
+    var type = typeof(GameSyncController);
+    var controller = (GameSyncController)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(type);
+    type.GetField("_profiles", BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(controller, new List<GameProfile>());
+    foreach (var bad in new[] { null, "", "../game.exe", @"C:\game.exe", "game.txt" })
+    {
+        var profile = new GameProfile { ExecutableName = bad! };
+        try { controller.AddProfile(profile); return Task.FromResult(false); }
+        catch (ArgumentException) { }
+        try { controller.UpdateProfile(profile); return Task.FromResult(false); }
+        catch (ArgumentException) { }
+    }
+    // Save() fails harmlessly on the constructor-free fixture's absent path; it cannot write real preferences.
+    controller.AddProfile(new GameProfile { ExecutableName = "fixture-game.exe", DisplayName = "Fixture" });
+    controller.UpdateProfile(new GameProfile { ExecutableName = "fixture-game.exe", DisplayName = "Updated" });
+    return Task.FromResult(controller.Profiles.Count == 1 && controller.Profiles[0].DisplayName == "Updated");
+});
+await Check("startup refuses promotion from the writable test executable", () =>
+{
+    var prepare = assembly.GetType("PredatorControlApp.SecureLaunch")!.GetMethod("PrepareTaskBinary", BindingFlags.NonPublic | BindingFlags.Static)!;
+    object?[] args = [null];
+    return Task.FromResult(prepare.Invoke(null, args) == null && !string.IsNullOrWhiteSpace(args[0] as string));
+});
 Console.WriteLine($"{passed} passed, {failed} failed. Temporary data only; no hardware or elevated operations.");
 return failed == 0 ? 0 : 1;
 

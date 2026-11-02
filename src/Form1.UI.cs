@@ -544,7 +544,7 @@ namespace PredatorControlApp
 
                 MessageBox.Show(this,
                     wanted
-                        ? "Could not register Predator Control to start with Windows."
+                        ? "Could not enable Start with Windows. Open the app from an administrator-protected folder, such as Program Files, and try again."
                         : "Could not remove the Predator Control startup task.",
                     "Start with Windows", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             };

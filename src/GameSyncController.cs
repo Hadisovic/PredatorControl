@@ -73,16 +73,23 @@ namespace PredatorControlApp
                 _pollTimer.Start();
         }
 
+        private static bool IsValidProfile(GameProfile? profile) =>
+            profile != null && !string.IsNullOrWhiteSpace(profile.ExecutableName) &&
+            profile.ExecutableName.Length <= 260 &&
+            profile.ExecutableName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) &&
+            profile.ExecutableName.IndexOfAny(Path.GetInvalidFileNameChars()) < 0;
+
         public void AddProfile(GameProfile profile)
         {
-            _profiles.RemoveAll(p => p.ExecutableName.Equals(profile.ExecutableName, StringComparison.OrdinalIgnoreCase));
+            if (!IsValidProfile(profile)) throw new ArgumentException("Choose a valid game executable.", nameof(profile));
+            _profiles.RemoveAll(p => string.Equals(p?.ExecutableName, profile.ExecutableName, StringComparison.OrdinalIgnoreCase));
             _profiles.Add(profile);
             Save();
         }
 
         public void RemoveProfile(string exeName)
         {
-            _profiles.RemoveAll(p => p.ExecutableName.Equals(exeName, StringComparison.OrdinalIgnoreCase));
+            _profiles.RemoveAll(p => string.Equals(p?.ExecutableName, exeName, StringComparison.OrdinalIgnoreCase));
 
             if (_activeExe != null && _activeExe.Equals(exeName, StringComparison.OrdinalIgnoreCase))
             {
@@ -96,7 +103,8 @@ namespace PredatorControlApp
 
         public void UpdateProfile(GameProfile profile)
         {
-            var idx = _profiles.FindIndex(p => p.ExecutableName.Equals(profile.ExecutableName, StringComparison.OrdinalIgnoreCase));
+            if (!IsValidProfile(profile)) throw new ArgumentException("Choose a valid game executable.", nameof(profile));
+            var idx = _profiles.FindIndex(p => string.Equals(p?.ExecutableName, profile.ExecutableName, StringComparison.OrdinalIgnoreCase));
             if (idx >= 0)
                 _profiles[idx] = profile;
             else
@@ -184,6 +192,7 @@ namespace PredatorControlApp
                 // Iterate profiles in their configured order so profile priority is unchanged.
                 foreach (var profile in _profiles)
                 {
+                    if (!IsValidProfile(profile)) continue;
                     string nameWithoutExe = Path.GetFileNameWithoutExtension(profile.ExecutableName);
                     if (running.Contains(nameWithoutExe))
                     {
@@ -216,14 +225,17 @@ namespace PredatorControlApp
             try
             {
                 if (!File.Exists(_savePath)) return;
-                var json = File.ReadAllText(_savePath);
+                using var file = new FileStream(_savePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+                if (file.Length > 1024 * 1024) return;
+                using var reader = new StreamReader(file);
+                var json = reader.ReadToEnd();
                 var data = JsonSerializer.Deserialize<GameSyncData>(json);
                 if (data != null)
                 {
                     _enabled = data.Enabled;
                     _profiles.Clear();
                     if (data.Profiles != null)
-                        _profiles.AddRange(data.Profiles);
+                        _profiles.AddRange(data.Profiles.Where(IsValidProfile));
                 }
             }
             catch { }

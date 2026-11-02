@@ -11,7 +11,7 @@
 
 <br/>
 
-**Predator Control** brings your supported **Acer Predator or Nitro** laptop's everyday controls into one app.  
+**Predator Control** brings your supported **Acer Predator or Nitro** laptop's everyday controls into one app.<br/>
 Choose a performance mode, adjust cooling and keyboard lighting, check your battery, and see gaming stats—with either a traditional dashboard or the Jelli desktop companion.
 
 </div>
@@ -165,7 +165,7 @@ If a control is unavailable, check your laptop's compatibility and Acer software
 
 **Updating:** Use the app's update option when available. If it asks you to update manually, close the app from the tray and download the new version from Releases.
 
-> **Release information:** The latest published download is **v1.4.2**. The source code on this repository also includes newer maintenance fixes. Those fixes will reach the download versions when a new build is published.
+> **Release information:** The latest published download is **v1.4.2**. The source code on `master` also includes newer maintenance fixes. Those fixes will reach the download versions when a new build is published.
 
 ### Need help?
 
@@ -198,6 +198,7 @@ Use Windows x64, the [.NET 10 SDK](https://dotnet.microsoft.com/en-us/download/d
 ```powershell
 git clone https://github.com/Hadisovic/PredatorControl.git
 cd PredatorControl
+git switch master
 npm.cmd ci --prefix jelli-ui
 dotnet build src/PredatorControlApp.csproj -c Release
 
@@ -239,7 +240,7 @@ Special thanks to **[@supesonly](https://github.com/supesonly)** for the origina
 
 <div align="center">
 
-**Made with 🪼 and neon teal**  
+**Made with 🪼 and neon teal**<br/>
 *Acer, Predator, Nitro, and PredatorSense are registered trademarks of Acer Inc. Predator Control is an independent open-source project.*
 
 </div>

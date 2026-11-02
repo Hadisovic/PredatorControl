@@ -12,7 +12,7 @@ export function valueFor(s: State | null, key: string) {
   if (key === 'powerMode') return s.powerMode
   if (key === 'fps') return s.fps
   const v = s.telemetry?.[key]
-  if (typeof v !== 'number' || v < 0) return null
+  if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) return null
   if (key === 'ramUsedGb' || key === 'vramUsedGb' || key === 'gpuPowerW' || key === 'cpuPowerW') {
     return Number(v.toFixed(1))
   }
@@ -21,5 +21,5 @@ export function valueFor(s: State | null, key: string) {
 export function Metric({state, name}: {state: State | null; name: string}) {
   const meta = metrics[name] ?? metrics.cpuTemp
   const value = valueFor(state, name)
-  return <div className={`metric${typeof value === 'string' ? ' metric-text' : ''}`}><span>{meta.label}</span><strong>{value ?? '—'}<small>{value === null ? '' : meta.unit}</small></strong></div>
+  return <div className={`metric${value === null ? ' metric-unavailable' : ''}${typeof value === 'string' ? ' metric-text' : ''}`}><span>{meta.label}</span><strong>{value ?? 'Unavailable'}<small>{value === null ? '' : meta.unit}</small></strong></div>
 }

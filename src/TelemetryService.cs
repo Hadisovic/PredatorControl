@@ -129,6 +129,7 @@ namespace PredatorControlApp
         private volatile bool _isFastPolling = true;
         private volatile bool _includeGpu = true;
         private volatile bool _isOverlayActive = false;
+        private volatile bool _includeCpuPower = false;
         private bool _disposed;
 
         private long _prevIdleTime;
@@ -142,6 +143,8 @@ namespace PredatorControlApp
             StartWorkerLoop();
         }
 
+        public void SetCpuPowerEnabled(bool enabled) => _includeCpuPower = enabled;
+
         public void SetPollingState(bool isFast)
         {
             _isFastPolling = isFast;
@@ -151,7 +154,7 @@ namespace PredatorControlApp
         public void SetOverlayActive(bool active)
         {
             _isOverlayActive = active;
-            if (active) _includeGpu = true;
+            if (active) { _includeGpu = true; _includeCpuPower = true; }
             UpdatePollInterval();
         }
 
@@ -216,7 +219,8 @@ namespace PredatorControlApp
                         var power = SystemInformation.PowerStatus;
                         var powerLine = power.PowerLineStatus;
                         bool isPluggedIn = powerLine == PowerLineStatus.Online;
-                        float batPercent = (float)Math.Round(power.BatteryLifePercent * 100f);
+                        float? batPercent = power.BatteryLifePercent is >= 0 and <= 1 && power.BatteryChargeStatus is not (BatteryChargeStatus.NoSystemBattery or BatteryChargeStatus.Unknown)
+                            ? (float)Math.Round(power.BatteryLifePercent * 100f) : null;
                         bool isCharging = (power.BatteryChargeStatus & BatteryChargeStatus.Charging) != 0;
 
                         var (cpuTemp, gpuTemp, cpuRpm, gpuRpm, auxRpm, gpuPower) = _wmi.GetAllSensors(isPluggedIn, _includeGpu);
@@ -237,11 +241,11 @@ namespace PredatorControlApp
                             {
                                 dgpuPowerW = nvml.powerW.Value;
                             }
-                            if (nvml.usagePercent.HasValue)
+                            if (nvml.usagePercent is >= 0 and <= 100)
                             {
                                 nvmlGpuUsage = nvml.usagePercent.Value;
                             }
-                            if (nvml.tempC.HasValue && nvml.tempC.Value > 0)
+                            if (nvml.tempC is >= 1 and <= 125)
                             {
                                 nvmlGpuTemp = nvml.tempC.Value;
                             }
@@ -256,7 +260,7 @@ namespace PredatorControlApp
                         // Power and temperature stay separate readings; they are not turned into a fake percentage.
                         int? gpuUsage = nvmlGpuUsage;
 
-                        float? cpuPowerW = GetCpuPower();
+                        float? cpuPowerW = _includeCpuPower ? GetCpuPower() : null;
                         var (ramUsedGb, ramTotalGb, _) = GetMemoryStatus();
 
                         var snapshot = new TelemetrySnapshot(
@@ -277,6 +281,8 @@ namespace PredatorControlApp
                             ramTotalGb,
                             auxRpm
                         );
+
+                        _wmi.ObserveTelemetry(snapshot);
 
                         // Don't publish after shutdown has begun.
                         if (token.IsCancellationRequested) break;

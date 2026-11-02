@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.Drawing;
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 
 namespace PredatorControlApp
@@ -6,6 +8,36 @@ namespace PredatorControlApp
     [SupportedOSPlatform("windows")]
     internal static class Program
     {
+        [DllImport("psapi.dll", SetLastError = true)]
+        private static extern bool EmptyWorkingSet(IntPtr hProcess);
+
+        private static long _lastTrimTick;
+
+        /// <summary>
+        /// Compacts the managed heap and asks the Windows Memory Manager to trim unused working-set pages.
+        /// Rate-limited to at most once every 3 seconds.
+        /// </summary>
+        internal static void TrimWorkingSet(bool forceGc = false)
+        {
+            long now = Environment.TickCount64;
+            if (!forceGc && now - Interlocked.Read(ref _lastTrimTick) < 3000) return;
+            Interlocked.Exchange(ref _lastTrimTick, now);
+
+            _ = Task.Run(() =>
+            {
+                try
+                {
+                    if (forceGc)
+                    {
+                        GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
+                        GC.WaitForPendingFinalizers();
+                    }
+                    using var proc = Process.GetCurrentProcess();
+                    EmptyWorkingSet(proc.Handle);
+                }
+                catch { }
+            });
+        }
         private static readonly HashSet<string> _reported = new();
         private static bool _dialogOpen;
         private static Form1? form;
@@ -57,30 +89,16 @@ namespace PredatorControlApp
         {
             try
             {
-                bool enableLimit = RegistryConfig.ReadInt("BatteryLimit") == 1;
-                int rgbMode = RegistryConfig.ReadInt("RGB_Mode") ?? 0;
-                int brightness = RegistryConfig.ReadInt("Brightness") ?? 100;
-                int rgbSpeed = RegistryConfig.ReadInt("RGB_Speed") ?? 50;
-                int[] zoneColors = new int[4];
-                for (int z = 0; z < 4; z++)
-                {
-                    zoneColors[z] = RegistryConfig.ReadInt($"ZoneColor_{z}") ?? unchecked((int)0xFF00E6B4);
-                }
-
+                int? preference = RegistryConfig.ReadInt("BatteryLimit");
+                if (!preference.HasValue) return;
+                bool enableLimit = preference == 1;
                 using var wmiEarly = new WmiController();
                 wmiEarly.SetBatteryChargeLimit(enableLimit);
 
                 if (batteryOnly) return;
 
-                // Early boot keyboard lighting enforcement:
-                // Applies user's saved color to ACPI WMI and updates LightingProfile.ini with ActiveMode=2 (Static)
-                var zones = new Color[4];
-                for (int z = 0; z < 4; z++)
-                {
-                    zones[z] = Color.FromArgb(zoneColors[z]);
-                }
-                byte mappedEarlySpeed = (byte)Math.Clamp(Math.Round(rgbSpeed * 9.0 / 100.0), 1, 9);
-                wmiEarly.ApplyLightingSynchronous(zones, rgbMode, (byte)Math.Clamp(brightness, 0, 100), mappedEarlySpeed);
+                // Keyboard restoration runs once in Form1 after capability detection.
+                // Never send generic RGB defaults before the keyboard has been identified.
 
                 // Boot Sound and USB Power-off Charging enforcement
                 try
@@ -98,6 +116,28 @@ namespace PredatorControlApp
         [STAThread]
         static void Main(string[] args)
         {
+            if (args.Length == 2 && args[0] == "--diagnostics")
+            {
+                // Read-only compatibility mode: bypass startup preferences, service optimization and UI hooks.
+                try
+                {
+                    using var controller = new WmiController();
+                    File.WriteAllText(Path.GetFullPath(args[1]), controller.ExportDiagnosticReport());
+                }
+                catch { Environment.ExitCode = 1; }
+                return;
+            }
+            if (args.Length == 1 && args[0] is "--repair-services" or "--optimize-services")
+            {
+                ApplicationConfiguration.Initialize();
+                bool success;
+                if (args[0] == "--repair-services")
+                    success = OemServiceManager.AutoRepairForChassis(WmiController.DetectChassisFamily(), forcePrompt: true).success;
+                else
+                    success = OemServiceManager.OptimizeTelemetryServices();
+                Environment.ExitCode = success ? 0 : 1;
+                return;
+            }
             // Enforce High Process Priority Class for responsive background fan/RGB polling and zero latency during heavy gaming
             try
             {
@@ -166,11 +206,14 @@ namespace PredatorControlApp
             }
 
             // Only the primary instance writes hardware state (secondary IPC launches exit above).
-            ApplyHardwarePreferences();
+            // Preferences are restored by Form1 after capability resolution.
 
             try
             {
-                form = new Form1(ipc);
+                var hardware = new WmiController();
+                // Read-only discovery runs on a worker before a UI is constructed; telemetry reuses its snapshot.
+                Task.Run(() => hardware.Capabilities).GetAwaiter().GetResult();
+                form = new Form1(ipc, hardware);
                 _ = form.Handle;
                 syncContext = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
             }

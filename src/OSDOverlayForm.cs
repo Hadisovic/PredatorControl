@@ -10,6 +10,7 @@ namespace PredatorControlApp
         private static OSDOverlayForm? _instance;
         private byte _currentMode = 0x01; // Default Balanced
         private bool _onBattery = false;
+        private string? _windowsPowerPlanLabel;
         private readonly System.Windows.Forms.Timer _dismissTimer = new();
         private readonly System.Windows.Forms.Timer _fadeTimer = new();
         private double _targetOpacity = 0.95;
@@ -99,7 +100,7 @@ namespace PredatorControlApp
 
         protected override bool ShowWithoutActivation => true;
 
-        public static void ShowMode(byte mode, bool onBattery = false)
+        public static void ShowMode(byte mode, bool onBattery = false, string? windowsPowerPlanLabel = null)
         {
             try
             {
@@ -110,20 +111,21 @@ namespace PredatorControlApp
 
                 if (_instance.InvokeRequired)
                 {
-                    _instance.BeginInvoke(new Action(() => _instance.InternalShow(mode, onBattery)));
+                    _instance.BeginInvoke(new Action(() => _instance.InternalShow(mode, onBattery, windowsPowerPlanLabel)));
                 }
                 else
                 {
-                    _instance.InternalShow(mode, onBattery);
+                    _instance.InternalShow(mode, onBattery, windowsPowerPlanLabel);
                 }
             }
             catch { }
         }
 
-        private void InternalShow(byte mode, bool onBattery)
+        private void InternalShow(byte mode, bool onBattery, string? windowsPowerPlanLabel)
         {
             _currentMode = mode;
             _onBattery = onBattery;
+            _windowsPowerPlanLabel = windowsPowerPlanLabel;
 
             _fadeTimer.Stop();
             _dismissTimer.Stop();
@@ -160,6 +162,8 @@ namespace PredatorControlApp
 
         private (string title, string subtitle, Color primaryColor, Color glowColor) GetModeInfo(byte mode)
         {
+            if (_windowsPowerPlanLabel != null)
+                return (_windowsPowerPlanLabel.ToUpperInvariant(), "Windows power plan", Color.FromArgb(0, 230, 118), Color.FromArgb(50, 0, 230, 118));
             return mode switch
             {
                 0x00 => (

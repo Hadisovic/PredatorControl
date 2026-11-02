@@ -5,7 +5,8 @@ namespace PredatorControlApp;
 internal interface IJelliBackend
 {
     object State(JelliSettings settings);
-    void Action(string id, JsonElement data);
+    object Telemetry();
+    Task<object?> Action(string id, JsonElement data);
     void SetOverlayVisible(bool visible);
     void OpenOverlaySettings();
     void ConfigureOverlay(JelliSettings settings);

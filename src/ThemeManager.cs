@@ -127,10 +127,7 @@ namespace PredatorControlApp
             // If no preference saved, adapt default theme based on detected chassis
             try
             {
-                var (_, model, _, _) = WmiController.GetSystemIdentity();
-                if (model.Contains("Nitro", StringComparison.OrdinalIgnoreCase) ||
-                    model.StartsWith("AN", StringComparison.OrdinalIgnoreCase) ||
-                    model.StartsWith("AV", StringComparison.OrdinalIgnoreCase))
+                if (WmiController.GetSystemIdentity().ChassisFamily == AcerChassisFamily.Nitro)
                 {
                     _current = NitroCrimson;
                 }

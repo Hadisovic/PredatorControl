@@ -20,7 +20,7 @@ internal sealed record JelliSettings
     public int X { get; init; } = 80;
     public int Y { get; init; } = 120;
 
-    internal static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
+    internal static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter(JsonNamingPolicy.CamelCase) } };
     internal static readonly string[] Metrics = ["off", "none", "cpuTemp", "gpuTemp", "cpuFanRpm", "gpuFanRpm", "cpuUsage", "gpuUsage", "gpuPowerW", "batteryPercent", "powerMode", "fps", "cpuPowerW", "ramUsedGb", "vramUsedGb"];
     internal static JelliSettings Load()
     {

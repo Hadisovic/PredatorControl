@@ -30,7 +30,7 @@ namespace PredatorControlApp
     /// Lightweight, asynchronous IPC client for Acer OEM hardware services:
     /// - Primary: AcerAgentService TCP socket at 127.0.0.1:46933
     /// - Fallback: Named pipe \\.\pipe\predatorsense_agent_service_
-    /// 
+    ///
     /// Dispatches hardware commands:
     /// - OPERATING_MODE: Quiet (0), Balanced (1), Performance (4), Turbo (5), Eco (6)
     /// - FAN_CONTROL: Auto (0), Max (1), Custom (2)
@@ -45,13 +45,10 @@ namespace PredatorControlApp
     {
         private const string Host = "127.0.0.1";
         private const int TcpPort = 46933;
-        private static readonly string[] PipeCandidates =
+        private static readonly string[] AgentPipes =
         {
-            "nitrosense_hardware_service_",
-            "nitrosense_agent_service_",
             "predatorsense_agent_service_",
-            "predatorsense_hardware_service_",
-            "systemmonitoring_hardware_service_"
+            "nitrosense_agent_service_"
         };
         private static readonly byte[] MagicBytes = Encoding.ASCII.GetBytes("ACER");
 
@@ -67,106 +64,89 @@ namespace PredatorControlApp
 
         private static readonly SemaphoreSlim _sendLock = new(1, 1);
 
+        private static bool IsAuthorizedWrite(string? function = null) => function switch
+        {
+            "GPU_MODE" => HardwareWriteGate.InScope(HardwareFeature.GpuMux, "acer-agent"),
+            "WIN_KEY" => HardwareWriteGate.InScope(HardwareFeature.WinKey, "acer-wmi-winkey"),
+            "OPERATING_MODE" => HardwareWriteGate.InScope(HardwareFeature.Power, "acer-wmi-profile"),
+            "FAN_CONTROL" => HardwareWriteGate.InScope(HardwareFeature.FanAuto, "acer-wmi-fans") ||
+                             HardwareWriteGate.InScope(HardwareFeature.FanMax, "acer-wmi-fans") ||
+                             HardwareWriteGate.InScope(HardwareFeature.FanManual, "acer-wmi-fans"),
+            "LCD_OVERDRIVE" => HardwareWriteGate.InScope(HardwareFeature.LcdOverdrive, "acer-wmi-misc"),
+            "BOOT_SOUND" or "CUSTOM_BOOT_LOGO" => HardwareWriteGate.InScope(HardwareFeature.BootSound, "acer-wmi-misc"),
+            null => HardwareWriteGate.InScope(HardwareFeature.GpuMux, "acer-agent") ||
+                    HardwareWriteGate.InScope(HardwareFeature.WinKey, "acer-wmi-winkey") ||
+                    HardwareWriteGate.InScope(HardwareFeature.Power, "acer-wmi-profile") ||
+                    HardwareWriteGate.InScope(HardwareFeature.FanAuto, "acer-wmi-fans") ||
+                    HardwareWriteGate.InScope(HardwareFeature.FanMax, "acer-wmi-fans") ||
+                    HardwareWriteGate.InScope(HardwareFeature.FanManual, "acer-wmi-fans") ||
+                    HardwareWriteGate.InScope(HardwareFeature.LcdOverdrive, "acer-wmi-misc") ||
+                    HardwareWriteGate.InScope(HardwareFeature.BootSound, "acer-wmi-misc"),
+            _ => false
+        };
+
+        private static int? ReadIntProperty(string? json, string propertyName)
+        {
+            if (string.IsNullOrEmpty(json)) return null;
+            try
+            {
+                using var doc = JsonDocument.Parse(json);
+                if (doc.RootElement.TryGetProperty("data", out var dataProp) &&
+                    dataProp.TryGetProperty(propertyName, out var nested) &&
+                    nested.ValueKind == JsonValueKind.Number)
+                {
+                    return nested.GetInt32();
+                }
+                if (doc.RootElement.TryGetProperty(propertyName, out var direct) &&
+                    direct.ValueKind == JsonValueKind.Number)
+                {
+                    return direct.GetInt32();
+                }
+            }
+            catch { }
+            return null;
+        }
+
         /// <summary>
         /// Sends a command to Acer OEM Services (AcerAgentService / NitroSenseService) and returns response.
         /// Resilient: gracefully handles disconnected service without exceptions.
         /// </summary>
-        public static async Task<string?> SendCommandAsync(uint packetId, string jsonPayload, int timeoutMs = 1500)
+        public static async Task<string?> SendCommandAsync(uint packetId, string jsonPayload, int timeoutMs = 350)
         {
-            if (!await _sendLock.WaitAsync(timeoutMs))
-                return null;
-
+            bool write = packetId == CMD_SET_DEVICE_DATA;
+            if (write && !IsAuthorizedWrite()) return null;
+            if (!write && packetId is not (CMD_INITIALIZATION or CMD_GET_MONITOR_DATA or CMD_GET_UPDATED_DATA or CMD_GET_CONNECTED_DEVICE)) return null;
+            if (!await _sendLock.WaitAsync(timeoutMs)) return null;
             try
             {
-                // Attempt 1: TCP Socket to AcerAgentService (127.0.0.1:46933)
-                try
+                using var deadline = new CancellationTokenSource(timeoutMs);
+                byte[] payload = Encoding.UTF8.GetBytes(jsonPayload);
+                if (payload.Length > 16384) return null;
+                byte[] packet = new byte[8 + payload.Length];
+                MagicBytes.CopyTo(packet, 0); BitConverter.GetBytes(packetId).CopyTo(packet, 4); payload.CopyTo(packet, 8);
+                // Select a trusted endpoint before sending. Never retry a dispatched write on another transport.
+                if (AcerAgentEndpoint.TcpTrusted(TcpPort, out uint trustedListenerPid))
                 {
-                    using var cts = new CancellationTokenSource(timeoutMs);
                     using var tcp = new TcpClient();
-                    
-                    var connectTask = tcp.ConnectAsync(Host, TcpPort);
-                    var delayTask = Task.Delay(timeoutMs, cts.Token);
-                    if (await Task.WhenAny(connectTask, delayTask) == connectTask && tcp.Connected)
-                    {
-                        using var stream = tcp.GetStream();
-                        stream.ReadTimeout = timeoutMs;
-                        stream.WriteTimeout = timeoutMs;
-
-                        byte[] idBytes = BitConverter.GetBytes(packetId);
-                        byte[] payloadBytes = Encoding.UTF8.GetBytes(jsonPayload);
-
-                        byte[] fullPacket = new byte[MagicBytes.Length + idBytes.Length + payloadBytes.Length];
-                        Buffer.BlockCopy(MagicBytes, 0, fullPacket, 0, MagicBytes.Length);
-                        Buffer.BlockCopy(idBytes, 0, fullPacket, MagicBytes.Length, idBytes.Length);
-                        Buffer.BlockCopy(payloadBytes, 0, fullPacket, MagicBytes.Length + idBytes.Length, payloadBytes.Length);
-
-                        await stream.WriteAsync(fullPacket, cts.Token);
-                        await stream.FlushAsync(cts.Token);
-
-                        byte[] buffer = new byte[8192];
-                        int bytesRead = await stream.ReadAsync(buffer, cts.Token);
-                        if (bytesRead > 0)
-                        {
-                            if (bytesRead > 8 && buffer[0] == 'A' && buffer[1] == 'C' && buffer[2] == 'E' && buffer[3] == 'R')
-                            {
-                                return Encoding.UTF8.GetString(buffer, 8, bytesRead - 8);
-                            }
-                            return Encoding.UTF8.GetString(buffer, 0, bytesRead);
-                        }
+                    await tcp.ConnectAsync(Host, TcpPort, deadline.Token);
+                    if (!AcerAgentEndpoint.TcpConnectedToTrustedServer(tcp.Client, TcpPort, trustedListenerPid))
                         return null;
-                    }
+                    using var stream = tcp.GetStream();
+                    await stream.WriteAsync(packet, deadline.Token);
+                    return await AcerAgentProtocol.ReadReply(stream, packetId, deadline.Token);
                 }
-                catch
+                foreach (string name in AgentPipes)
                 {
-                    // Fall back to Named Pipes if TCP is unavailable or busy
-                }
-
-                // Attempt 2: Named Pipes (NitroSense and PredatorSense candidates)
-                foreach (var pipeName in PipeCandidates)
-                {
-                    try
-                    {
-                        using var ctsPipe = new CancellationTokenSource(timeoutMs);
-                        using var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
-                        
-                        var connectTask = pipe.ConnectAsync(ctsPipe.Token);
-                        var delayTask = Task.Delay(timeoutMs, ctsPipe.Token);
-                        if (await Task.WhenAny(connectTask, delayTask) == connectTask && pipe.IsConnected)
-                        {
-                            byte[] idBytes = BitConverter.GetBytes(packetId);
-                            byte[] payloadBytes = Encoding.UTF8.GetBytes(jsonPayload);
-
-                            byte[] fullPacket = new byte[MagicBytes.Length + idBytes.Length + payloadBytes.Length];
-                            Buffer.BlockCopy(MagicBytes, 0, fullPacket, 0, MagicBytes.Length);
-                            Buffer.BlockCopy(idBytes, 0, fullPacket, MagicBytes.Length, idBytes.Length);
-                            Buffer.BlockCopy(payloadBytes, 0, fullPacket, MagicBytes.Length + idBytes.Length, payloadBytes.Length);
-
-                            await pipe.WriteAsync(fullPacket, ctsPipe.Token);
-                            await pipe.FlushAsync(ctsPipe.Token);
-
-                            byte[] buffer = new byte[8192];
-                            int bytesRead = await pipe.ReadAsync(buffer, ctsPipe.Token);
-                            if (bytesRead > 0)
-                            {
-                                if (bytesRead > 8 && buffer[0] == 'A' && buffer[1] == 'C' && buffer[2] == 'E' && buffer[3] == 'R')
-                                {
-                                    return Encoding.UTF8.GetString(buffer, 8, bytesRead - 8);
-                                }
-                                return Encoding.UTF8.GetString(buffer, 0, bytesRead);
-                            }
-                        }
-                    }
-                    catch
-                    {
-                        // Try next pipe candidate
-                    }
+                    using var pipe = new NamedPipeClientStream(".", name, PipeDirection.InOut, PipeOptions.Asynchronous);
+                    try { await pipe.ConnectAsync(25, deadline.Token); }
+                    catch (TimeoutException) { continue; }
+                    if (!AcerAgentEndpoint.PipeTrusted(pipe.SafePipeHandle)) continue;
+                    await pipe.WriteAsync(packet, deadline.Token);
+                    return await AcerAgentProtocol.ReadReply(pipe, packetId, deadline.Token);
                 }
             }
-            finally
-            {
-                _sendLock.Release();
-            }
-
+            catch { /* Failure, cancellation or ambiguous acknowledgement must never cause a second write. */ }
+            finally { _sendLock.Release(); }
             return null;
         }
 
@@ -178,12 +158,8 @@ namespace PredatorControlApp
         /// </summary>
         public static async Task<bool> SetDeviceDataAsync(string function, object parameter)
         {
-            var payloadObj = new
-            {
-                Function = function,
-                Parameter = parameter
-            };
-            string json = JsonSerializer.Serialize(payloadObj);
+            if (!IsAuthorizedWrite(function)) return false;
+            string json = JsonSerializer.Serialize(new { Function = function, Parameter = parameter });
             string? resp = await SendCommandAsync(CMD_SET_DEVICE_DATA, json);
             if (string.IsNullOrEmpty(resp)) return false;
 
@@ -192,15 +168,13 @@ namespace PredatorControlApp
                 using var doc = JsonDocument.Parse(resp);
                 if (doc.RootElement.TryGetProperty("result", out var resProp))
                 {
-                    if (resProp.ValueKind == JsonValueKind.String && resProp.GetString() == "0")
-                        return true;
-                    if (resProp.ValueKind == JsonValueKind.Number && resProp.GetInt32() == 0)
-                        return true;
+                    return (resProp.ValueKind == JsonValueKind.String && resProp.GetString() == "0") ||
+                           (resProp.ValueKind == JsonValueKind.Number && resProp.GetInt32() == 0);
                 }
             }
             catch { }
 
-            return resp.Contains("\"result\" : \"0\"") || resp.Contains("\"result\":\"0\"");
+            return false;
         }
 
         /// <summary>
@@ -214,35 +188,31 @@ namespace PredatorControlApp
         {
             try
             {
-                string? resp = await SendCommandAsync(CMD_INITIALIZATION, "{}");
-                if (!string.IsNullOrEmpty(resp))
-                {
-                    using var doc = JsonDocument.Parse(resp);
-                    if (doc.RootElement.TryGetProperty("SUPPORT_GPU_MODE_CAPABILITY", out var capProp) &&
-                        capProp.ValueKind == JsonValueKind.Array &&
-                        capProp.GetArrayLength() > 0)
-                    {
-                        return capProp[0].GetInt32();
-                    }
-                }
+                int mask = AcerAgentProtocol.GpuMask(await SendCommandAsync(CMD_INITIALIZATION, "{}"));
+                if (mask is > 0 and <= 7) return mask;
             }
             catch { }
 
-            // Secondary check: Query current GPU_MODE from service.
-            // On models like PHN16-71, Acer OEM service answers packet 20 with {"data": {"mode": 1}, "result": "0"}.
-            // If the service can query or report GPU_MODE, MUX switching is functional.
+            try
+            {
+                using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\OEM\AcerAgentService\AdvanceSettings");
+                if (key?.GetValue("dgpu_mode_capability") is int dgpuCap && dgpuCap is > 0 and <= 7)
+                    return dgpuCap;
+            }
+            catch { }
+
             try
             {
                 int? currentMode = await GetGpuModeAsync();
                 if (currentMode.HasValue)
                 {
-                    // Modes: 0=Optimus (1), 1=Discrete (2), 2=Auto (4) -> 1 | 2 | 4 = 7
+                    // Live mode confirms MUX is active: 0=Optimus (1), 1=Discrete (2), 2=Auto (4) -> 7
                     return 7;
                 }
             }
             catch { }
 
-            return 0; // Default to 0 when service is unavailable or unsupported
+            return 0;
         }
 
         /// <summary>
@@ -271,28 +241,8 @@ namespace PredatorControlApp
         /// <summary>
         /// Queries current Operating Power Mode from Acer OEM Service.
         /// </summary>
-        public static async Task<int?> GetOperatingModeAsync()
-        {
-            string? resp = await GetDeviceDataAsync("OPERATING_MODE");
-            if (string.IsNullOrEmpty(resp)) return null;
-
-            try
-            {
-                using var doc = JsonDocument.Parse(resp);
-                if (doc.RootElement.TryGetProperty("data", out var dataProp) &&
-                    dataProp.TryGetProperty("mode", out var modeProp))
-                {
-                    return modeProp.GetInt32();
-                }
-                if (doc.RootElement.TryGetProperty("mode", out var directMode))
-                {
-                    return directMode.GetInt32();
-                }
-            }
-            catch { }
-
-            return null;
-        }
+        public static async Task<int?> GetOperatingModeAsync() =>
+            ReadIntProperty(await GetDeviceDataAsync("OPERATING_MODE"), "mode");
 
         /// <summary>
         /// Sets Fan Mode in Acer OEM Service:
@@ -344,28 +294,8 @@ namespace PredatorControlApp
         /// <summary>
         /// Queries the current GPU MUX working mode.
         /// </summary>
-        public static async Task<int?> GetGpuModeAsync()
-        {
-            string? resp = await GetDeviceDataAsync("GPU_MODE");
-            if (string.IsNullOrEmpty(resp)) return null;
-
-            try
-            {
-                using var doc = JsonDocument.Parse(resp);
-                if (doc.RootElement.TryGetProperty("data", out var dataProp) &&
-                    dataProp.TryGetProperty("mode", out var modeProp))
-                {
-                    return modeProp.GetInt32();
-                }
-                if (doc.RootElement.TryGetProperty("mode", out var directMode))
-                {
-                    return directMode.GetInt32();
-                }
-            }
-            catch { }
-
-            return null;
-        }
+        public static async Task<int?> GetGpuModeAsync() =>
+            ReadIntProperty(await GetDeviceDataAsync("GPU_MODE"), "mode");
 
         /// <summary>
         /// Sets LCD panel overdrive (response time acceleration).
@@ -378,28 +308,8 @@ namespace PredatorControlApp
         /// <summary>
         /// Queries LCD overdrive status.
         /// </summary>
-        public static async Task<bool?> GetLcdOverdriveAsync()
-        {
-            string? resp = await GetDeviceDataAsync("LCD_OVERDRIVE");
-            if (string.IsNullOrEmpty(resp)) return null;
-
-            try
-            {
-                using var doc = JsonDocument.Parse(resp);
-                if (doc.RootElement.TryGetProperty("data", out var dataProp) &&
-                    dataProp.TryGetProperty("status", out var statusProp))
-                {
-                    return statusProp.GetInt32() == 1;
-                }
-                if (doc.RootElement.TryGetProperty("status", out var directStatus))
-                {
-                    return directStatus.GetInt32() == 1;
-                }
-            }
-            catch { }
-
-            return null;
-        }
+        public static async Task<bool?> GetLcdOverdriveAsync() =>
+            ReadIntProperty(await GetDeviceDataAsync("LCD_OVERDRIVE"), "status") is int s ? s == 1 : null;
 
         /// <summary>
         /// Sets Keyboard Backlight 30-Second Idle Sleep timeout.
@@ -412,28 +322,8 @@ namespace PredatorControlApp
         /// <summary>
         /// Queries Keyboard Backlight 30-Second Idle Sleep status.
         /// </summary>
-        public static async Task<bool?> GetBacklight30sAsync()
-        {
-            string? resp = await GetDeviceDataAsync("BACKLIGHT_30S");
-            if (string.IsNullOrEmpty(resp)) return null;
-
-            try
-            {
-                using var doc = JsonDocument.Parse(resp);
-                if (doc.RootElement.TryGetProperty("data", out var dataProp) &&
-                    dataProp.TryGetProperty("status", out var statusProp))
-                {
-                    return statusProp.GetInt32() == 1;
-                }
-                if (doc.RootElement.TryGetProperty("status", out var directStatus))
-                {
-                    return directStatus.GetInt32() == 1;
-                }
-            }
-            catch { }
-
-            return null;
-        }
+        public static async Task<bool?> GetBacklight30sAsync() =>
+            ReadIntProperty(await GetDeviceDataAsync("BACKLIGHT_30S"), "status") is int s ? s == 1 : null;
 
         /// <summary>
         /// Sets BIOS Boot Sound (Startup Chime).
@@ -446,35 +336,21 @@ namespace PredatorControlApp
         /// <summary>
         /// Queries BIOS Boot Sound status.
         /// </summary>
-        public static async Task<bool?> GetBootSoundAsync()
-        {
-            string? resp = await GetDeviceDataAsync("BOOT_SOUND");
-            if (string.IsNullOrEmpty(resp)) return null;
-
-            try
-            {
-                using var doc = JsonDocument.Parse(resp);
-                if (doc.RootElement.TryGetProperty("data", out var dataProp) &&
-                    dataProp.TryGetProperty("status", out var statusProp))
-                {
-                    return statusProp.GetInt32() == 1;
-                }
-                if (doc.RootElement.TryGetProperty("status", out var directStatus))
-                {
-                    return directStatus.GetInt32() == 1;
-                }
-            }
-            catch { }
-
-            return null;
-        }
+        public static async Task<bool?> GetBootSoundAsync() =>
+            ReadIntProperty(await GetDeviceDataAsync("BOOT_SOUND"), "status") is int s ? s == 1 : null;
 
         /// <summary>
         /// Sets BIOS boot startup animation / logo.
         /// </summary>
         public static async Task<bool> SetBootAnimationAsync(bool enable)
         {
-            string img = enable ? @"C:\ProgramData\oem\AcerAgentService\BIOSLogo\AcerLogo.gif" : "";
+            string img = "";
+            if (enable)
+            {
+                const string logoPath = @"C:\ProgramData\oem\AcerAgentService\BIOSLogo\AcerLogo.gif";
+                if (!File.Exists(logoPath) || !SecureLaunch.IsAdminOnly(logoPath)) return false;
+                img = logoPath;
+            }
             return await SetDeviceDataAsync("CUSTOM_BOOT_LOGO", new { imageSource = img });
         }
 
@@ -506,9 +382,16 @@ namespace PredatorControlApp
         /// </summary>
         public static async Task<bool> SetWinKeyLockAsync(bool lockKeys)
         {
-            // Note: OEM status 1 = lock enabled, 0 = lock disabled
-            return await SetDeviceDataAsync("WIN_KEY", new { status = lockKeys ? 1 : 0 });
+            // Verified against AcerAgentService PSSocket::Set_Win_Key:
+            // status 0 = Windows & Menu keys disabled (locked), status 1 = enabled (unlocked)
+            return await SetDeviceDataAsync("WIN_KEY", new { status = lockKeys ? 0 : 1 });
         }
+
+        /// <summary>
+        /// Queries Windows and Menu Key Lock status from OEM service.
+        /// </summary>
+        public static async Task<bool?> GetWinKeyLockAsync() =>
+            ReadIntProperty(await GetDeviceDataAsync("WIN_KEY"), "status") is int s ? s == 0 : null;
 
         /// <summary>
         /// Sets CoolBoost™ Fan Ceiling Boost.
@@ -521,24 +404,8 @@ namespace PredatorControlApp
         /// <summary>
         /// Queries CoolBoost™ status from OEM service.
         /// </summary>
-        public static async Task<bool?> GetCoolBoostAsync()
-        {
-            try
-            {
-                string? resp = await GetDeviceDataAsync("COOL_BOOST");
-                if (!string.IsNullOrEmpty(resp))
-                {
-                    using var doc = JsonDocument.Parse(resp);
-                    if (doc.RootElement.TryGetProperty("data", out var dataProp) &&
-                        dataProp.TryGetProperty("status", out var statProp))
-                    {
-                        return statProp.GetInt32() == 1;
-                    }
-                }
-            }
-            catch { }
-            return null;
-        }
+        public static async Task<bool?> GetCoolBoostAsync() =>
+            ReadIntProperty(await GetDeviceDataAsync("COOL_BOOST"), "status") is int s ? s == 1 : null;
 
         /// <summary>
         /// Sets 4-zone static keyboard RGB lighting via OEM Agent Service LIGHTING command.

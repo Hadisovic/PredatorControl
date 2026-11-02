@@ -17,7 +17,7 @@ namespace PredatorControlApp
             try
             {
                 using var key = Registry.CurrentUser.OpenSubKey(SubKeyPath);
-                var value = key?.GetValue(name);
+                var value = CompatibilitySettings.Read(key, name);
                 if (value != null) return value;
             }
             catch { }
@@ -25,7 +25,7 @@ namespace PredatorControlApp
             try
             {
                 using var key = Registry.LocalMachine.OpenSubKey(SubKeyPath);
-                var value = key?.GetValue(name);
+                var value = CompatibilitySettings.Read(key, name);
                 if (value != null) return value;
             }
             catch { }
@@ -46,14 +46,14 @@ namespace PredatorControlApp
             try
             {
                 using var key = Registry.CurrentUser.OpenSubKey(SubKeyPath);
-                if (key?.GetValue(name) is string s && !string.IsNullOrWhiteSpace(s)) return s;
+                if (CompatibilitySettings.Read(key, name) is string s && !string.IsNullOrWhiteSpace(s)) return s;
             }
             catch { }
 
             try
             {
                 using var key = Registry.LocalMachine.OpenSubKey(SubKeyPath);
-                if (key?.GetValue(name) is string s && !string.IsNullOrWhiteSpace(s)) return s;
+                if (CompatibilitySettings.Read(key, name) is string s && !string.IsNullOrWhiteSpace(s)) return s;
             }
             catch { }
 

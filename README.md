@@ -1,78 +1,199 @@
-# Predator Control
+<div align="center">
 
-A lightweight Windows control panel for supported Acer Predator and Nitro laptops, with a Classic dashboard, the optional Jelli companion, and a gaming metrics overlay.
+![Predator Control Banner](assets/banner.jpg)
 
-[Downloads](https://github.com/Hadisovic/PredatorControl/releases) · [Issues](https://github.com/Hadisovic/PredatorControl/issues)
+# 🪼 Predator Control
 
-## Preview
+[![Version](https://img.shields.io/badge/version-1.4.2-00E5FF?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Hadisovic/PredatorControl/releases)
+[![Jelli UI](https://img.shields.io/badge/Jelli%20UI-Live%20%F0%9F%AA%BC-FF69B4?style=for-the-badge&logo=sparkles&logoColor=white)](#-dual-interface-classic-dashboard--jelli-companion)
+[![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-00B4CC?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/Hadisovic/PredatorControl)
+[![Framework](https://img.shields.io/badge/.NET-10.0%20Windows-512BD4?style=for-the-badge&logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/)
 
-| Jelli companion | Classic dashboard | System controls |
-| --- | --- | --- |
-| ![Jelli](assets/preview_jelli.png) | ![Dashboard](assets/preview_dashboard.png) | ![Controls](assets/preview_controls.png) |
+<br/>
 
-![Gaming overlay](assets/preview_overlay.png)
+**Predator Control** brings your supported **Acer Predator or Nitro** laptop's everyday controls into one app.  
+Choose a performance mode, adjust cooling and keyboard lighting, check your battery, and see gaming stats—with either a traditional dashboard or the Jelli desktop companion.
 
-## Compatibility
+</div>
 
-- Windows 10/11 x64 on supported Acer hardware.
-- Features depend on the exact model, firmware, drivers, and installed Acer components. Predator and Nitro models expose different controls; unsupported options may be hidden or unavailable.
-- Administrator access is required. Jelli also requires the [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/).
-- GPU telemetry and display options depend on the installed GPU, driver, and panel. Some GPU mode changes require a restart.
+---
 
-## Install and use
+### 🖼️ UI & Gaming Overlay Previews
 
-1. Download an executable from [Releases](https://github.com/Hadisovic/PredatorControl/releases):
-   - `PredatorControl-standalone.exe`: includes the .NET runtime.
-   - `PredatorControl-win-x64.exe`: requires the [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/en-us/download/dotnet/10.0).
-   - The ZIP asset provides the packaged build as an archive.
-2. Keep the app in a dedicated folder and launch it as administrator.
-3. Use the dashboard or tray menu to choose available controls. Switch between Jelli and Classic in Settings, or launch with `--legacy-ui`.
-4. Enable **Start with Windows** in the app if desired. Use this setting again after switching executable versions to refresh startup registration.
+<div align="center">
+  <p>Real screenshots from Predator Control v1.4.2. Click any image to view it at full size.</p>
+  <h4>🪼 Jelli — Expanded Overview</h4>
+  <p><a href="assets/preview_jelli.png"><img src="assets/preview_jelli.png" width="430" alt="Predator Control v1.4.2 Jelli expanded Overview with jellyfish mascot and live hardware metrics"/></a></p>
+  <h4>🖥️ Classic Control Panel</h4>
+  <table>
+    <tr>
+      <td align="center" width="50%"><b>Dashboard, Thermals & GPU Controls</b></td>
+      <td align="center" width="50%"><b>RGB Lighting & System Controls</b></td>
+    </tr>
+    <tr>
+      <td><a href="assets/preview_dashboard.png"><img src="assets/preview_dashboard.png" width="340" alt="Predator Control v1.4.2 Classic dashboard with live thermals, performance profiles, fan controls and GPU controls"/></a></td>
+      <td><a href="assets/preview_controls.png"><img src="assets/preview_controls.png" width="340" alt="Predator Control v1.4.2 Classic RGB lighting and system controls"/></a></td>
+    </tr>
+  </table>
+  <h4>🎮 Gaming Overlay — Four Display Modes</h4>
+  <table>
+    <tr>
+      <td align="center" width="50%"><b>Light</b></td>
+      <td align="center" width="50%"><b>Default</b></td>
+    </tr>
+    <tr>
+      <td><a href="assets/preview_overlay_light.png"><img src="assets/preview_overlay_light.png" width="179" alt="Predator Control v1.4.2 gaming overlay in Light mode"/></a></td>
+      <td><a href="assets/preview_overlay.png"><img src="assets/preview_overlay.png" width="328" alt="Predator Control v1.4.2 gaming overlay in Default mode"/></a></td>
+    </tr>
+    <tr>
+      <td align="center"><b>Full</b></td>
+      <td align="center"><b>Complete</b></td>
+    </tr>
+    <tr>
+      <td><a href="assets/preview_overlay_full.png"><img src="assets/preview_overlay_full.png" width="340" alt="Predator Control v1.4.2 gaming overlay in Full mode"/></a></td>
+      <td><a href="assets/preview_overlay_complete.png"><img src="assets/preview_overlay_complete.png" width="340" alt="Predator Control v1.4.2 gaming overlay in Complete mode"/></a></td>
+    </tr>
+  </table>
+</div>
 
-Automatic updates require running the installed copy from a protected folder. Portable copies can be updated manually from Releases.
+---
 
-The latest packaged release is **v1.4.2**. Source on `master` also contains subsequent maintenance changes; existing release downloads are not rebuilt automatically.
+## ✨ Why Predator Control?
 
-## Features
+Spend less time switching between settings and more time using your laptop.
 
-Available where supported:
+| What you want to do | How Predator Control helps |
+| :--- | :--- |
+| **Keep everyday use quieter** | Choose an available quiet or balanced performance mode. |
+| **Get ready for a game** | Choose a performance mode and cooling settings, or save a profile for that game. |
+| **Make it your own** | Adjust supported keyboard lighting and choose Classic or Jelli. |
+| **Keep an eye on your laptop** | View available temperatures, battery information, and gaming stats. |
 
-- Performance profiles and AC/battery preferences.
-- Automatic, maximum, and custom fan control, fan curves, and CoolBoost.
-- Keyboard brightness, effects, RGB zones, and saved lighting profiles.
-- Battery charge limiting and health reports, startup sound/animation, USB charging, Windows key lock, and panel overdrive.
-- GPU modes and display refresh-rate selection.
-- Game Sync profiles, Jelli companion settings, and overlay customization.
+> **Check your model:** Available features depend on your laptop, its built-in software, and its Acer drivers. Not every Predator or Nitro supports every option. Controls that cannot be confirmed may be hidden or unavailable.
 
-The overlay offers Light, Default, Full, and Complete layouts. Metrics may be unavailable on some hardware or in some games. Game and anti-cheat compatibility varies.
+---
 
-| Shortcut | Action |
-| --- | --- |
-| `Ctrl + Shift + O` | Toggle overlay |
-| `Ctrl + Shift + Click` | Cycle layout |
-| `Ctrl + Shift + Drag` | Move overlay |
-| `Ctrl + Shift + Scroll` | Adjust scale |
-| `Ctrl + Shift + Middle Click` | Reset scale |
+## 🪼 Dual Interface: Classic Dashboard & Jelli Companion
 
-## Acer services and troubleshooting
+Choose the interface that fits your workflow:
 
-Keep the Acer drivers and hardware services required by your model installed. The optional service optimizer targets selected background components; service repair asks for confirmation before installing or registering components. Neither option is required for initial setup.
+- **Classic Control Panel**: A traditional window that brings the available controls together in one place.
+- **Jelli Desktop Companion**: A jellyfish-themed desktop companion with pages for your laptop's status, cooling, keyboard, games, and settings.
+- **Switch whenever you like**: Change between Classic and Jelli in Settings. If Jelli cannot open, you can use Classic instead.
 
-If controls are unavailable, check model compatibility, Acer drivers/services, and administrator access. If Jelli cannot start, use Classic with `--legacy-ui` and check the WebView2 runtime.
+---
 
-For a compatibility report, run from PowerShell:
+## 🚀 Core Capabilities
 
-```powershell
-.\PredatorControl-standalone.exe --diagnostics "$PWD\compatibility.json"
-```
+The options below appear where your laptop supports them.
 
-Review diagnostics before sharing them. Preferences, lighting profiles, and logs use the `PredatorControl` application-data folder and Windows settings. Protected startup and runtime files are managed by the app. Avoid manually editing those files or running multiple hardware-control applications simultaneously.
+### ⚡ Performance Profiles & Hotkeys
 
-To switch versions, close the app from the tray, launch the desired executable, and refresh **Start with Windows** if enabled. `clean_switch_version.bat` is an optional helper for stopping existing instances; it does not change startup registration.
+- **Choose how your laptop runs**: Select from the modes available on your model, such as Quiet, Balanced, Performance, Turbo, or Eco. Some modes need the charger plugged in.
+- **Use your laptop's special keys**: Supported Mode and Predator / NitroSense keys can switch modes or open the app.
+- **Different settings on battery**: Choose a preferred mode for plugged-in use and another for battery use.
+- **Game Sync**: Save settings for a game and apply them when that game starts.
 
-## Build and test
+### 🌡️ Thermal Management & Fans
 
-Requires Windows x64, the **.NET 10 SDK**, and **Node.js 24 LTS** with npm. Python 3.10+ is required only for the source scanner and its tests.
+- **Auto cooling**: Let the laptop manage its fans.
+- **Maximum cooling**: Run supported fans at their maximum setting.
+- **Custom cooling**: Adjust supported fans separately or choose how cooling changes as the laptop gets warmer.
+- **CoolBoost™**: Turn Acer's extra cooling option on or off where available.
+
+### 🎮 Graphics & Display
+
+- **Graphics mode**: On supported models, choose a mode that balances battery life and graphics performance. Some changes need a restart.
+- **Screen refresh rate**: Choose an available screen setting for everyday use or smoother motion.
+- **Display response setting**: Turn the faster-response option on or off if your screen supports it.
+
+### 🌈 Keyboard Lighting
+
+- **Supported RGB keyboards**: Choose colors, available effects, brightness, and saved lighting presets. Some keyboards support separate color zones.
+- **Single-color keyboards**: Use the brightness and lighting options available for your keyboard.
+- **Idle timeout**: Control automatic lighting sleep where supported.
+
+### 🖥️ Battery & Other Laptop Settings
+
+- **Battery charge limit**: Limit charging to around 80% where supported, useful if you often leave the charger connected.
+- **Battery health**: View available battery condition, capacity, and charging history information, or open a Windows battery report.
+- **Startup sound and animation**: Change supported startup effects.
+- **USB charging while off**: Control the supported USB charging option for when your laptop is asleep or shut down.
+- **Windows key lock**: Help prevent accidental Windows key presses during games.
+
+> [!TIP]
+> **Missing startup sound?** Some models need the startup sound option enabled in the laptop's BIOS settings first. Check your model's instructions if the app setting has no effect.
+
+---
+
+## 🎮 Gaming Overlay
+
+See a small stats panel while you play, with available information such as frame rate, temperatures, fan speeds, and battery level.
+
+Choose **Light**, **Default**, **Full**, or **Complete** to show less or more information. Some stats and display modes may be unavailable in certain games or on certain laptops. Compatibility with games and their anti-cheat software varies.
+
+| Shortcut / Gesture | Action |
+| :--- | :--- |
+| **`Ctrl + Shift + O`** | Show or hide the gaming stats panel |
+| **`Ctrl + Shift + Click`** | Switch the panel layout (`Light` ➔ `Default` ➔ `Full` ➔ `Complete`) |
+| **`Ctrl + Shift + Drag`** | Move the panel (position is saved) |
+| **`Ctrl + Shift + Scroll`** | Change the panel size (`50%` – `300%`) |
+| **`Ctrl + Shift + Middle Click`** | Reset the panel size to `100%` |
+
+---
+
+## 🛠️ Acer Service Management
+
+Some controls depend on Acer's background software. Keep the Acer drivers and components your laptop needs installed.
+
+- **Optimize Acer Services**: An optional setting for reducing selected Acer background activity. You can leave it off.
+- **Auto-Repair OEM Services**: Helps restore missing Acer components when suitable files are already available on your laptop. The app asks before installing or registering components.
+
+If a control is unavailable, check your laptop's compatibility and Acer software before changing these settings.
+
+---
+
+## 🚀 Quick Setup & Usage
+
+1. Download the app from [**Releases**](https://github.com/Hadisovic/PredatorControl/releases):
+   - **`PredatorControl-standalone.exe`**: The simplest option. It includes the .NET software needed to run the app.
+   - **`PredatorControl-win-x64.exe`**: A smaller download. Install the [.NET 10 Desktop Runtime for Windows x64](https://dotnet.microsoft.com/en-us/download/dotnet/10.0) first.
+   - A **ZIP download** is also available; extract it before use.
+2. Keep the app in its own folder and **run it as administrator**. Windows may ask you to approve this so the app can change laptop settings.
+3. Choose Classic or Jelli and start with the controls available on your laptop. Jelli needs the [Microsoft WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/), which may already be installed.
+4. Optionally turn on **Start with Windows** in Settings. If you switch to another copy or version of the app, use this setting again to update which copy starts automatically.
+
+**Updating:** Use the app's update option when available. If it asks you to update manually, close the app from the tray and download the new version from Releases.
+
+> **Release information:** The latest published download is **v1.4.2**. The source code on this repository also includes newer maintenance fixes. Those fixes will reach the download versions when a new build is published.
+
+### Need help?
+
+- **The app will not open:** Check that you downloaded the Windows x64 version and, for the smaller download, installed the .NET Desktop Runtime.
+- **Jelli will not open:** Check the WebView2 Runtime, or use Classic. You can launch the app with `--legacy-ui` to request Classic directly.
+- **An option is missing:** Your model may not support it, or an Acer driver or background component may be missing.
+- **Settings behave unexpectedly:** Close other apps that control the same laptop settings and try again.
+
+For help, [open an issue](https://github.com/Hadisovic/PredatorControl/issues) with your laptop model, app version, and what happened. Review any logs or reports before sharing them.
+
+---
+
+## 🧰 For Developers
+
+<details>
+<summary>Build the app, run tests, and check source files</summary>
+
+### Project layout
+
+- `src/`: Windows app and laptop controls.
+- `jelli-ui/`: Jelli interface.
+- `tests/`: automated checks using simulated devices and temporary files.
+- `scripts/` and `tools/`: optional helpers and maintenance commands.
+- `assets/`: screenshots and branding.
+
+### Build and test
+
+Use Windows x64, the [.NET 10 SDK](https://dotnet.microsoft.com/en-us/download/dotnet/10.0), and Node.js 24 LTS with npm. The source scanner also needs Python 3.10+ and Git.
 
 ```powershell
 git clone https://github.com/Hadisovic/PredatorControl.git
@@ -88,49 +209,37 @@ npm.cmd run lint --prefix jelli-ui
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-The test suites use synthetic hardware data and temporary files. Privileged Windows integration and physical hardware behavior require separate validation in a disposable test environment and on supported devices.
+These checks do not replace testing in a disposable Windows environment and on supported laptops.
 
-Publish a self-contained executable:
+### Build a standalone executable
 
 ```powershell
 dotnet publish src/PredatorControlApp.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -o publish/standalone
 ```
 
-## Source checks
+### Check source files
 
-Scan source and all fetched Git history, and save a redacted inventory of hardcoded values outside the repository:
+This command checks source files and fetched Git history for possible embedded credentials, and saves a list of fixed values for review:
 
 ```powershell
 powershell -File tools/secret-scan.ps1 -History -OutputPath ..\hardcoded-scan.json
 ```
 
-Git and Python 3.10+ must be on PATH. Exit codes are `0` for no findings, `1` for findings, and `2` for scanner errors. The JSON output lists locations, rules, and line fingerprints without printing matched secrets. Endpoints, paths, executable names, and constants are informational review items; hardware identifiers are often intentional.
+The report hides matched credential values. Fixed values such as laptop identifiers are often intentional; review them before changing anything. The scanner skips generated/dependency folders, binaries, and files larger than 2 MiB. A clear result does not guarantee that no credentials exist.
 
-The scanner checks versioned and unignored source files and, with `-History`, reachable text blobs across fetched refs. Dependency/generated directories, binaries, and files larger than 2 MiB are excluded; skipped large/binary text candidates are listed in JSON. Detection is heuristic and cannot prove that no secrets exist. Rotate or revoke any confirmed exposed credential.
+Exit codes: `0` means no findings, `1` means review is needed, and `2` means the scan failed. For a reviewed false positive, `.secret-scan-exceptions.json` accepts entries with `rule`, `path`, `fingerprint`, and `reason`; use the exact fingerprint printed by the scanner. Keep reports and private review notes outside commits.
 
-For a reviewed false positive, create `.secret-scan-exceptions.json` with an array of exact exceptions, then rerun the scan:
+</details>
 
-```json
-[
-  {
-    "rule": "credential-assignment",
-    "path": "relative/path.cs",
-    "fingerprint": "<64-character fingerprint from scanner output>",
-    "reason": "Why this specific line is safe"
-  }
-]
-```
+---
 
-Exceptions match one rule, path, and fingerprint; they do not suppress an entire directory. `-ExceptionsPath` selects an alternative exception file. Keep scan results and private audit notes out of commits.
+## 💡 Credits & Attribution
 
-## Project layout
+Special thanks to **[@supesonly](https://github.com/supesonly)** for the original inspiration and foundational concept ([supesonly/Acer-P-Helper](https://github.com/supesonly/Acer-P-Helper)).
 
-- `src/`: Windows application and hardware integrations.
-- `jelli-ui/`: Jelli frontend.
-- `tests/`: synthetic compatibility, keyboard, boundary, and scanner checks.
-- `scripts/` and `tools/`: optional helpers and maintenance commands.
-- `assets/`: screenshots and branding.
+<div align="center">
 
-## Credits
+**Made with 🪼 and neon teal**  
+*Acer, Predator, Nitro, and PredatorSense are registered trademarks of Acer Inc. Predator Control is an independent open-source project.*
 
-Inspired by [supesonly/Acer-P-Helper](https://github.com/supesonly/Acer-P-Helper). Acer, Predator, Nitro, and other product names belong to their respective owners.
+</div>

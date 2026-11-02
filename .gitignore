@@ -57,3 +57,8 @@ release-*/
 *.key
 *.token
 *.env
+
+# Local Python/scanner artifacts
+__pycache__/
+.venv/
+hardcoded-scan.json

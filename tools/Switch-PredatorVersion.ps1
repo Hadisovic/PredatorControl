@@ -36,7 +36,7 @@ if ($task) {
 if ($TargetExePath) {
     if (Test-Path $TargetExePath) {
         Write-Host "[3/3] Launching target version: $TargetExePath" -ForegroundColor Cyan
-        Start-Process -FilePath (Resolve-Path $TargetExePath).Path -WindowStyle Hidden
+        Start-Process -FilePath (Resolve-Path $TargetExePath).Path
         Write-Host "Launched successfully!" -ForegroundColor Green
     } else {
         Write-Host "[3/3] ERROR: Target path not found: $TargetExePath" -ForegroundColor Red

@@ -62,82 +62,46 @@ internal sealed class JelliHostForm : Form
     [DllImport("dwmapi.dll", PreserveSig = true)]
     private static extern int DwmExtendFrameIntoClientArea(nint window, ref Margins margins);
 
-    [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-    private static extern bool SetDllDirectory(string lpPathName);
-
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-    private static extern IntPtr LoadLibrary(string lpFileName);
+    private static extern IntPtr LoadLibraryEx(string lpFileName, IntPtr hFile, uint flags);
 
-    static JelliHostForm()
-    {
-        EnsureWebView2Loader();
-    }
+    private static readonly object LoaderLock = new();
+    private static FileStream? _loaderFile;
 
     internal static void EnsureWebView2Loader()
     {
-        try
+        lock (LoaderLock)
         {
-            string targetDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PredatorControl");
-            Directory.CreateDirectory(targetDir);
-            string targetDll = Path.Combine(targetDir, "WebView2Loader.dll");
-
-            var asm = typeof(JelliHostForm).Assembly;
-            byte[]? expectedHash = null;
-            byte[]? resourceBytes = null;
-
-            using (var stream = asm.GetManifestResourceStream("WebView2Loader.dll"))
+            if (_loaderFile != null) return;
+            using var stream = typeof(JelliHostForm).Assembly.GetManifestResourceStream("WebView2Loader.dll")
+                ?? throw new InvalidOperationException("The native loader resource is missing.");
+            using var bytes = new MemoryStream();
+            stream.CopyTo(bytes);
+            SecureLaunch.CreateAdminOnlyDirectory(SecureLaunch.ProgramDataDir);
+            string root = SecureLaunch.CreateAdminOnlyDirectory(Path.Combine(SecureLaunch.ProgramDataDir, "native"));
+            byte[] resource = bytes.ToArray();
+            byte[] hash = System.Security.Cryptography.SHA256.HashData(resource);
+            string dir = SecureLaunch.CreateAdminOnlyDirectory(Path.Combine(root, Convert.ToHexString(hash)));
+            string dll = Path.Combine(dir, "WebView2Loader.dll");
+            FileStream held;
+            try { held = SecureLaunch.WriteLockedResource(dll, resource); }
+            catch (IOException) when (File.Exists(dll))
             {
-                if (stream != null)
-                {
-                    using var ms = new MemoryStream();
-                    stream.CopyTo(ms);
-                    resourceBytes = ms.ToArray();
-                    using var sha = System.Security.Cryptography.SHA256.Create();
-                    expectedHash = sha.ComputeHash(resourceBytes);
-                }
+                held = new FileStream(dll, FileMode.Open, FileAccess.Read, FileShare.Read);
             }
-
-            if (expectedHash != null && resourceBytes != null)
+            try
             {
-                byte[]? fileHash = null;
-                if (File.Exists(targetDll))
-                {
-                    try
-                    {
-                        using var fs = File.OpenRead(targetDll);
-                        using var sha = System.Security.Cryptography.SHA256.Create();
-                        fileHash = sha.ComputeHash(fs);
-                    }
-                    catch { }
-                }
-
-                bool match = fileHash != null && fileHash.SequenceEqual(expectedHash);
-                if (!match)
-                {
-                    try
-                    {
-                        File.WriteAllBytes(targetDll, resourceBytes);
-                        using var fs = File.OpenRead(targetDll);
-                        using var sha = System.Security.Cryptography.SHA256.Create();
-                        var freshHash = sha.ComputeHash(fs);
-                        match = freshHash.SequenceEqual(expectedHash);
-                    }
-                    catch { match = false; }
-                }
-
-                if (match)
-                {
-                    CoreWebView2Environment.SetLoaderDllFolderPath(targetDir);
-                    SetDllDirectory(targetDir);
-                    LoadLibrary(targetDll);
-                }
-                else
-                {
-                    Program.Report(new InvalidOperationException("WebView2Loader.dll integrity check failed. Untrusted library was not loaded."), false);
-                }
+                if (!SecureLaunch.IsAdminOnly(dll) || !System.Security.Cryptography.SHA256.HashData(held).AsSpan().SequenceEqual(hash))
+                    throw new UnauthorizedAccessException("The native loader is not protected or has changed.");
+                // Restrict dependency search to this protected folder and System32.
+                if (LoadLibraryEx(dll, IntPtr.Zero, 0x00000100 | 0x00000800) == IntPtr.Zero)
+                    throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+                CoreWebView2Environment.SetLoaderDllFolderPath(dir);
+                _loaderFile = held; // Keep writes and replacement denied for the process lifetime.
+                AppDomain.CurrentDomain.ProcessExit += (_, _) => held.Dispose();
             }
+            catch { held.Dispose(); throw; }
         }
-        catch { }
     }
 
     protected override void OnHandleCreated(EventArgs e)
@@ -164,7 +128,7 @@ internal sealed class JelliHostForm : Form
         string profile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PredatorControl", _persist ? "WebView2" : "WebView2-Test");
         var options = new CoreWebView2EnvironmentOptions
         {
-            AdditionalBrowserArguments = "--disable-gpu --disable-features=AudioServiceOutOfProcess,IsolateOrigins,site-per-process --renderer-process-limit=1 --disable-background-networking --disable-component-update --disable-extensions --disable-speech-api --js-flags=\"--max-old-space-size=16 --max-semi-space-size=1 --optimize-for-size\""
+            AdditionalBrowserArguments = "--disable-gpu --disable-background-networking --disable-component-update --disable-extensions --disable-speech-api --js-flags=\"--max-old-space-size=16 --max-semi-space-size=1 --optimize-for-size\""
         };
         var env = await CoreWebView2Environment.CreateAsync(userDataFolder: profile, options: options);
         await _web.EnsureCoreWebView2Async(env);

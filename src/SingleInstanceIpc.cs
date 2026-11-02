@@ -43,8 +43,8 @@ namespace PredatorControlApp
             }
             catch
             {
-                // If mutex creation fails (e.g. permission restriction), treat as first instance
-                isFirstInstance = true;
+                mutex?.Dispose();
+                throw; // Never start hardware control without an established single-instance lock.
             }
 
             if (!isFirstInstance)
@@ -76,11 +76,26 @@ namespace PredatorControlApp
             }
         }
 
+        internal static async Task<string?> ReadCommandAsync(Stream stream, CancellationToken token)
+        {
+            using var reader = new StreamReader(stream, Encoding.UTF8, false, 256, leaveOpen: true);
+            var command = new StringBuilder(256);
+            var ch = new char[1];
+            while (await reader.ReadAsync(ch.AsMemory(), token) != 0)
+            {
+                if (ch[0] == '\n') return command.ToString().TrimEnd('\r');
+                if (command.Length >= 256) return null;
+                command.Append(ch[0]);
+            }
+            return command.Length == 0 ? null : command.ToString().TrimEnd('\r');
+        }
+
         private void StartServerLoop()
         {
+            var token = _cts.Token;
             Task.Run(async () =>
             {
-                while (!_cts.Token.IsCancellationRequested)
+                while (!token.IsCancellationRequested)
                 {
                     try
                     {
@@ -103,17 +118,13 @@ namespace PredatorControlApp
                             0, 0,
                             pipeSecurity);
 
-                        await server.WaitForConnectionAsync(_cts.Token);
+                        await server.WaitForConnectionAsync(token);
 
-                        using var reader = new StreamReader(server, Encoding.UTF8);
-                        var readTask = reader.ReadLineAsync(_cts.Token).AsTask();
-                        var done = await Task.WhenAny(readTask, Task.Delay(5000, _cts.Token));
-                        if (done != readTask)
-                        {
-                            server.Close();
-                            continue;
-                        }
-                        string? line = await readTask;
+                        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+                        deadline.CancelAfter(TimeSpan.FromSeconds(5));
+                        string? line;
+                        try { line = await ReadCommandAsync(server, deadline.Token); }
+                        catch (OperationCanceledException) when (!_cts.IsCancellationRequested) { continue; }
                         if (!string.IsNullOrEmpty(line))
                         {
                             try { _onCommandReceived(line); } catch { }
@@ -126,7 +137,7 @@ namespace PredatorControlApp
                     catch
                     {
                         // Delay briefly on unexpected socket/pipe error before retrying
-                        try { await Task.Delay(250, _cts.Token); } catch { break; }
+                        try { await Task.Delay(250, token); } catch { break; }
                     }
                 }
             });

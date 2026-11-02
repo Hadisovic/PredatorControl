@@ -154,7 +154,9 @@ namespace PredatorControlApp
             {
                 try
                 {
-                    string reportPath = Path.Combine(Path.GetTempPath(), "battery-report.html");
+                    SecureLaunch.CreateAdminOnlyDirectory(SecureLaunch.ProgramDataDir);
+                    string reports = SecureLaunch.CreateAdminOnlyDirectory(Path.Combine(SecureLaunch.ProgramDataDir, "reports"), usersMayRead: true);
+                    string reportPath = Path.Combine(reports, $"battery-{Guid.NewGuid():N}.html");
                     using (var p = Process.Start(new ProcessStartInfo
                     {
                         FileName = SecureLaunch.System32("powercfg.exe"),
@@ -163,7 +165,7 @@ namespace PredatorControlApp
                         UseShellExecute = false
                     }))
                     {
-                        p?.WaitForExit(4500);
+                        if (p == null || !p.WaitForExit(4500) || p.ExitCode != 0) return;
                     }
 
                     if (File.Exists(reportPath))

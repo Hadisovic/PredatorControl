@@ -27,16 +27,7 @@ $task = Get-ScheduledTask -TaskName "PredatorControl" -ErrorAction SilentlyConti
 if ($task) {
     Write-Host "[2/3] Found Windows Scheduled Task 'PredatorControl':" -ForegroundColor Yellow
     Write-Host "      Current Executable: $($task.Actions.Execute)"
-    if ($TargetExePath -and (Test-Path $TargetExePath)) {
-        Write-Host "      Updating task to target: $TargetExePath" -ForegroundColor Cyan
-        $fullPath = (Resolve-Path $TargetExePath).Path
-        $workingDir = Split-Path $fullPath
-        $action = New-ScheduledTaskAction -Execute $fullPath -Argument "-hidden" -WorkingDirectory $workingDir
-        Set-ScheduledTask -TaskName "PredatorControl" -Action $action | Out-Null
-        Write-Host "      Task successfully updated!" -ForegroundColor Green
-    } else {
-        Write-Host "      (Tip: Pass -TargetExePath <path_to_exe> to point the startup task to an older or newer version)" -ForegroundColor Gray
-    }
+    Write-Host "      Use Start with Windows inside the target app to update its startup registration." -ForegroundColor Cyan
 } else {
     Write-Host "[2/3] No 'PredatorControl' startup task found." -ForegroundColor Green
 }
@@ -45,7 +36,7 @@ if ($task) {
 if ($TargetExePath) {
     if (Test-Path $TargetExePath) {
         Write-Host "[3/3] Launching target version: $TargetExePath" -ForegroundColor Cyan
-        Start-Process -FilePath (Resolve-Path $TargetExePath).Path
+        Start-Process -FilePath (Resolve-Path $TargetExePath).Path -WindowStyle Hidden
         Write-Host "Launched successfully!" -ForegroundColor Green
     } else {
         Write-Host "[3/3] ERROR: Target path not found: $TargetExePath" -ForegroundColor Red

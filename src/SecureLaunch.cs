@@ -71,9 +71,44 @@ internal static class SecureLaunch
         catch { return false; }
     }
 
-    /// <summary>Creates (or re-secures) a directory writable only by SYSTEM and Administrators; children inherit.</summary>
+    internal static bool IsAdminOnlyDirectory(string path)
+    {
+        try
+        {
+            bool first = true;
+            for (var dir = new DirectoryInfo(Path.GetFullPath(path)); dir != null; dir = dir.Parent)
+            {
+                if (!dir.Exists || (dir.Attributes & FileAttributes.ReparsePoint) != 0) return false;
+                if (HasUntrustedWriter(dir.GetAccessControl(), first ? ObjectWrite : AncestorWrite)) return false;
+                first = false;
+            }
+            return true;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>Creates a protected directory; never follows or repairs an untrusted existing path.</summary>
     internal static string CreateAdminOnlyDirectory(string path, bool usersMayRead = false)
     {
+        var info = new DirectoryInfo(Path.GetFullPath(path));
+        try
+        {
+            if ((File.GetAttributes(info.FullName) & FileAttributes.ReparsePoint) != 0)
+                throw new UnauthorizedAccessException("A protected directory cannot be a reparse point.");
+        }
+        catch (FileNotFoundException) { }
+        catch (DirectoryNotFoundException) { }
+        // Validate ancestors before creating anything or changing an ACL.
+        for (var parent = info.Parent; parent != null; parent = parent.Parent)
+            if (!parent.Exists || (parent.Attributes & FileAttributes.ReparsePoint) != 0 ||
+                HasUntrustedWriter(parent.GetAccessControl(), AncestorWrite))
+                throw new UnauthorizedAccessException("The directory has an untrusted ancestor.");
+        if (info.Exists)
+        {
+            if (!IsAdminOnlyDirectory(info.FullName))
+                throw new UnauthorizedAccessException("The existing directory is not protected.");
+            return info.FullName;
+        }
         var security = new DirectorySecurity();
         security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
         const InheritanceFlags inherit = InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit;
@@ -81,12 +116,19 @@ internal static class SecureLaunch
         security.AddAccessRule(new FileSystemAccessRule(Admins, FileSystemRights.FullControl, inherit, PropagationFlags.None, AccessControlType.Allow));
         if (usersMayRead)
             security.AddAccessRule(new FileSystemAccessRule(Users, FileSystemRights.ReadAndExecute, inherit, PropagationFlags.None, AccessControlType.Allow));
-        try { security.SetOwner(Admins); } catch { }
+        security.SetOwner(Admins);
+        info.Create(security);
+        if (!IsAdminOnlyDirectory(info.FullName))
+            throw new UnauthorizedAccessException("Could not establish a protected directory.");
+        return info.FullName;
+    }
 
-        var info = new DirectoryInfo(path);
-        if (info.Exists) info.SetAccessControl(security);
-        else info.Create(security);
-        return path;
+    // Call only inside a protected directory. Hold the returned read handle throughout native loading.
+    internal static FileStream WriteLockedResource(string path, byte[] bytes)
+    {
+        using (var output = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            output.Write(bytes);
+        return new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
     }
 
     /// <summary>

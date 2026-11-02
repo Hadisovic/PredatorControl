@@ -540,34 +540,26 @@ namespace PredatorControlApp
                 return false;
             }
 
-            // 1. Register main interactive task: triggers immediately at user logon with 0 delay and correct working directory
-            string xmlPath = Path.Combine(Path.GetTempPath(), "PredatorControlStartup.xml");
-            bool logonOk = false;
-            try
-            {
-                File.WriteAllText(xmlPath, BuildStartupTaskXml(taskExe), Encoding.Unicode);
-                logonOk = RunSchtasks($"/Create /TN \"{StartupTaskName}\" /XML \"{xmlPath}\" /F") == 0;
-            }
-            catch { }
-            finally
-            {
-                try { File.Delete(xmlPath); } catch { }
-            }
-
-            // 2. Register machine early boot task: triggers at system boot (before logon) as SYSTEM to lock 80% battery limit and apply saved RGB profile
-            string bootXmlPath = Path.Combine(Path.GetTempPath(), "PredatorControlBoot.xml");
-            try
-            {
-                File.WriteAllText(bootXmlPath, BuildBootTaskXml(taskExe), Encoding.Unicode);
-                RunSchtasks($"/Create /TN \"{BootTaskName}\" /XML \"{bootXmlPath}\" /RU \"NT AUTHORITY\\SYSTEM\" /F");
-            }
-            catch { }
-            finally
-            {
-                try { File.Delete(bootXmlPath); } catch { }
-            }
-
+            bool logonOk = RegisterStartupTask(StartupTaskName, BuildStartupTaskXml(taskExe));
+            RegisterStartupTask(BootTaskName, BuildBootTaskXml(taskExe), system: true);
             return logonOk;
+        }
+
+        private static bool RegisterStartupTask(string taskName, string xml, bool system = false)
+        {
+            string? xmlPath = null;
+            try
+            {
+                SecureLaunch.CreateAdminOnlyDirectory(SecureLaunch.ProgramDataDir);
+                string dir = SecureLaunch.CreateAdminOnlyDirectory(Path.Combine(SecureLaunch.ProgramDataDir, "tasks"));
+                xmlPath = Path.Combine(dir, Guid.NewGuid().ToString("N") + ".xml");
+                byte[] bytes = Encoding.Unicode.GetPreamble().Concat(Encoding.Unicode.GetBytes(xml)).ToArray();
+                using var held = SecureLaunch.WriteLockedResource(xmlPath, bytes);
+                string account = system ? " /RU \"NT AUTHORITY\\SYSTEM\"" : "";
+                return RunSchtasks($"/Create /TN \"{taskName}\" /XML \"{xmlPath}\"{account} /F") == 0;
+            }
+            catch { return false; }
+            finally { if (xmlPath != null) try { File.Delete(xmlPath); } catch { } }
         }
 
         private static string BuildStartupTaskXml(string exePath)

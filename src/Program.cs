@@ -162,7 +162,6 @@ namespace PredatorControlApp
 
             ApplicationConfiguration.Initialize();
             Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
-            JelliHostForm.EnsureWebView2Loader();
 
 #if DEBUG
             SelfCheck.Run();

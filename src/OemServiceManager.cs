@@ -287,9 +287,8 @@ namespace PredatorControlApp
                     using var cert = new X509Certificate2(rawCert);
 
                     string subject = cert.Subject;
-                    bool isAcer = subject.Contains("Acer Incorporated", StringComparison.OrdinalIgnoreCase) ||
-                                 subject.Contains("O=Acer Incorporated", StringComparison.OrdinalIgnoreCase) ||
-                                 subject.Contains("CN=Acer Incorporated", StringComparison.OrdinalIgnoreCase);
+                    bool isAcer = cert.GetNameInfo(X509NameType.SimpleName, false)
+                        .Equals("Acer Incorporated", StringComparison.OrdinalIgnoreCase);
 
                     if (!isAcer)
                     {

@@ -196,6 +196,8 @@ namespace PredatorControlApp
                 throw new InvalidOperationException("Mandatory checksum verification failed: checksum URL is missing or untrusted.");
 
             string target = Environment.ProcessPath ?? Application.ExecutablePath;
+            if (!SecureLaunch.IsAdminOnly(target))
+                throw new InvalidOperationException("Automatic updates require the installed copy in a protected folder. Download the update manually or relaunch the installed copy.");
 
             // Unique staging directory, restricted to this user / SYSTEM / Administrators,
             // so other local users or processes can't pre-create or swap the staged files.
@@ -277,7 +279,7 @@ namespace PredatorControlApp
                 File.WriteAllText(script, BuildUpdateScript(Environment.ProcessId, staged, target, backup, stageDir, stagedHash),
                     new UTF8Encoding(false));
 
-                Process.Start(new ProcessStartInfo(SecureLaunch.System32("cmd.exe"), $"/c \"{script}\"")
+                Process.Start(new ProcessStartInfo(SecureLaunch.System32("cmd.exe"), $"/d /v:off /c \"{script}\"")
                 {
                     CreateNoWindow = true,
                     UseShellExecute = false,
@@ -292,64 +294,18 @@ namespace PredatorControlApp
             }
         }
 
-        // The elevated update script and staged exe must not be replaceable by other processes of the same user,
-        // so they live under ProgramData with a SYSTEM/Administrators-only ACL. Falls back to the per-user profile
-        // only when that cannot be created (the script then is not elevated either).
+        // Elevated handoff must fail closed if a protected location cannot be established.
         private static string SecureSubdirectory(string name)
         {
-            try
-            {
-                SecureLaunch.CreateAdminOnlyDirectory(SecureLaunch.ProgramDataDir);
-                string dir = Path.Combine(SecureLaunch.ProgramDataDir, name);
-                Directory.CreateDirectory(dir);
-                return dir;
-            }
-            catch
-            {
-                string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PredatorControl", name);
-                Directory.CreateDirectory(dir);
-                return dir;
-            }
+            SecureLaunch.CreateAdminOnlyDirectory(SecureLaunch.ProgramDataDir);
+            return SecureLaunch.CreateAdminOnlyDirectory(Path.Combine(SecureLaunch.ProgramDataDir, name));
         }
 
         private static string CreateStagingDirectory()
         {
             string root = SecureSubdirectory("update");
-
-            // Clear leftovers from previous attempts (best effort).
-            try
-            {
-                foreach (var old in Directory.GetDirectories(root))
-                    try { Directory.Delete(old, true); } catch { }
-            }
-            catch { }
-
-            string dir = Path.Combine(root, Guid.NewGuid().ToString("N"));
-            try
-            {
-                var sec = new System.Security.AccessControl.DirectorySecurity();
-                sec.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
-                var inherit = System.Security.AccessControl.InheritanceFlags.ContainerInherit |
-                              System.Security.AccessControl.InheritanceFlags.ObjectInherit;
-                void Allow(System.Security.Principal.SecurityIdentifier sid) =>
-                    sec.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(
-                        sid, System.Security.AccessControl.FileSystemRights.FullControl, inherit,
-                        System.Security.AccessControl.PropagationFlags.None,
-                        System.Security.AccessControl.AccessControlType.Allow));
-
-                bool adminOnlyRoot = root.StartsWith(SecureLaunch.ProgramDataDir, StringComparison.OrdinalIgnoreCase);
-                if (!adminOnlyRoot) Allow(System.Security.Principal.WindowsIdentity.GetCurrent().User!);
-                Allow(new System.Security.Principal.SecurityIdentifier(System.Security.Principal.WellKnownSidType.LocalSystemSid, null));
-                Allow(new System.Security.Principal.SecurityIdentifier(System.Security.Principal.WellKnownSidType.BuiltinAdministratorsSid, null));
-
-                new DirectoryInfo(dir).Create(sec);
-            }
-            catch
-            {
-                // ACL hardening is best-effort; the directory is still unique and under the per-user profile.
-                Directory.CreateDirectory(dir);
-            }
-            return dir;
+            // Do not delete other staging directories: an earlier updater may still be using them.
+            return SecureLaunch.CreateAdminOnlyDirectory(Path.Combine(root, Guid.NewGuid().ToString("N")));
         }
 
         private static string BuildUpdateScript(int pid, string staged, string target, string backup, string stageDir, string sha256)
@@ -359,7 +315,7 @@ namespace PredatorControlApp
 
             return """
                 @echo off
-                setlocal EnableExtensions
+                setlocal EnableExtensions DisableDelayedExpansion
                 set "SYS=%SystemRoot%\System32"
                 set "PATH=%SYS%;%SystemRoot%"
                 "%SYS%\chcp.com" 65001 >nul

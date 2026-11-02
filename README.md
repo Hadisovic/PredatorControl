@@ -23,17 +23,37 @@ Direct hardware control, **<1ms zero-lag UI responsiveness**, **~18–35 MB RAM*
 ### 🖼️ UI & Gaming Overlay Previews
 
 <div align="center">
-  <h4>🎮 In-Game Gaming Overlay HUD (Zero-Injection ETW FPS Counter)</h4>
-  <p><img src="assets/preview_overlay.png" width="620" alt="In-Game Gaming Overlay HUD"/></p>
-  <br/>
+  <p>Real screenshots from Predator Control v1.4.2. Click any image to view it at full size.</p>
+  <h4>🪼 Jelli — Expanded Overview</h4>
+  <p><a href="assets/preview_jelli.png"><img src="assets/preview_jelli.png" width="430" alt="Predator Control v1.4.2 Jelli expanded Overview with jellyfish mascot and live hardware metrics"/></a></p>
+  <h4>🖥️ Classic Control Panel</h4>
   <table>
     <tr>
-      <td align="center"><b>Dashboard, Thermals & GPU MUX Switch</b></td>
-      <td align="center"><b>RGB Lighting & System Controls</b></td>
+      <td align="center" width="50%"><b>Dashboard, Thermals & GPU Controls</b></td>
+      <td align="center" width="50%"><b>RGB Lighting & System Controls</b></td>
     </tr>
     <tr>
-      <td><img src="assets/preview_dashboard.png" width="340" alt="Dashboard Preview"/></td>
-      <td><img src="assets/preview_controls.png" width="340" alt="Controls Preview"/></td>
+      <td><a href="assets/preview_dashboard.png"><img src="assets/preview_dashboard.png" width="340" alt="Predator Control v1.4.2 Classic dashboard with live thermals, performance profiles, fan controls and GPU controls"/></a></td>
+      <td><a href="assets/preview_controls.png"><img src="assets/preview_controls.png" width="340" alt="Predator Control v1.4.2 Classic RGB lighting and system controls"/></a></td>
+    </tr>
+  </table>
+  <h4>🎮 Gaming Overlay — Four Display Modes</h4>
+  <table>
+    <tr>
+      <td align="center" width="50%"><b>Light</b></td>
+      <td align="center" width="50%"><b>Default</b></td>
+    </tr>
+    <tr>
+      <td><a href="assets/preview_overlay_light.png"><img src="assets/preview_overlay_light.png" width="179" alt="Predator Control v1.4.2 gaming overlay in Light mode"/></a></td>
+      <td><a href="assets/preview_overlay.png"><img src="assets/preview_overlay.png" width="328" alt="Predator Control v1.4.2 gaming overlay in Default mode"/></a></td>
+    </tr>
+    <tr>
+      <td align="center"><b>Full</b></td>
+      <td align="center"><b>Complete</b></td>
+    </tr>
+    <tr>
+      <td><a href="assets/preview_overlay_full.png"><img src="assets/preview_overlay_full.png" width="340" alt="Predator Control v1.4.2 gaming overlay in Full mode"/></a></td>
+      <td><a href="assets/preview_overlay_complete.png"><img src="assets/preview_overlay_complete.png" width="340" alt="Predator Control v1.4.2 gaming overlay in Complete mode"/></a></td>
     </tr>
   </table>
 </div>

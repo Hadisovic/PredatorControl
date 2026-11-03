@@ -19,4 +19,6 @@ try {
     Invoke-Check 'dotnet' @('build', 'src/PredatorControlApp.csproj', '-c', 'Release', '-p:SkipJelliBuild=true')
     Invoke-Check 'dotnet' @('test', 'tests/Compatibility.Tests/Compatibility.Tests.csproj', '-c', 'Release', '-p:SkipJelliBuild=true')
     Invoke-Check 'dotnet' @('test', 'tests/Keyboard.Tests/Keyboard.Tests.csproj', '-c', 'Release')
+    Invoke-Check 'dotnet' @('run', '--project', 'tests/Security.Tests/Security.Tests.csproj', '-c', 'Release', '-p:SkipJelliBuild=true')
+    Invoke-Check 'python' @('-m', 'unittest', 'discover', '-s', 'tests', '-p', 'test_secret_scan.py')
 } finally { Pop-Location }

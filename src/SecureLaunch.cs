@@ -31,6 +31,7 @@ internal static class SecureLaunch
 
     private static bool HasUntrustedWriter(FileSystemSecurity security, FileSystemRights mask)
     {
+        if (new RawSecurityDescriptor(security.GetSecurityDescriptorBinaryForm(), 0).DiscretionaryAcl == null) return true;
         if (!IsTrusted(security.GetOwner(typeof(SecurityIdentifier)) as SecurityIdentifier)) return true;
         foreach (FileSystemAccessRule rule in security.GetAccessRules(true, true, typeof(SecurityIdentifier)))
         {
@@ -81,7 +82,7 @@ internal static class SecureLaunch
     }
 
     /// <summary>Creates a protected directory; never follows or repairs an untrusted existing path.</summary>
-    internal static string CreateAdminOnlyDirectory(string path, bool usersMayRead = false)
+    internal static string CreateAdminOnlyDirectory(string path, bool usersMayRead = false, SecurityIdentifier? reader = null)
     {
         var info = new DirectoryInfo(Path.GetFullPath(path));
         try
@@ -109,6 +110,8 @@ internal static class SecureLaunch
         security.AddAccessRule(new FileSystemAccessRule(Admins, FileSystemRights.FullControl, inherit, PropagationFlags.None, AccessControlType.Allow));
         if (usersMayRead)
             security.AddAccessRule(new FileSystemAccessRule(Users, FileSystemRights.ReadAndExecute, inherit, PropagationFlags.None, AccessControlType.Allow));
+        if (reader != null)
+            security.AddAccessRule(new FileSystemAccessRule(reader, FileSystemRights.ReadAndExecute, inherit, PropagationFlags.None, AccessControlType.Allow));
         security.SetOwner(Admins);
         info.Create(security);
         if (!IsAdminOnlyDirectory(info.FullName))

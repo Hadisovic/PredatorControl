@@ -786,7 +786,7 @@ namespace PredatorControlApp
                 if (InvokeRequired) BeginInvoke(new Action(() => Application.Exit()));
                 else Application.Exit();
             }
-            else
+            else if (command == "SHOW")
                 ShowApp();
         }
 

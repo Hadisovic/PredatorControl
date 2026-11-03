@@ -134,7 +134,7 @@ namespace PredatorControlApp
                 {
                     string dump = _wmi.ExportDiagnosticReport();
                     string path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "PredatorControl_Diagnostic.json");
-                    File.WriteAllText(path, dump);
+                    SafeFile.WriteText(path, dump);
                     MessageBox.Show($"Hardware diagnostic report saved to your Desktop:\n{path}\n\nYou can attach this file to a GitHub issue or discussion to help support your laptop model!", "Diagnostic Report Exported", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
                 catch (Exception ex)

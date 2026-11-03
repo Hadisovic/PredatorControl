@@ -89,7 +89,7 @@ public static class RgbProfileManager
         try
         {
             if (!File.Exists(FilePath)) return LoadStatus.Missing;
-            json = File.ReadAllText(FilePath);
+            json = SafeFile.ReadText(FilePath);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -129,7 +129,7 @@ public static class RgbProfileManager
         {
             if (!File.Exists(FilePath)) return;
             string backup = FilePath + ".corrupt-" + DateTime.Now.ToString("yyyyMMdd-HHmmss");
-            File.Move(FilePath, backup, overwrite: true);
+            SafeFile.WriteText(backup, SafeFile.ReadText(FilePath));
         }
         catch { }
     }
@@ -168,16 +168,8 @@ public static class RgbProfileManager
     {
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
             string json = JsonSerializer.Serialize(profiles, JsonOptions);
-
-            // Write to a temp file and swap it in, so a crash mid-write can't truncate the real file.
-            string tmp = FilePath + ".tmp";
-            File.WriteAllText(tmp, json);
-            if (File.Exists(FilePath))
-                File.Replace(tmp, FilePath, null);
-            else
-                File.Move(tmp, FilePath);
+            SafeFile.WriteText(FilePath, json);
         }
         catch { }
     }

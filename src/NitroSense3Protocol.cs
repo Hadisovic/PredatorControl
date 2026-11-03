@@ -100,11 +100,11 @@ internal static class NitroSense3Protocol
         byte[] header = new byte[5];
         try
         {
-            await stream.ReadExactlyAsync(header, token);
+            await stream.ReadExactlyAsync(header, token).ConfigureAwait(false);
             int size = wide ? 8 : 4;
             if (header[0] != 1 || BinaryPrimitives.ReadInt32LittleEndian(header.AsSpan(1)) != size) return null;
             byte[] payload = new byte[size];
-            await stream.ReadExactlyAsync(payload, token);
+            await stream.ReadExactlyAsync(payload, token).ConfigureAwait(false);
             return wide ? BinaryPrimitives.ReadUInt64LittleEndian(payload) : BinaryPrimitives.ReadUInt32LittleEndian(payload);
         }
         catch (EndOfStreamException) { return null; }
@@ -130,11 +130,11 @@ internal static class NitroSense3Protocol
         try
         {
             if (isRead) LastReadFailure = "Connecting";
-            await pipe.ConnectAsync(deadline.Token);
+            await pipe.ConnectAsync(deadline.Token).ConfigureAwait(false);
             if (!AcerAgentEndpoint.PipeTrusted(pipe.SafePipeHandle, "PSSvc")) { if (isRead) LastReadFailure = "Pipe server is not the trusted PSSvc process"; return null; }
             if (isRead) LastReadFailure = "Awaiting reply";
-            await pipe.WriteAsync(Encode(command, input, wide), deadline.Token);
-            ulong? reply = await ReadReply(pipe, isRead, deadline.Token);
+            await pipe.WriteAsync(Encode(command, input, wide), deadline.Token).ConfigureAwait(false);
+            ulong? reply = await ReadReply(pipe, isRead, deadline.Token).ConfigureAwait(false);
             if (isRead) LastReadFailure = reply.HasValue ? $"Firmware status={reply.Value & 255}, state={(reply.Value >> 8) & 255}" : "Malformed, truncated or timed-out reply";
             return reply;
         }

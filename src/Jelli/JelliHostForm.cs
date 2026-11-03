@@ -10,7 +10,7 @@ namespace PredatorControlApp;
 // No server, open port, second startup entry, or public named-pipe extension is needed.
 internal sealed class JelliHostForm : Form
 {
-    private const string Origin = "https://jelli.predator.local/";
+    private const string Origin = JelliProtocol.Origin;
     private readonly IJelliBackend _backend;
     private readonly WebView2 _web = new() { Dock = DockStyle.Fill, DefaultBackgroundColor = Color.Transparent };
     private readonly System.Windows.Forms.Timer _cursor = new() { Interval = 32 };
@@ -125,7 +125,13 @@ internal sealed class JelliHostForm : Form
         if (!Visible) Show();
         await Task.Yield(); // pump message loop so HWND is visible to the OS
 
-        string profile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PredatorControl", _persist ? "WebView2" : "WebView2-Test");
+        // A user-writable browser profile can persist scripts/cache across an elevation boundary.
+        SecureLaunch.CreateAdminOnlyDirectory(SecureLaunch.ProgramDataDir);
+        string profileRoot = SecureLaunch.CreateAdminOnlyDirectory(Path.Combine(SecureLaunch.ProgramDataDir, "webview"));
+        using var profileIdentity = System.Security.Principal.WindowsIdentity.GetCurrent();
+        string profileUser = SecureLaunch.CreateAdminOnlyDirectory(Path.Combine(profileRoot,
+            profileIdentity.User!.Value));
+        string profile = SecureLaunch.CreateAdminOnlyDirectory(Path.Combine(profileUser, _persist ? "v2" : "test-v2"));
         var options = new CoreWebView2EnvironmentOptions
         {
             AdditionalBrowserArguments = "--disable-gpu --disable-background-networking --disable-component-update --disable-extensions --disable-speech-api --js-flags=\"--max-old-space-size=16 --max-semi-space-size=1 --optimize-for-size\""
@@ -134,9 +140,14 @@ internal sealed class JelliHostForm : Form
         await _web.EnsureCoreWebView2Async(env);
         var core = _web.CoreWebView2;
         try { core.MemoryUsageTargetLevel = CoreWebView2MemoryUsageTargetLevel.Low; } catch { }
-        core.AddWebResourceRequestedFilter(Origin + "*", CoreWebView2WebResourceContext.All);
+        core.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.All);
         core.WebResourceRequested += (_, e) => {
             var uri = new Uri(e.Request.Uri);
+            if (uri.GetLeftPart(UriPartial.Authority) + "/" != Origin)
+            {
+                e.Response = env.CreateWebResourceResponse(null, 403, "Forbidden", "Cache-Control: no-store");
+                return;
+            }
             string path = uri.AbsolutePath.TrimStart('/');
             if (path.Length == 0) path = "index.html";
             var assembly = typeof(JelliHostForm).Assembly;
@@ -147,12 +158,16 @@ internal sealed class JelliHostForm : Form
             e.Response = env.CreateWebResourceResponse(stream, stream == null ? 404 : 200, stream == null ? "Not found" : "OK", "Content-Type: " + mime + "\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff");
         };
         core.Settings.AreDefaultContextMenusEnabled = false;
+#if DEBUG
         core.Settings.AreDevToolsEnabled = Environment.GetCommandLineArgs().Contains("--jelli-devtools");
+#else
+        core.Settings.AreDevToolsEnabled = false;
+#endif
         core.Settings.AreBrowserAcceleratorKeysEnabled = false;
         core.Settings.IsStatusBarEnabled = false;
         core.Settings.IsZoomControlEnabled = false;
         core.Settings.AreHostObjectsAllowed = false;
-        core.NavigationStarting += (_, e) => { if (e.Uri != Origin && e.Uri != Origin + "index.html") e.Cancel = true; };
+        core.NavigationStarting += (_, e) => { if (!JelliProtocol.IsTrustedDocument(e.Uri)) e.Cancel = true; };
         core.NewWindowRequested += (_, e) => e.Handled = true;
         core.PermissionRequested += (_, e) => e.State = CoreWebView2PermissionState.Deny;
         core.DownloadStarting += (_, e) => e.Cancel = true;
@@ -175,7 +190,7 @@ internal sealed class JelliHostForm : Form
             Program.Report(new InvalidOperationException("Jelli handshake timed out after 45 s. Jelli may still load in the background."), false);
         }
         SetSurface(_surface);
-        if (Environment.GetCommandLineArgs().Contains("--jelli-devtools")) core.OpenDevToolsWindow();
+        if (core.Settings.AreDevToolsEnabled) core.OpenDevToolsWindow();
     }
 
     private async void Recover()
@@ -208,7 +223,10 @@ internal sealed class JelliHostForm : Form
         try
         {
             if (_web.CoreWebView2 != null)
+            {
+                if (!JelliProtocol.IsTrustedDocument(_web.CoreWebView2.Source)) return;
                 _web.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(message, JelliSettings.Json));
+            }
         }
         catch (InvalidOperationException)
         {
@@ -228,12 +246,11 @@ internal sealed class JelliHostForm : Form
 
     private async void Receive(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
-        if (!e.Source.StartsWith(Origin, StringComparison.Ordinal) || e.WebMessageAsJson.Length > 16384) return;
+        if (!JelliProtocol.IsTrustedDocument(e.Source) || e.WebMessageAsJson.Length > 16384) return;
         JelliRequest? request = null;
         try
         {
-            request = JsonSerializer.Deserialize<JelliRequest>(e.WebMessageAsJson, JelliSettings.Json);
-            if (request == null || request.Version != 1 || string.IsNullOrEmpty(request.Id)) throw new ArgumentException("Unsupported protocol message.");
+            request = JelliProtocol.ReadRequest(e.Source, e.WebMessageAsJson);
             object? result = null;
             switch (request.Action)
             {

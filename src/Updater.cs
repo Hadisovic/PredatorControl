@@ -6,6 +6,7 @@ using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Security.Cryptography.X509Certificates;
 using Microsoft.Win32;
 
 namespace PredatorControlApp
@@ -50,8 +51,8 @@ namespace PredatorControlApp
 
         internal static async Task<UpdateInfo?> CheckAsync()
         {
-            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
-            http.DefaultRequestHeaders.UserAgent.ParseAdd("PredatorControl");
+            using var http = NewTrustedClient(TimeSpan.FromSeconds(20));
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(20));
             http.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
 
             string json = string.Empty;
@@ -59,10 +60,10 @@ namespace PredatorControlApp
             {
                 try
                 {
-                    var resp = await http.GetAsync(endpoint);
+                    using var resp = await GetTrustedAsync(http, endpoint, deadline.Token);
                     if (resp.IsSuccessStatusCode)
                     {
-                        var content = await resp.Content.ReadAsStringAsync();
+                        var content = await ReadLimitedTextAsync(resp.Content, 4 * 1024 * 1024, deadline.Token);
                         if (!string.IsNullOrWhiteSpace(content) && content.TrimStart().StartsWith("["))
                         {
                             json = content;
@@ -84,6 +85,7 @@ namespace PredatorControlApp
 
             foreach (var rel in doc.RootElement.EnumerateArray())
             {
+                if (rel.ValueKind != JsonValueKind.Object) continue;
                 if (Flag(rel, "draft") || Flag(rel, "prerelease")) continue;
                 if (!TryParseTag(Str(rel, "tag_name"), out var v) || v <= current) continue;
 
@@ -112,11 +114,12 @@ namespace PredatorControlApp
 
         internal static (string url, string name, string? checksumUrl)? PickAssetInfo(JsonElement rel, bool wantSelfContained)
         {
-            if (!rel.TryGetProperty("assets", out var assets) || assets.ValueKind != JsonValueKind.Array) return null;
+            if (rel.ValueKind != JsonValueKind.Object || !rel.TryGetProperty("assets", out var assets) || assets.ValueKind != JsonValueKind.Array) return null;
 
             string? checksumUrl = null;
             foreach (var a in assets.EnumerateArray())
             {
+                if (a.ValueKind != JsonValueKind.Object) continue;
                 string name = Str(a, "name");
                 if (name.Equals("checksums.txt", OIC) || name.EndsWith("checksums.txt", OIC))
                 {
@@ -128,8 +131,9 @@ namespace PredatorControlApp
             (string url, string name)? fallback = null;
             foreach (var a in assets.EnumerateArray())
             {
+                if (a.ValueKind != JsonValueKind.Object) continue;
                 string name = Str(a, "name");
-                if (!name.EndsWith(".exe", OIC)) continue;
+                if (!IsSafeAssetName(name) || !name.EndsWith(".exe", OIC)) continue;
 
                 string url = Str(a, "browser_download_url");
                 if (url.Length == 0) continue;
@@ -151,39 +155,91 @@ namespace PredatorControlApp
 
         // GitHub serves release assets from github.com and from *.githubusercontent.com (objects/release-assets/releases).
         internal static bool IsTrustedUpdateUri(Uri uri) =>
+            uri.IsAbsoluteUri && uri.IsDefaultPort && string.IsNullOrEmpty(uri.UserInfo) &&
             string.Equals(uri.Scheme, "https", StringComparison.OrdinalIgnoreCase) &&
-            (uri.Host.Equals("github.com", OIC) || uri.Host.EndsWith(".githubusercontent.com", OIC));
+            (uri.Host.Equals("github.com", OIC) || uri.Host.EndsWith(".githubusercontent.com", OIC) ||
+                uri.Host.Equals("api.github.com", OIC) && uri.AbsolutePath == "/repos/Hadisovic/PredatorControl/releases");
+
+        private static bool IsSafeAssetName(string name) => !string.IsNullOrWhiteSpace(name) && name.Length <= 128 &&
+            name.IndexOfAny(Path.GetInvalidFileNameChars()) < 0 && name is not ("." or "..");
+
+        internal static void ValidateUpdateInfo(UpdateInfo info)
+        {
+            if (!TryParseTag(info.Tag, out var version) || info.Version != version || version <= Current)
+                throw new InvalidOperationException("Update metadata must identify a newer release.");
+            if (info.TargetFileName != null && !IsSafeAssetName(info.TargetFileName))
+                throw new InvalidOperationException("Update metadata contains an unsafe asset name.");
+        }
+
+        internal static async Task CopyLimitedAsync(Stream source, Stream destination, long limit, CancellationToken token)
+        {
+            byte[] buffer = new byte[81920];
+            long total = 0;
+            int read;
+            while ((read = await source.ReadAsync(buffer, token)) != 0)
+            {
+                total += read;
+                if (total > limit) throw new IOException("The update response exceeds its size limit.");
+                await destination.WriteAsync(buffer.AsMemory(0, read), token);
+            }
+        }
+
+        private static async Task<string> ReadLimitedTextAsync(HttpContent content, long limit, CancellationToken token)
+        {
+            using var source = await content.ReadAsStreamAsync(token);
+            using var destination = new MemoryStream();
+            await CopyLimitedAsync(source, destination, limit, token);
+            return Encoding.UTF8.GetString(destination.ToArray());
+        }
+
+        internal static bool SameSigningKey(X509Certificate2 installed, X509Certificate2 update) =>
+            installed.PublicKey.ExportSubjectPublicKeyInfo().AsSpan().SequenceEqual(update.PublicKey.ExportSubjectPublicKeyInfo());
+
+        internal static void VerifyUpdateAuthenticity(string installed, string staged)
+        {
+            if (OemServiceManager.VerifyWinTrust(installed) != 0 || OemServiceManager.VerifyWinTrust(staged) != 0)
+                throw new InvalidOperationException("Automatic installation requires trusted Authenticode signatures on both versions. Install unsigned releases manually.");
+#pragma warning disable SYSLIB0057
+            using var installedRaw = X509Certificate.CreateFromSignedFile(installed);
+            using var updateRaw = X509Certificate.CreateFromSignedFile(staged);
+#pragma warning restore SYSLIB0057
+            using var installedCert = new X509Certificate2(installedRaw);
+            using var updateCert = new X509Certificate2(updateRaw);
+            if (!SameSigningKey(installedCert, updateCert))
+                throw new InvalidOperationException("The update's signing key differs from the installed publisher. Install a verified publisher-key change manually.");
+        }
 
         private static HttpClient NewTrustedClient(TimeSpan timeout)
         {
             // Redirects are followed manually so every hop is checked against the allowlist.
-            var http = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = timeout };
+            var http = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false, CheckCertificateRevocationList = true }) { Timeout = timeout };
             http.DefaultRequestHeaders.UserAgent.ParseAdd("PredatorControl");
             return http;
         }
 
-        private static async Task<HttpResponseMessage> GetTrustedAsync(HttpClient http, string url)
+        private static async Task<HttpResponseMessage> GetTrustedAsync(HttpClient http, string url, CancellationToken token)
         {
             var uri = new Uri(url);
             for (int hop = 0; hop < 5; hop++)
             {
                 if (!IsTrustedUpdateUri(uri))
                     throw new InvalidOperationException("Update download refused: untrusted URL or redirect target '" + uri.Host + "'.");
-                var resp = await http.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead);
+                var resp = await http.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, token);
                 if ((int)resp.StatusCode is >= 300 and < 400 && resp.Headers.Location is Uri next)
                 {
                     resp.Dispose();
                     uri = next.IsAbsoluteUri ? next : new Uri(uri, next);
                     continue;
                 }
-                resp.EnsureSuccessStatusCode();
-                return resp;
+                try { resp.EnsureSuccessStatusCode(); return resp; }
+                catch { resp.Dispose(); throw; }
             }
             throw new InvalidOperationException("Update download refused: too many redirects.");
         }
 
         internal static async Task ApplyAsync(UpdateInfo info)
         {
+            ValidateUpdateInfo(info);
             if (!Uri.TryCreate(info.DownloadUrl, UriKind.Absolute, out var downloadUri))
                 throw new InvalidOperationException("Update URL is not a valid absolute URI: " + info.DownloadUrl);
 
@@ -198,6 +254,9 @@ namespace PredatorControlApp
             string target = Environment.ProcessPath ?? Application.ExecutablePath;
             if (!SecureLaunch.IsAdminOnly(target))
                 throw new InvalidOperationException("Automatic updates require the installed copy in a protected folder. Download the update manually or relaunch the installed copy.");
+            if (OemServiceManager.VerifyWinTrust(target) != 0)
+                throw new InvalidOperationException("This build is unsigned. Download and install updates manually until signed releases are available.");
+            using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(10));
 
             // Unique staging directory, restricted to this user / SYSTEM / Administrators,
             // so other local users or processes can't pre-create or swap the staged files.
@@ -215,25 +274,25 @@ namespace PredatorControlApp
                 // Download and hash through ONE exclusive handle so nothing can modify the file between download and verification.
                 using (var http = NewTrustedClient(TimeSpan.FromMinutes(10)))
                 {
-                    using var response = await GetTrustedAsync(http, info.DownloadUrl);
-                    using var src = await response.Content.ReadAsStreamAsync();
+                    using var response = await GetTrustedAsync(http, info.DownloadUrl, deadline.Token);
+                    using var src = await response.Content.ReadAsStreamAsync(deadline.Token);
                     using var dst = new FileStream(staged, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
-                    await src.CopyToAsync(dst);
-                    await dst.FlushAsync();
+                    await CopyLimitedAsync(src, dst, 256L * 1024 * 1024, deadline.Token);
+                    await dst.FlushAsync(deadline.Token);
 
                     if (dst.Length < 100_000)
                         throw new IOException("Downloaded file looks truncated.");
 
                     dst.Position = 0;
                     using var sha = System.Security.Cryptography.SHA256.Create();
-                    stagedHash = Convert.ToHexString(await sha.ComputeHashAsync(dst)).ToLowerInvariant();
+                    stagedHash = Convert.ToHexString(await sha.ComputeHashAsync(dst, deadline.Token)).ToLowerInvariant();
                 }
 
                 string checksumData;
                 using (var http = NewTrustedClient(TimeSpan.FromMinutes(2)))
                 {
-                    using var response = await GetTrustedAsync(http, info.ChecksumUrl);
-                    checksumData = await response.Content.ReadAsStringAsync();
+                    using var response = await GetTrustedAsync(http, info.ChecksumUrl, deadline.Token);
+                    checksumData = await ReadLimitedTextAsync(response.Content, 256 * 1024, deadline.Token);
                 }
 
                 string? expectedHash = null;
@@ -264,6 +323,10 @@ namespace PredatorControlApp
                 if (!Regex.IsMatch(stagedHash, "^[0-9a-f]{64}$"))
                     throw new InvalidOperationException("Checksum verification failed: unexpected hash format.");
 
+                VerifyUpdateAuthenticity(target, staged);
+                if (!Version.TryParse(FileVersionInfo.GetVersionInfo(staged).FileVersion, out var binaryVersion) || Norm(binaryVersion) != info.Version)
+                    throw new InvalidOperationException("The signed executable version does not match the release metadata.");
+
                 try
                 {
                     using var key = Registry.CurrentUser.CreateSubKey(RegPath);
@@ -279,12 +342,12 @@ namespace PredatorControlApp
                 File.WriteAllText(script, BuildUpdateScript(Environment.ProcessId, staged, target, backup, stageDir, stagedHash),
                     new UTF8Encoding(false));
 
-                Process.Start(new ProcessStartInfo(SecureLaunch.System32("cmd.exe"), $"/d /v:off /c \"{script}\"")
+                using var helper = Process.Start(new ProcessStartInfo(SecureLaunch.System32("cmd.exe"), $"/d /v:off /c \"{script}\"")
                 {
                     CreateNoWindow = true,
                     UseShellExecute = false,
                     WorkingDirectory = Environment.SystemDirectory
-                });
+                }) ?? throw new InvalidOperationException("The update helper could not be started.");
             }
             catch
             {
@@ -310,14 +373,18 @@ namespace PredatorControlApp
 
         private static string BuildUpdateScript(int pid, string staged, string target, string backup, string stageDir, string sha256)
         {
+            if (pid <= 0 || !Regex.IsMatch(sha256, "\\A[0-9a-fA-F]{64}\\z")) throw new ArgumentException("Invalid update handoff.");
+            foreach (string path in new[] { staged, target, backup, stageDir })
+                if (!Path.IsPathFullyQualified(path) || path.IndexOfAny(Path.GetInvalidPathChars()) >= 0)
+                    throw new ArgumentException("Invalid update handoff path.");
             // '%' is special in batch files; none of these paths normally contain it, but escape to be safe.
             static string E(string s) => s.Replace("%", "%%");
 
             return """
                 @echo off
                 setlocal EnableExtensions DisableDelayedExpansion
-                set "SYS=%SystemRoot%\System32"
-                set "PATH=%SYS%;%SystemRoot%"
+                set "SYS=@@SYSTEM@@"
+                set "PATH=%SYS%"
                 "%SYS%\chcp.com" 65001 >nul
                 set "PID=@@PID@@"
                 set "STAGED=@@STAGED@@"
@@ -372,6 +439,7 @@ namespace PredatorControlApp
                 (goto) 2>nul & rd /s /q "%STAGEDIR%"
                 """
                 .Replace("@@PID@@", pid.ToString())
+                .Replace("@@SYSTEM@@", E(Environment.SystemDirectory))
                 .Replace("@@STAGED@@", E(staged))
                 .Replace("@@TARGET@@", E(target))
                 .Replace("@@BACKUP@@", E(backup))

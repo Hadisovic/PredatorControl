@@ -37,12 +37,15 @@ internal sealed record JelliSettings
         string corner = s.OverlayCorner is "topLeft" or "topRight" or "bottomLeft" or "bottomRight" ? s.OverlayCorner : "topLeft";
         string m1 = Metrics.Contains(s.Metric1) ? s.Metric1 : "off";
         string m2 = Metrics.Contains(s.Metric2) ? s.Metric2 : "off";
-        return s with { Presentation = pres, OverlayCorner = corner, Metric1 = m1, Metric2 = m2 };
+        return s with { Presentation = pres, OverlayCorner = corner, Metric1 = m1, Metric2 = m2,
+            OverlayMode = s.OverlayMode is "light" or "default" or "full" or "complete" ? s.OverlayMode : "default",
+            OverlayScale = Math.Clamp(s.OverlayScale, 50, 300),
+            OverlayMonitor = s.OverlayMonitor is { Length: <= 128 } ? s.OverlayMonitor : "",
+            X = Math.Clamp(s.X, -100000, 100000), Y = Math.Clamp(s.Y, -100000, 100000) };
     }
     internal void Save()
     {
-        Validate(this);
         using var key = Registry.CurrentUser.CreateSubKey(@"SOFTWARE\PredatorControl");
-        key.SetValue("JelliUI", JsonSerializer.Serialize(this, Json));
+        key.SetValue("JelliUI", JsonSerializer.Serialize(Validate(this), Json));
     }
 }

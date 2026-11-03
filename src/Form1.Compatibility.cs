@@ -164,6 +164,6 @@ public partial class Form1
     private void ExportCompatibility()
     {
         using var save = new SaveFileDialog { Filter = "JSON report|*.json", FileName = "PredatorControl-compatibility.json" };
-        if (save.ShowDialog(this) == DialogResult.OK) File.WriteAllText(save.FileName, _wmi.ExportDiagnosticReport());
+        if (save.ShowDialog(this) == DialogResult.OK) SafeFile.WriteText(save.FileName, _wmi.ExportDiagnosticReport());
     }
 }

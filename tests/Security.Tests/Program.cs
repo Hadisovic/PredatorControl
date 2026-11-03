@@ -8,7 +8,7 @@ int failed = 0, passed = 0;
 async Task Check(string name, Func<Task<bool>> check)
 {
     try { if (!await check()) throw new Exception("assertion failed"); Console.WriteLine("PASS " + name); passed++; }
-    catch (Exception ex) { Console.WriteLine("FAIL " + name + ": " + ex.GetBaseException().Message); failed++; }
+    catch (Exception ex) { Console.WriteLine("FAIL " + name + ": " + ex.GetBaseException()); failed++; }
 }
 var assembly = typeof(SingleInstanceIpc).Assembly;
 await Check("IPC oversized command is rejected with bounded consumption", async () =>
@@ -77,7 +77,7 @@ await Check("updater validates redirects and caps redirect loops without network
     {
         using var handler = new RedirectHandler(target);
         using var client = new HttpClient(handler);
-        try { using var result = await (Task<HttpResponseMessage>)get.Invoke(null, [client, "https://github.com/start"])!; return false; }
+        try { using var result = await (Task<HttpResponseMessage>)get.Invoke(null, [client, "https://github.com/start", CancellationToken.None])!; return false; }
         catch (InvalidOperationException) { if (handler.Calls > 5) return false; }
     }
     return true;
@@ -123,6 +123,7 @@ await Check("startup refuses promotion from the writable test executable", () =>
     object?[] args = [null];
     return Task.FromResult(prepare.Invoke(null, args) == null && !string.IsNullOrWhiteSpace(args[0] as string));
 });
+await AuditChecks.Run(assembly, Check);
 Console.WriteLine($"{passed} passed, {failed} failed. Temporary data only; no hardware or elevated operations.");
 return failed == 0 ? 0 : 1;
 

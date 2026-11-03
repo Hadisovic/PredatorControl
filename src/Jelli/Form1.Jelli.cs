@@ -130,7 +130,7 @@ public partial class Form1 : IJelliBackend
             new("battery.limit", "Stop charging at 80%", "toggle", _wmi.Capabilities.BatteryLimitEnabled, _wmi.Capabilities.SupportsBatteryControl)
         };
 
-        var batInfo = BatteryHealthMonitor.GetBatteryHealth();
+        var batInfo = BatteryHealthMonitor.CachedInfo;
         if (batInfo != null)
         {
             double healthPct = Math.Max(0.0, Math.Round(100.0 - batInfo.WearLevelPercent, 1));
@@ -321,7 +321,7 @@ public partial class Form1 : IJelliBackend
 
     private static string GetBatteryNotice()
     {
-        var info = BatteryHealthMonitor.GetBatteryHealth();
+        var info = BatteryHealthMonitor.CachedInfo;
         if (info == null) return string.Empty;
         string cycleText = info.CycleCount > 0 ? $" • {info.CycleCount} cycles" : "";
         double healthPct = Math.Max(0.0, Math.Round(100.0 - info.WearLevelPercent, 1));

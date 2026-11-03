@@ -2,6 +2,9 @@ using System.IO.Pipes;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
 
 namespace PredatorControlApp
 {
@@ -9,6 +12,35 @@ namespace PredatorControlApp
     {
         private const string MutexName = @"Global\AcerPredatorControl_SingleInstance_Mutex_999";
         private const string PipeName = "AcerPredatorControl_IPC_Pipe";
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool GetNamedPipeClientProcessId(SafePipeHandle pipe, out uint processId);
+
+        internal static bool IsCommandAllowed(string command, bool sameUser, bool sameSession, bool elevated) =>
+            sameUser && sameSession && (command is "TOGGLE" or "SHOW" ||
+                elevated && command is "CYCLE_MODE" or "MODE" or "EXIT" or "QUIT");
+
+        internal static bool AuthorizeClient(NamedPipeServerStream pipe, string command)
+        {
+            try
+            {
+                using var owner = WindowsIdentity.GetCurrent();
+                using var current = Process.GetCurrentProcess();
+                if (!GetNamedPipeClientProcessId(pipe.SafePipeHandle, out uint pid)) return false;
+                using var client = Process.GetProcessById(checked((int)pid));
+                bool sameSession = client.SessionId == current.SessionId;
+                bool allowed = false;
+                // Use the pipe's authenticated token, never a caller-supplied PID or secret.
+                pipe.RunAsClient(() =>
+                {
+                    using var identity = WindowsIdentity.GetCurrent(ifImpersonating: true);
+                    allowed = identity != null && IsCommandAllowed(command, identity.User == owner.User,
+                        sameSession, new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator));
+                });
+                return allowed;
+            }
+            catch { return false; }
+        }
 
         private readonly Mutex _mutex;
         private readonly CancellationTokenSource _cts = new();
@@ -25,49 +57,43 @@ namespace PredatorControlApp
         public static bool TryAcquireOrSignal(string command, Action<string> onCommandReceived, out SingleInstanceIpc? instance)
         {
             instance = null;
-            Mutex? mutex = null;
-            bool isFirstInstance = false;
-
-            try
-            {
-                mutex = new Mutex(true, MutexName, out isFirstInstance);
-            }
-            catch (AbandonedMutexException)
-            {
-                isFirstInstance = true;
-            }
-            catch (UnauthorizedAccessException)
-            {
-                // Access denied on existing mutex: never grant primary status to a secondary process
-                isFirstInstance = false;
-            }
-            catch
-            {
-                mutex?.Dispose();
-                throw; // Never start hardware control without an established single-instance lock.
-            }
-
-            if (!isFirstInstance)
+            var mutex = TryAcquireHardwareLock();
+            if (mutex == null)
             {
                 // Another instance is already running; signal it via named pipe
                 SignalRunningInstance(command);
-                mutex?.Dispose();
                 return false;
             }
 
-            instance = new SingleInstanceIpc(mutex!, onCommandReceived);
+            instance = new SingleInstanceIpc(mutex, onCommandReceived);
             return true;
+        }
+
+        internal static Mutex? TryAcquireHardwareLock(string name = MutexName)
+        {
+            try
+            {
+                var mutex = new Mutex(true, name, out bool created);
+                if (created) return mutex;
+                mutex.Dispose();
+                return null;
+            }
+            catch (UnauthorizedAccessException) { return null; }
+            // Other failures propagate: never grant primary status without a lock.
         }
 
         public static bool SignalRunningInstance(string command, int timeoutMs = 1200)
         {
+            if (string.IsNullOrEmpty(command) || command.Length > 256 || command.IndexOfAny(['\r', '\n']) >= 0 || timeoutMs <= 0) return false;
             try
             {
-                using var client = new NamedPipeClientStream(".", PipeName, PipeDirection.Out);
-                client.Connect(timeoutMs);
-                using var writer = new StreamWriter(client, Encoding.UTF8, bufferSize: 256, leaveOpen: false);
-                writer.WriteLine(command);
-                writer.Flush();
+                using var deadline = new CancellationTokenSource(timeoutMs);
+                using var client = new NamedPipeClientStream(".", PipeName,
+                    PipeAccessRights.WriteData | PipeAccessRights.ReadAttributes | PipeAccessRights.Synchronize, PipeOptions.Asynchronous,
+                    TokenImpersonationLevel.Identification, HandleInheritability.None);
+                client.ConnectAsync(deadline.Token).GetAwaiter().GetResult();
+                // No drain/flush wait on an untrusted server; cancellation also bounds a stalled write.
+                client.WriteAsync(Encoding.UTF8.GetBytes(command + "\n"), deadline.Token).AsTask().GetAwaiter().GetResult();
                 return true;
             }
             catch
@@ -100,12 +126,13 @@ namespace PredatorControlApp
                     try
                     {
                         var pipeSecurity = new PipeSecurity();
+                        pipeSecurity.SetAccessRuleProtection(true, false);
                         var currentUserSid = WindowsIdentity.GetCurrent().User;
                         if (currentUserSid != null)
                         {
                             pipeSecurity.AddAccessRule(new PipeAccessRule(
                                 currentUserSid,
-                                PipeAccessRights.ReadWrite,
+                                PipeAccessRights.ReadData | PipeAccessRights.WriteData | PipeAccessRights.ReadAttributes | PipeAccessRights.Synchronize,
                                 AccessControlType.Allow));
                         }
 
@@ -114,7 +141,7 @@ namespace PredatorControlApp
                             PipeDirection.In,
                             1,
                             PipeTransmissionMode.Byte,
-                            PipeOptions.Asynchronous,
+                            PipeOptions.Asynchronous | PipeOptions.FirstPipeInstance,
                             0, 0,
                             pipeSecurity);
 
@@ -125,9 +152,10 @@ namespace PredatorControlApp
                         string? line;
                         try { line = await ReadCommandAsync(server, deadline.Token); }
                         catch (OperationCanceledException) when (!_cts.IsCancellationRequested) { continue; }
-                        if (!string.IsNullOrEmpty(line))
+                        if (!string.IsNullOrEmpty(line) && AuthorizeClient(server, line))
                         {
                             try { _onCommandReceived(line); } catch { }
+                            await Task.Delay(250, token); // Bound UI dispatch from repeated local activation requests.
                         }
                     }
                     catch (OperationCanceledException)

@@ -59,7 +59,6 @@ namespace PredatorControlApp
                 if (string.IsNullOrEmpty(appData))
                     appData = Path.GetTempPath();
                 var dir = Path.Combine(appData, "PredatorControl");
-                Directory.CreateDirectory(dir);
                 _savePath = Path.Combine(dir, "game_sync.json");
             }
             catch { }
@@ -215,7 +214,7 @@ namespace PredatorControlApp
                     Profiles = _profiles
                 };
                 var json = JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true });
-                File.WriteAllText(_savePath, json);
+                SafeFile.WriteText(_savePath, json);
             }
             catch { }
         }
@@ -225,10 +224,7 @@ namespace PredatorControlApp
             try
             {
                 if (!File.Exists(_savePath)) return;
-                using var file = new FileStream(_savePath, FileMode.Open, FileAccess.Read, FileShare.Read);
-                if (file.Length > 1024 * 1024) return;
-                using var reader = new StreamReader(file);
-                var json = reader.ReadToEnd();
+                var json = SafeFile.ReadText(_savePath);
                 var data = JsonSerializer.Deserialize<GameSyncData>(json);
                 if (data != null)
                 {

@@ -38,6 +38,7 @@ namespace PredatorControlApp
     {
         private static BatteryHealthInfo? _cachedInfo;
         private static long _lastQueryTick = 0;
+        private static readonly object QueryLock = new();
 
         public static BatteryHealthInfo? CachedInfo => _cachedInfo;
 
@@ -46,9 +47,15 @@ namespace PredatorControlApp
 
         public static BatteryHealthInfo? GetBatteryHealth(bool forceRefresh = false)
         {
+            lock (QueryLock) return QueryBatteryHealth(forceRefresh);
+        }
+
+        private static BatteryHealthInfo? QueryBatteryHealth(bool forceRefresh)
+        {
             long now = Environment.TickCount64;
-            if (!forceRefresh && _cachedInfo != null && (now - _lastQueryTick < 60_000)) // 1 min cache
+            if (!forceRefresh && _lastQueryTick != 0 && (now - _lastQueryTick < 60_000)) // Cache failed probes too.
                 return _cachedInfo;
+            _lastQueryTick = now;
 
             // 1. Instant ACPI WMI hardware probe (~5ms, zero subprocess overhead)
             try
@@ -97,9 +104,10 @@ namespace PredatorControlApp
             catch { }
 
             // 2. Fallback to Windows powercfg XML battery report
+            string? tempXml = null;
             try
             {
-                string tempXml = Path.Combine(Path.GetTempPath(), $"bat_rep_{Guid.NewGuid():N}.xml");
+                tempXml = Path.Combine(ReportDirectory(), $"bat_rep_{Guid.NewGuid():N}.xml");
                 using (var p = Process.Start(new ProcessStartInfo
                 {
                     FileName = SecureLaunch.System32("powercfg.exe"),
@@ -108,16 +116,21 @@ namespace PredatorControlApp
                     UseShellExecute = false
                 }))
                 {
-                    p?.WaitForExit(3500);
+                    if (p == null) return _cachedInfo;
+                    if (!p.WaitForExit(3500)) { try { p.Kill(); } catch { } return _cachedInfo; }
+                    if (p.ExitCode != 0) return _cachedInfo;
                 }
 
                 if (File.Exists(tempXml))
                 {
-                    string xmlContent = File.ReadAllText(tempXml);
-                    try { File.Delete(tempXml); } catch { }
+                    string xmlContent = SafeFile.ReadText(tempXml, 4 * 1024 * 1024);
 
-                    var doc = new XmlDocument();
-                    doc.LoadXml(xmlContent);
+                    var doc = new XmlDocument { XmlResolver = null };
+                    using var xml = XmlReader.Create(new StringReader(xmlContent), new XmlReaderSettings
+                    {
+                        DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersInDocument = 4 * 1024 * 1024
+                    });
+                    doc.Load(xml);
 
                     var designNode = doc.SelectSingleNode("//DesignCapacity");
                     var fullNode = doc.SelectSingleNode("//FullChargeCapacity");
@@ -137,6 +150,7 @@ namespace PredatorControlApp
                 }
             }
             catch { }
+            finally { if (tempXml != null) try { File.Delete(tempXml); } catch { } }
 
             return _cachedInfo;
         }
@@ -148,14 +162,22 @@ namespace PredatorControlApp
             return $"Health: {info.HealthStatus} ({info.WearLevelPercent}% wear) · {info.FullChargeCapacityMWh:N0} / {info.DesignCapacityMWh:N0} mWh{cycleText}";
         }
 
+        private static string ReportDirectory()
+        {
+            SecureLaunch.CreateAdminOnlyDirectory(SecureLaunch.ProgramDataDir);
+            string root = SecureLaunch.CreateAdminOnlyDirectory(Path.Combine(SecureLaunch.ProgramDataDir, "reports"));
+            using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
+            var sid = identity.User ?? throw new UnauthorizedAccessException("No report owner is available.");
+            return SecureLaunch.CreateAdminOnlyDirectory(Path.Combine(root, sid.Value), reader: sid);
+        }
+
         public static void OpenBatteryReport()
         {
             _ = Task.Run(() =>
             {
                 try
                 {
-                    SecureLaunch.CreateAdminOnlyDirectory(SecureLaunch.ProgramDataDir);
-                    string reports = SecureLaunch.CreateAdminOnlyDirectory(Path.Combine(SecureLaunch.ProgramDataDir, "reports"), usersMayRead: true);
+                    string reports = ReportDirectory();
                     string reportPath = Path.Combine(reports, $"battery-{Guid.NewGuid():N}.html");
                     using (var p = Process.Start(new ProcessStartInfo
                     {
@@ -165,7 +187,9 @@ namespace PredatorControlApp
                         UseShellExecute = false
                     }))
                     {
-                        if (p == null || !p.WaitForExit(4500) || p.ExitCode != 0) return;
+                        if (p == null) return;
+                        if (!p.WaitForExit(4500)) { try { p.Kill(); } catch { } return; }
+                        if (p.ExitCode != 0) return;
                     }
 
                     if (File.Exists(reportPath))

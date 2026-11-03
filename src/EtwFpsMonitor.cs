@@ -278,6 +278,8 @@ namespace PredatorControlApp
 
         public void Start(int targetPid = -1)
         {
+            if (!Environment.Is64BitProcess)
+                throw new PlatformNotSupportedException("The FPS trace structures require a 64-bit process.");
             _targetPid = targetPid;
 
             var stopProps = BuildSessionProperties();

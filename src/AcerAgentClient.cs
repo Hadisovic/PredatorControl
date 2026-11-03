@@ -116,7 +116,7 @@ namespace PredatorControlApp
             bool write = packetId == CMD_SET_DEVICE_DATA;
             if (write && !IsAuthorizedWrite()) return null;
             if (!write && packetId is not (CMD_INITIALIZATION or CMD_GET_MONITOR_DATA or CMD_GET_UPDATED_DATA or CMD_GET_CONNECTED_DEVICE)) return null;
-            if (!await _sendLock.WaitAsync(timeoutMs)) return null;
+            if (!await _sendLock.WaitAsync(timeoutMs).ConfigureAwait(false)) return null;
             try
             {
                 using var deadline = new CancellationTokenSource(timeoutMs);
@@ -128,21 +128,21 @@ namespace PredatorControlApp
                 if (AcerAgentEndpoint.TcpTrusted(TcpPort, out uint trustedListenerPid))
                 {
                     using var tcp = new TcpClient();
-                    await tcp.ConnectAsync(Host, TcpPort, deadline.Token);
+                    await tcp.ConnectAsync(Host, TcpPort, deadline.Token).ConfigureAwait(false);
                     if (!AcerAgentEndpoint.TcpConnectedToTrustedServer(tcp.Client, TcpPort, trustedListenerPid))
                         return null;
                     using var stream = tcp.GetStream();
-                    await stream.WriteAsync(packet, deadline.Token);
-                    return await AcerAgentProtocol.ReadReply(stream, packetId, deadline.Token);
+                    await stream.WriteAsync(packet, deadline.Token).ConfigureAwait(false);
+                    return await AcerAgentProtocol.ReadReply(stream, packetId, deadline.Token).ConfigureAwait(false);
                 }
                 foreach (string name in AgentPipes)
                 {
                     using var pipe = new NamedPipeClientStream(".", name, PipeDirection.InOut, PipeOptions.Asynchronous);
-                    try { await pipe.ConnectAsync(25, deadline.Token); }
+                    try { await pipe.ConnectAsync(25, deadline.Token).ConfigureAwait(false); }
                     catch (TimeoutException) { continue; }
                     if (!AcerAgentEndpoint.PipeTrusted(pipe.SafePipeHandle)) continue;
-                    await pipe.WriteAsync(packet, deadline.Token);
-                    return await AcerAgentProtocol.ReadReply(pipe, packetId, deadline.Token);
+                    await pipe.WriteAsync(packet, deadline.Token).ConfigureAwait(false);
+                    return await AcerAgentProtocol.ReadReply(pipe, packetId, deadline.Token).ConfigureAwait(false);
                 }
             }
             catch { /* Failure, cancellation or ambiguous acknowledgement must never cause a second write. */ }
@@ -160,7 +160,7 @@ namespace PredatorControlApp
         {
             if (!IsAuthorizedWrite(function)) return false;
             string json = JsonSerializer.Serialize(new { Function = function, Parameter = parameter });
-            string? resp = await SendCommandAsync(CMD_SET_DEVICE_DATA, json);
+            string? resp = await SendCommandAsync(CMD_SET_DEVICE_DATA, json).ConfigureAwait(false);
             if (string.IsNullOrEmpty(resp)) return false;
 
             try
@@ -188,7 +188,7 @@ namespace PredatorControlApp
         {
             try
             {
-                int mask = AcerAgentProtocol.GpuMask(await SendCommandAsync(CMD_INITIALIZATION, "{}"));
+                int mask = AcerAgentProtocol.GpuMask(await SendCommandAsync(CMD_INITIALIZATION, "{}").ConfigureAwait(false));
                 if (mask is > 0 and <= 7) return mask;
             }
             catch { }
@@ -203,7 +203,7 @@ namespace PredatorControlApp
 
             try
             {
-                int? currentMode = await GetGpuModeAsync();
+                int? currentMode = await GetGpuModeAsync().ConfigureAwait(false);
                 if (currentMode.HasValue)
                 {
                     // Live mode confirms MUX is active: 0=Optimus (1), 1=Discrete (2), 2=Auto (4) -> 7
@@ -222,7 +222,7 @@ namespace PredatorControlApp
         {
             var payloadObj = new { Function = function };
             string json = JsonSerializer.Serialize(payloadObj);
-            return await SendCommandAsync(CMD_GET_UPDATED_DATA, json);
+            return await SendCommandAsync(CMD_GET_UPDATED_DATA, json).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -235,14 +235,14 @@ namespace PredatorControlApp
         /// </summary>
         public static async Task<bool> SetOperatingModeAsync(int mode)
         {
-            return await SetDeviceDataAsync("OPERATING_MODE", new { mode });
+            return await SetDeviceDataAsync("OPERATING_MODE", new { mode }).ConfigureAwait(false);
         }
 
         /// <summary>
         /// Queries current Operating Power Mode from Acer OEM Service.
         /// </summary>
         public static async Task<int?> GetOperatingModeAsync() =>
-            ReadIntProperty(await GetDeviceDataAsync("OPERATING_MODE"), "mode");
+            ReadIntProperty(await GetDeviceDataAsync("OPERATING_MODE").ConfigureAwait(false), "mode");
 
         /// <summary>
         /// Sets Fan Mode in Acer OEM Service:
@@ -252,7 +252,7 @@ namespace PredatorControlApp
         /// </summary>
         public static async Task<bool> SetFanModeAsync(int mode)
         {
-            return await SetDeviceDataAsync("FAN_CONTROL", new { mode });
+            return await SetDeviceDataAsync("FAN_CONTROL", new { mode }).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -269,7 +269,7 @@ namespace PredatorControlApp
                     new { fan_name = "GPU", fan_index = 0, fan_custom_auto = 0, fan_custom_speed = gpuSpeed }
                 }
             };
-            return await SetDeviceDataAsync("FAN_CONTROL", param);
+            return await SetDeviceDataAsync("FAN_CONTROL", param).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -277,7 +277,7 @@ namespace PredatorControlApp
         /// </summary>
         public static async Task<string?> GetFanControlAsync()
         {
-            return await GetDeviceDataAsync("FAN_CONTROL");
+            return await GetDeviceDataAsync("FAN_CONTROL").ConfigureAwait(false);
         }
 
         /// <summary>
@@ -288,56 +288,56 @@ namespace PredatorControlApp
         /// </summary>
         public static async Task<bool> SetGpuModeAsync(int mode)
         {
-            return await SetDeviceDataAsync("GPU_MODE", new { mode });
+            return await SetDeviceDataAsync("GPU_MODE", new { mode }).ConfigureAwait(false);
         }
 
         /// <summary>
         /// Queries the current GPU MUX working mode.
         /// </summary>
         public static async Task<int?> GetGpuModeAsync() =>
-            ReadIntProperty(await GetDeviceDataAsync("GPU_MODE"), "mode");
+            ReadIntProperty(await GetDeviceDataAsync("GPU_MODE").ConfigureAwait(false), "mode");
 
         /// <summary>
         /// Sets LCD panel overdrive (response time acceleration).
         /// </summary>
         public static async Task<bool> SetLcdOverdriveAsync(bool enable)
         {
-            return await SetDeviceDataAsync("LCD_OVERDRIVE", new { status = enable ? 1 : 0 });
+            return await SetDeviceDataAsync("LCD_OVERDRIVE", new { status = enable ? 1 : 0 }).ConfigureAwait(false);
         }
 
         /// <summary>
         /// Queries LCD overdrive status.
         /// </summary>
         public static async Task<bool?> GetLcdOverdriveAsync() =>
-            ReadIntProperty(await GetDeviceDataAsync("LCD_OVERDRIVE"), "status") is int s ? s == 1 : null;
+            ReadIntProperty(await GetDeviceDataAsync("LCD_OVERDRIVE").ConfigureAwait(false), "status") is int s ? s == 1 : null;
 
         /// <summary>
         /// Sets Keyboard Backlight 30-Second Idle Sleep timeout.
         /// </summary>
         public static async Task<bool> SetBacklight30sAsync(bool enable)
         {
-            return await SetDeviceDataAsync("BACKLIGHT_30S", new { status = enable ? 1 : 0 });
+            return await SetDeviceDataAsync("BACKLIGHT_30S", new { status = enable ? 1 : 0 }).ConfigureAwait(false);
         }
 
         /// <summary>
         /// Queries Keyboard Backlight 30-Second Idle Sleep status.
         /// </summary>
         public static async Task<bool?> GetBacklight30sAsync() =>
-            ReadIntProperty(await GetDeviceDataAsync("BACKLIGHT_30S"), "status") is int s ? s == 1 : null;
+            ReadIntProperty(await GetDeviceDataAsync("BACKLIGHT_30S").ConfigureAwait(false), "status") is int s ? s == 1 : null;
 
         /// <summary>
         /// Sets BIOS Boot Sound (Startup Chime).
         /// </summary>
         public static async Task<bool> SetBootSoundAsync(bool enable)
         {
-            return await SetDeviceDataAsync("BOOT_SOUND", new { status = enable ? 1 : 0 });
+            return await SetDeviceDataAsync("BOOT_SOUND", new { status = enable ? 1 : 0 }).ConfigureAwait(false);
         }
 
         /// <summary>
         /// Queries BIOS Boot Sound status.
         /// </summary>
         public static async Task<bool?> GetBootSoundAsync() =>
-            ReadIntProperty(await GetDeviceDataAsync("BOOT_SOUND"), "status") is int s ? s == 1 : null;
+            ReadIntProperty(await GetDeviceDataAsync("BOOT_SOUND").ConfigureAwait(false), "status") is int s ? s == 1 : null;
 
         /// <summary>
         /// Sets BIOS boot startup animation / logo.
@@ -351,7 +351,7 @@ namespace PredatorControlApp
                 if (!File.Exists(logoPath) || !SecureLaunch.IsAdminOnly(logoPath)) return false;
                 img = logoPath;
             }
-            return await SetDeviceDataAsync("CUSTOM_BOOT_LOGO", new { imageSource = img });
+            return await SetDeviceDataAsync("CUSTOM_BOOT_LOGO", new { imageSource = img }).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -359,7 +359,7 @@ namespace PredatorControlApp
         /// </summary>
         public static async Task<bool?> GetBootAnimationAsync()
         {
-            string? resp = await GetDeviceDataAsync("CUSTOM_BOOT_LOGO");
+            string? resp = await GetDeviceDataAsync("CUSTOM_BOOT_LOGO").ConfigureAwait(false);
             if (string.IsNullOrEmpty(resp)) return null;
 
             try
@@ -384,28 +384,28 @@ namespace PredatorControlApp
         {
             // Verified against AcerAgentService PSSocket::Set_Win_Key:
             // status 0 = Windows & Menu keys disabled (locked), status 1 = enabled (unlocked)
-            return await SetDeviceDataAsync("WIN_KEY", new { status = lockKeys ? 0 : 1 });
+            return await SetDeviceDataAsync("WIN_KEY", new { status = lockKeys ? 0 : 1 }).ConfigureAwait(false);
         }
 
         /// <summary>
         /// Queries Windows and Menu Key Lock status from OEM service.
         /// </summary>
         public static async Task<bool?> GetWinKeyLockAsync() =>
-            ReadIntProperty(await GetDeviceDataAsync("WIN_KEY"), "status") is int s ? s == 0 : null;
+            ReadIntProperty(await GetDeviceDataAsync("WIN_KEY").ConfigureAwait(false), "status") is int s ? s == 0 : null;
 
         /// <summary>
         /// Sets CoolBoost™ Fan Ceiling Boost.
         /// </summary>
         public static async Task<bool> SetCoolBoostAsync(bool enable)
         {
-            return await SetDeviceDataAsync("COOL_BOOST", new { status = enable ? 1 : 0 });
+            return await SetDeviceDataAsync("COOL_BOOST", new { status = enable ? 1 : 0 }).ConfigureAwait(false);
         }
 
         /// <summary>
         /// Queries CoolBoost™ status from OEM service.
         /// </summary>
         public static async Task<bool?> GetCoolBoostAsync() =>
-            ReadIntProperty(await GetDeviceDataAsync("COOL_BOOST"), "status") is int s ? s == 1 : null;
+            ReadIntProperty(await GetDeviceDataAsync("COOL_BOOST").ConfigureAwait(false), "status") is int s ? s == 1 : null;
 
         /// <summary>
         /// Sets 4-zone static keyboard RGB lighting via OEM Agent Service LIGHTING command.
@@ -433,7 +433,7 @@ namespace PredatorControlApp
                 LEDs = leds
             };
 
-            return await SetDeviceDataAsync("LIGHTING", param);
+            return await SetDeviceDataAsync("LIGHTING", param).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -468,7 +468,7 @@ namespace PredatorControlApp
                 direction = direction
             };
 
-            return await SetDeviceDataAsync("LIGHTING", param);
+            return await SetDeviceDataAsync("LIGHTING", param).ConfigureAwait(false);
         }
 
         #endregion

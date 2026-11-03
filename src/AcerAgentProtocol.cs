@@ -12,7 +12,7 @@ internal static class AcerAgentProtocol
         int count = 0;
         while (count < buffer.Length)
         {
-            int read = await stream.ReadAsync(buffer.AsMemory(count), token);
+            int read = await stream.ReadAsync(buffer.AsMemory(count), token).ConfigureAwait(false);
             if (read == 0) return null;
             count += read;
             bool framed = buffer[0] == (byte)'A';

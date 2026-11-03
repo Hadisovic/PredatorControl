@@ -40,15 +40,16 @@ namespace PredatorControlApp
         }
         private static readonly HashSet<string> _reported = new();
         private static bool _dialogOpen;
+        private static readonly object LogLock = new();
         private static Form1? form;
 
         private static string LogPath
         {
             get
             {
-                var dir = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-                if (string.IsNullOrEmpty(dir)) dir = Path.GetTempPath();
-                return Path.Combine(dir, "PredatorControl", "crash.log");
+                using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
+                return Path.Combine(SecureLaunch.ProgramDataDir, "logs",
+                    identity.User!.Value, "crash.log");
             }
         }
 
@@ -59,17 +60,31 @@ namespace PredatorControlApp
             try
             {
                 var path = LogPath;
-                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-                File.AppendAllText(path, $"[{DateTime.Now:u}] {(fatal ? "FATAL" : "ERROR")} {ex}\n\n");
+                lock (LogLock)
+                {
+                    SecureLaunch.CreateAdminOnlyDirectory(SecureLaunch.ProgramDataDir);
+                    SecureLaunch.CreateAdminOnlyDirectory(Path.GetDirectoryName(Path.GetDirectoryName(path)!)!);
+                    SecureLaunch.CreateAdminOnlyDirectory(Path.GetDirectoryName(path)!);
+                    if (File.Exists(path))
+                    {
+                        if (!SecureLaunch.IsAdminOnly(path)) throw new UnauthorizedAccessException("The log file is not protected.");
+                        if (new FileInfo(path).Length > 1024 * 1024) File.Delete(path);
+                    }
+                    File.AppendAllText(path, $"[{DateTime.Now:u}] {(fatal ? "FATAL" : "ERROR")} {ex}\n\n");
+                }
             }
             catch { }
 
             // Never display a modal dialog if Windows is shutting down / logging off
             if (Form1.IsShuttingDown || Environment.HasShutdownStarted) return;
 
-            if (_dialogOpen || !_reported.Add(key)) return;
-
-            _dialogOpen = true;
+            lock (LogLock)
+            {
+                if (_dialogOpen || _reported.Contains(key)) return;
+                if (_reported.Count >= 128) _reported.Clear();
+                _reported.Add(key);
+                _dialogOpen = true;
+            }
             try
             {
                 MessageBox.Show(
@@ -77,7 +92,7 @@ namespace PredatorControlApp
                     "Predator Control", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             catch { }
-            finally { _dialogOpen = false; }
+            finally { lock (LogLock) _dialogOpen = false; }
         }
 
         /// <summary>
@@ -122,7 +137,7 @@ namespace PredatorControlApp
                 try
                 {
                     using var controller = new WmiController();
-                    File.WriteAllText(Path.GetFullPath(args[1]), controller.ExportDiagnosticReport());
+                    SafeFile.WriteText(Path.GetFullPath(args[1]), controller.ExportDiagnosticReport());
                 }
                 catch { Environment.ExitCode = 1; }
                 return;
@@ -148,7 +163,10 @@ namespace PredatorControlApp
 
             if (args.Length > 0 && args[0].Equals("--boot-limit", StringComparison.OrdinalIgnoreCase))
             {
-                ApplyHardwarePreferences(batteryOnly: true); // Fast headless battery charge enforcement mode
+                using var bootLock = SingleInstanceIpc.TryAcquireHardwareLock();
+                if (bootLock == null) return; // The GUI already restores the supported battery preference.
+                try { ApplyHardwarePreferences(batteryOnly: true); }
+                finally { bootLock.ReleaseMutex(); }
                 return;
             }
 

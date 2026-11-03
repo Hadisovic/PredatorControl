@@ -80,7 +80,7 @@ namespace PredatorControlApp
 
         private static bool IsAcerSignedBinary(string path)
         {
-            if (string.IsNullOrEmpty(path)) return false;
+            if (string.IsNullOrEmpty(path) || !SecureLaunch.IsAdminOnly(path)) return false;
             lock (ServiceTrust)
             {
                 DateTime stamp = File.GetLastWriteTimeUtc(path);
@@ -216,9 +216,11 @@ namespace PredatorControlApp
             };
 
             IntPtr pFileInfo = Marshal.AllocHGlobal(Marshal.SizeOf<WINTRUST_FILE_INFO>());
+            bool marshaled = false;
             try
             {
                 Marshal.StructureToPtr(fileInfo, pFileInfo, false);
+                marshaled = true;
                 var data = new WINTRUST_DATA
                 {
                     cbStruct = (uint)Marshal.SizeOf<WINTRUST_DATA>(),
@@ -240,6 +242,7 @@ namespace PredatorControlApp
             }
             finally
             {
+                if (marshaled) Marshal.DestroyStructure<WINTRUST_FILE_INFO>(pFileInfo);
                 Marshal.FreeHGlobal(pFileInfo);
             }
         }
@@ -265,6 +268,11 @@ namespace PredatorControlApp
                 if (!fullPath.StartsWith(driverStore.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
                 {
                     failureReason = $"Untrusted path: file is located outside DriverStore ({fullPath})";
+                    return false;
+                }
+                if (!SecureLaunch.IsAdminOnly(fullPath))
+                {
+                    failureReason = "Driver/service files must have protected ownership, ACLs and ancestors.";
                     return false;
                 }
 

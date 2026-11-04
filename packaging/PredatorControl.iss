@@ -36,14 +36,34 @@ Source: "ThirdPartyNotices.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\Predator Control"; Filename: "{app}\PredatorControl.exe"; WorkingDir: "{app}"
+Name: "{autodesktop}\Predator Control"; Filename: "{app}\PredatorControl.exe"; WorkingDir: "{app}"
 
 [Code]
+function ConfirmExistingDestination(): Boolean;
+var Destination: String;
+begin
+  Destination := ExpandConstant('{autopf}\PredatorControl\1.4.3\{#AppHash}');
+  Result := True;
+  if DirExists(Destination) or FileExists(Destination) then begin
+    if WizardSilent then
+      Result := ExpandConstant('{param:CONTINUEEXISTING|0}') = '1'
+    else
+      Result := SuppressibleMsgBox(
+        'The installation path already exists:' + #13#10 + Destination + #13#10#13#10 +
+        'Choose Yes to continue and repair or replace the application files. The folder must pass all installation checks.' + #13#10#13#10 +
+        'Choose No to cancel. You can uninstall the old copy or remove the conflicting file, then run setup again. Setup will not delete it automatically.',
+        mbError, MB_YESNO or MB_DEFBUTTON2, IDNO) = IDYES;
+  end;
+end;
+
 function InitializeSetup(): Boolean;
 var Code: Integer;
 begin
+  Result := ConfirmExistingDestination();
+  if not Result then Exit;
   ExtractTemporaryFile('package-preflight.exe');
   Result := Exec(ExpandConstant('{tmp}\package-preflight.exe'), '--package-preflight', '', SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0);
-  if not Result then MsgBox('The installation folder could not be verified. No startup tasks were created.', mbError, MB_OK);
+  if not Result then SuppressibleMsgBox('The installation folder could not be verified. No startup tasks were created.', mbError, MB_OK, IDOK);
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;

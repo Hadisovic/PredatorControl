@@ -36,17 +36,20 @@ internal static class AuditChecks
             return Task.FromResult(production.StartsWith(userData, StringComparison.OrdinalIgnoreCase) &&
                 isolatedTest.StartsWith(userData, StringComparison.OrdinalIgnoreCase) && production != isolatedTest);
         });
-        await check("Jelli and other privileged caches use a protected root independent of legacy ProgramData", () =>
+        await check("privileged caches never reuse either legacy writable data directory", () =>
         {
             var secure = assembly.GetType("PredatorControlApp.SecureLaunch")!;
             var field = secure.GetField("ProtectedDataDir", Static) ?? secure.GetField("ProgramDataDir", Static)!;
             string path = (string)field.GetValue(null)!;
             string programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
             string legacy = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "PredatorControl");
+            string legacyProgramFiles = Path.Combine(programFiles, "PredatorControlData");
             var protectedDirectory = secure.GetMethod("IsAdminOnlyDirectory", Static)!;
             return Task.FromResult(path.StartsWith(programFiles + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) &&
                 !path.StartsWith(legacy + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) &&
                 !path.Equals(legacy, StringComparison.OrdinalIgnoreCase) &&
+                !path.Equals(legacyProgramFiles, StringComparison.OrdinalIgnoreCase) &&
+                !path.StartsWith(legacyProgramFiles + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) &&
                 (bool)protectedDirectory.Invoke(null, [programFiles])!);
         });
         await check("GUI and headless startup share an exclusive mutex without using the live app name", () =>

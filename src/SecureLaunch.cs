@@ -12,9 +12,10 @@ internal static class SecureLaunch
     /// <summary>Resolves a built-in tool (sc.exe, schtasks.exe, ...) to its System32 path so it cannot be hijacked by search order.</summary>
     internal static string System32(string exe) => Path.IsPathRooted(exe) ? exe : Path.Combine(Environment.SystemDirectory, exe);
 
-    // Older versions created a user-writable ProgramData\PredatorControl for profiles.
-    // Generated privileged files must not depend on, re-ACL or migrate that legacy directory.
-    internal static readonly string ProtectedDataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "PredatorControlData");
+    // Earlier builds used ProgramData\PredatorControl and ProgramFiles\PredatorControlData.
+    // Some legacy directories grant the unelevated user write access. Never load privileged
+    // files from them, copy their contents, or repair their permissions in place.
+    internal static readonly string ProtectedDataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "PredatorControlData-v2");
 
     private static readonly SecurityIdentifier LocalSystem = new(WellKnownSidType.LocalSystemSid, null);
     private static readonly SecurityIdentifier Admins = new(WellKnownSidType.BuiltinAdministratorsSid, null);

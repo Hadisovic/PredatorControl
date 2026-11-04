@@ -38,6 +38,9 @@ Source: "ThirdPartyNotices.txt"; DestDir: "{app}"; Flags: ignoreversion
 Name: "{autoprograms}\Predator Control"; Filename: "{app}\PredatorControl.exe"; WorkingDir: "{app}"
 Name: "{autodesktop}\Predator Control"; Filename: "{app}\PredatorControl.exe"; WorkingDir: "{app}"
 
+[Run]
+Filename: "{app}\PredatorControl.exe"; Description: "Launch PredatorControl"; Flags: postinstall nowait skipifsilent runascurrentuser
+
 [Code]
 function ConfirmExistingDestination(): Boolean;
 var Destination: String;

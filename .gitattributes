@@ -15,6 +15,11 @@
 *.exe binary
 *.zip binary
 
+# Preserve upstream legal notices verbatim, including their original whitespace.
+packaging/WebView2-Runtime-Terms.html -text -whitespace
+packaging/dotnet-LICENSE.txt -text -whitespace
+packaging/dotnet-THIRD-PARTY-NOTICES.txt -text -whitespace
+
 # Private transcripts, exports & credentials (prevent git diff/export)
 *_EXPORT.md -diff -merge
 *TRANSCRIPT*.md -diff -merge

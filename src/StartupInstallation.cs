@@ -33,11 +33,28 @@ internal static class StartupInstallation
         // denies write/delete sharing and stays open through image identity, hash, copy and publication.
         using var source = SafeFile.OpenRead(current);
         VerifyRunningImage(source);
+        return InstallPinnedImage(source, PrepareVersionRoot());
+    }
+
+    private static string PrepareVersionRoot()
+    {
         string root = SecureLaunch.CreateAdminOnlyDirectory(Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "PredatorControl"), usersMayRead: true);
         string version = typeof(StartupInstallation).Assembly.GetName().Version!.ToString(3);
         root = SecureLaunch.CreateAdminOnlyDirectory(Path.Combine(root, version), usersMayRead: true);
-        return InstallPinnedImage(source, root);
+        return root;
+    }
+
+    internal static string PrepareDestination()
+    {
+        using var source = SafeFile.OpenRead(Environment.ProcessPath!);
+        VerifyRunningImage(source);
+        string hash = Convert.ToHexString(SHA256.HashData(source)).ToLowerInvariant();
+        string directory = SecureLaunch.CreateAdminOnlyDirectory(Path.Combine(PrepareVersionRoot(), hash), usersMayRead: true);
+        foreach (string entry in Directory.EnumerateFileSystemEntries(directory))
+            if ((File.GetAttributes(entry) & FileAttributes.Directory) != 0 || !SecureLaunch.IsAdminOnly(entry))
+                throw new UnauthorizedAccessException("The installation contains an unsafe existing entry.");
+        return directory;
     }
 
     internal static string InstallPinnedImage(FileStream source, string versionRoot)

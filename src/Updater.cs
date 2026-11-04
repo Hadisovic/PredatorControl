@@ -129,11 +129,20 @@ namespace PredatorControlApp
             }
 
             (string url, string name)? fallback = null;
+            // Only an application payload can use EXE replacement, never an installer.
+            foreach (var a in assets.EnumerateArray())
+            {
+                if (a.ValueKind != JsonValueKind.Object) continue;
+                string name = Str(a, "name"), url = Str(a, "browser_download_url");
+                if (IsSafeAssetName(name) && name.StartsWith("PredatorControl-Portable-", OIC) && name.EndsWith(".exe", OIC) && url.Length > 0)
+                    return (url, name, checksumUrl);
+            }
             foreach (var a in assets.EnumerateArray())
             {
                 if (a.ValueKind != JsonValueKind.Object) continue;
                 string name = Str(a, "name");
                 if (!IsSafeAssetName(name) || !name.EndsWith(".exe", OIC)) continue;
+                if (name.Contains("setup", OIC) || name.Contains("installer", OIC)) continue;
 
                 string url = Str(a, "browser_download_url");
                 if (url.Length == 0) continue;
@@ -169,6 +178,8 @@ namespace PredatorControlApp
                 throw new InvalidOperationException("Update metadata must identify a newer release.");
             if (info.TargetFileName != null && !IsSafeAssetName(info.TargetFileName))
                 throw new InvalidOperationException("Update metadata contains an unsafe asset name.");
+            if (info.TargetFileName?.Contains("setup", OIC) == true || info.TargetFileName?.Contains("installer", OIC) == true)
+                throw new InvalidOperationException("Installer packages must be installed manually; they cannot replace the application executable.");
         }
 
         internal static async Task CopyLimitedAsync(Stream source, Stream destination, long limit, CancellationToken token)
@@ -285,7 +296,7 @@ namespace PredatorControlApp
                     using var response = await GetTrustedAsync(http, info.DownloadUrl, deadline.Token);
                     using var src = await response.Content.ReadAsStreamAsync(deadline.Token);
                     using var dst = new FileStream(staged, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
-                    await CopyLimitedAsync(src, dst, 256L * 1024 * 1024, deadline.Token);
+                    await CopyLimitedAsync(src, dst, 512L * 1024 * 1024, deadline.Token);
                     await dst.FlushAsync(deadline.Token);
 
                     if (dst.Length < 100_000)

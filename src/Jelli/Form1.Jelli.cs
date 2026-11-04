@@ -27,6 +27,7 @@ public partial class Form1 : IJelliBackend
             _jelli?.Dispose();
             _jelli = null;
             if (_isClosing || IsDisposed) return;
+            if (ex is OperationCanceledException) { SetJelliEnabled(false); return; }
             Opacity = 1;
             Show();
             Program.Report(new InvalidOperationException("Jelli could not start. The native controls remain available. " + ex.Message, ex), false);

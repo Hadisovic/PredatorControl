@@ -18,6 +18,15 @@
     <EnableCompressionInSingleFile Condition="'$(SelfContained)' == 'true'">true</EnableCompressionInSingleFile>
   </PropertyGroup>
 
+  <ItemGroup Condition="'$(BrowserPayloadDirectory)' != ''">
+    <EmbeddedResource Include="../packaging/Runtime-Terms.txt" LogicalName="Browser.terms.txt" />
+    <EmbeddedResource Include="$(BrowserPayloadDirectory)/Browser.zip" LogicalName="Browser.zip" />
+    <EmbeddedResource Include="$(BrowserPayloadDirectory)/Browser.manifest.json" LogicalName="Browser.manifest.json" />
+  </ItemGroup>
+  <Target Name="RequireBrowserForDistribution" BeforeTargets="PrepareForPublish" Condition="'$(PublishSingleFile)' == 'true' and '$(RequireBundledBrowser)' == 'true'">
+    <Error Condition="'$(BrowserPayloadDirectory)' == ''" Text="Publish distributions through packaging/Build.ps1 to include the browser runtime." />
+  </Target>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3650.58" GeneratePathProperty="true" />
     <PackageReference Include="System.Management" Version="10.0.12" />

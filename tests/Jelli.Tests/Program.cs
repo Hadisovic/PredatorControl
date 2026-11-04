@@ -10,6 +10,8 @@ internal static class SmokeTest
     {
         string output = Path.Combine(AppContext.BaseDirectory, "jelli-smoke-result.txt");
         ApplicationConfiguration.Initialize();
+        // This guest integration harness represents an installer user who accepted its runtime terms.
+        BundledBrowser.AcceptTerms(installerAlreadyAccepted: true);
         using var pump = new Form { ShowInTaskbar = false, WindowState = FormWindowState.Minimized };
         pump.Shown += async (_, _) =>
         {

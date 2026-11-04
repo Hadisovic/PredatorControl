@@ -135,7 +135,18 @@ internal sealed class JelliHostForm : Form
         {
             AdditionalBrowserArguments = "--disable-gpu --disable-background-networking --disable-component-update --disable-extensions --disable-speech-api --js-flags=\"--max-old-space-size=16 --max-semi-space-size=1 --optimize-for-size\""
         };
-        var env = await CoreWebView2Environment.CreateAsync(userDataFolder: profile, options: options);
+        if (BundledBrowser.IsBundled) BundledBrowser.AcceptTerms();
+        string? browser = BundledBrowser.IsBundled ? await BundledBrowser.PrepareWithProgressAsync(this) : null;
+        if (browser != null)
+        {
+            // WebView2 environment overrides otherwise take precedence over explicit API arguments.
+            Environment.SetEnvironmentVariable("WEBVIEW2_BROWSER_EXECUTABLE_FOLDER", browser);
+            Environment.SetEnvironmentVariable("WEBVIEW2_USER_DATA_FOLDER", profile);
+            Environment.SetEnvironmentVariable("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", " ");
+            Environment.SetEnvironmentVariable("WEBVIEW2_WAIT_FOR_SCRIPT_DEBUGGER", null);
+            Environment.SetEnvironmentVariable("WEBVIEW2_PIPE_FOR_SCRIPT_DEBUGGER", null);
+        }
+        var env = await CoreWebView2Environment.CreateAsync(browserExecutableFolder: browser, userDataFolder: profile, options: options);
         var controller = env.CreateCoreWebView2ControllerOptions();
         controller.IsInPrivateModeEnabled = true;
         await _web.EnsureCoreWebView2Async(env, controller);

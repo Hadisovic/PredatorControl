@@ -151,6 +151,37 @@ namespace PredatorControlApp
         [STAThread]
         static void Main(string[] args)
         {
+            // Installer maintenance exits before UI hooks, telemetry or hardware preferences.
+            if (args.Length == 1 && args[0].StartsWith("--package-", StringComparison.Ordinal))
+            {
+                try
+                {
+                    switch (args[0])
+                    {
+                        case "--package-preflight":
+                            StartupInstallation.PrepareDestination();
+                            break;
+                        case "--package-install-startup":
+                        case "--package-install-manual":
+                            BundledBrowser.AcceptTerms(installerAlreadyAccepted: true);
+                            BundledBrowser.EnsureReady();
+                            StartupInstallation.InstallRunningImage();
+                            if (!Form1.SetStartupEnabled(args[0] == "--package-install-startup"))
+                                throw new IOException("Startup configuration failed. " + Form1.StartupFailureReason);
+                            break;
+                        case "--package-verify-browser":
+                            BundledBrowser.EnsureReady();
+                            break;
+                        case "--package-uninstall-check":
+                            if (!SecureLaunch.IsAdminOnly(Environment.ProcessPath!) || !Form1.CleanUninstall())
+                                throw new IOException("Startup cleanup could not be verified. Installed files were retained.");
+                            break;
+                        default: throw new ArgumentException("Unknown package command.");
+                    }
+                }
+                catch { Environment.ExitCode = 1; }
+                return;
+            }
             if (args.Length == 1 && args[0].Equals("--clean-uninstall", StringComparison.OrdinalIgnoreCase))
             {
                 Environment.ExitCode = Form1.CleanUninstall() ? 0 : 1;

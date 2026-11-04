@@ -1,0 +1,14 @@
+Predator Control 1.4.3 includes Microsoft .NET 10 and Microsoft Edge WebView2
+Fixed Version Runtime 156.0.4314.58 (Windows x64), including their dependencies.
+
+.NET is licensed under the MIT license. License and third-party notices:
+https://github.com/dotnet/runtime/blob/v10.0.14/LICENSE.TXT
+https://github.com/dotnet/runtime/blob/v10.0.14/THIRD-PARTY-NOTICES.TXT
+
+Microsoft Edge WebView2 Runtime is distributed under Microsoft's WebView2
+Runtime terms are included in WebView2-Runtime-Terms.html.
+https://developer.microsoft.com/en-us/microsoft-edge/webview2/
+The complete official runtime is retained, including its third-party licenses
+and show_third_party_software_licenses.bat. No browser files are removed.
+
+The Fixed Version browser is maintained through Predator Control releases.

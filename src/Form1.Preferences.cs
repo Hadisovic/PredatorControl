@@ -567,22 +567,25 @@ namespace PredatorControlApp
             }
         }
 
-        private static bool SetStartupEnabled(bool enable)
+        internal static bool SetStartupEnabled(bool enable)
         {
             lock (StartupLock)
             {
                 StartupFailureReason = "";
                 StartupWarningReason = "";
-                RemoveLegacyRunKey();
                 if (!enable)
                 {
+                    RemoveLegacyRunKey();
                     bool removed = RemoveStartupTasks(RunSchtasks, StartupTasksAbsent);
                     PredatorKeyHook.UnregisterAppKeyInRegistry();
                     return removed;
                 }
+                bool registrationStarted = false;
                 try
                 {
+                    if (BundledBrowser.IsBundled) BundledBrowser.EnsureReady();
                     string executable = StartupInstallation.InstallRunningImage();
+                    registrationStarted = true;
                     bool success = RegisterStartupPair(executable, RegisterStartupTask,
                         () => RemoveStartupTasks(RunSchtasks, StartupTasksAbsent));
                     if (!success)
@@ -597,6 +600,7 @@ namespace PredatorControlApp
                             : "Startup registration could not be verified and cleanup failed. Use cleanup before deleting the installed copy.";
                         return false;
                     }
+                    RemoveLegacyRunKey();
                     PredatorKeyHook.RegisterAppKeyInRegistry(executable);
                     // A shortcut is convenience only. Its failure must not roll back verified tasks.
                     StartupWarningReason = TryStartupShortcut(executable, StartupInstallation.CreateShortcut,
@@ -605,7 +609,7 @@ namespace PredatorControlApp
                 }
                 catch (Exception ex)
                 {
-                    bool removed = RemoveStartupTasks(RunSchtasks, StartupTasksAbsent);
+                    bool removed = !registrationStarted || RemoveStartupTasks(RunSchtasks, StartupTasksAbsent);
                     StartupFailureReason = ex.Message + (removed ? "" : " Existing startup tasks could not be confirmed removed; use cleanup before deleting the old executable.");
                     return false;
                 }

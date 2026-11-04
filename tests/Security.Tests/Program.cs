@@ -129,6 +129,7 @@ await Check("startup refuses the test image in a writable folder without changin
     return Task.FromResult(rejected && before.SequenceEqual(new FileInfo(path).GetAccessControl().GetSecurityDescriptorBinaryForm()));
 });
 await AuditChecks.Run(assembly, Check);
+await BundleChecks.Run(assembly, Check);
 Console.WriteLine($"{passed} passed, {failed} failed. Temporary data only; no hardware or elevated operations.");
 return failed == 0 ? 0 : 1;
 

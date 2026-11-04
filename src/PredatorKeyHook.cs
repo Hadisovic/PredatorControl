@@ -94,7 +94,7 @@ namespace PredatorControlApp
             if (_chassisFamily is AcerChassisFamily.Predator or AcerChassisFamily.Nitro)
             {
                 StartWmiWatchers();
-                RegisterAppKeyInRegistry();
+                // Persistent AppKey registration belongs to the explicit startup-toggle action.
             }
         }
 
@@ -311,42 +311,52 @@ namespace PredatorControlApp
             return CallNextHookEx(_hookId, nCode, wParam, lParam);
         }
 
+        private static readonly string[] AppKeyIds = { "18", "17" };
+        private const string AppKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Explorer\AppKey\";
+
         /// <summary>
-        /// Registers PredatorControlApp as the ShellExecute target for Windows AppKey 18 (Launch App 2 / Predator Key)
-        /// and AppKey 17 (Launch App 1). Cleans up AppKey 15/16.
+        /// Registers PredatorControlApp (quoted path) as the ShellExecute target for Windows AppKey 18 / 17.
+        /// The per-user key is always written; the machine-wide key only when the executable sits in an
+        /// administrator-only location, so a portable copy is never trusted system-wide.
         /// </summary>
-        public static void RegisterAppKeyInRegistry()
+        public static void RegisterAppKeyInRegistry(string? installedExecutable = null)
         {
             try
             {
-                string exePath = Application.ExecutablePath;
+                string exePath = installedExecutable ?? Environment.ProcessPath ?? Application.ExecutablePath;
+                string quoted = "\"" + exePath + "\"";
 
-                // Delete unwanted AppKeys 15 and 16 if previously written
-                string[] unwantedKeys = { "15", "16" };
-                foreach (var k in unwantedKeys)
+                foreach (var k in new[] { "15", "16" })
                 {
-                    try { Microsoft.Win32.Registry.CurrentUser.DeleteSubKeyTree($@"Software\Microsoft\Windows\CurrentVersion\Explorer\AppKey\{k}", false); } catch { }
-                    try { Microsoft.Win32.Registry.LocalMachine.DeleteSubKeyTree($@"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AppKey\{k}", false); } catch { }
+                    try { Microsoft.Win32.Registry.CurrentUser.DeleteSubKeyTree(AppKeyPath + k, false); } catch { }
+                    try { Microsoft.Win32.Registry.LocalMachine.DeleteSubKeyTree(AppKeyPath + k, false); } catch { }
                 }
 
-                // Register AppKey 18 (Launch App 2) & 17 (Launch App 1)
-                string[] appKeys = { "18", "17" };
-                foreach (var k in appKeys)
+                foreach (var k in AppKeyIds)
                 {
                     try
                     {
-                        using var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey($@"Software\Microsoft\Windows\CurrentVersion\Explorer\AppKey\{k}");
-                        key?.SetValue("ShellExecute", exePath);
+                        using var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(AppKeyPath + k);
+                        key?.SetValue("ShellExecute", quoted);
                     }
                     catch { }
                 }
 
-                foreach (var k in appKeys)
+                bool protectedPath = SecureLaunch.IsAdminOnly(exePath);
+                foreach (var k in AppKeyIds)
                 {
                     try
                     {
-                        using var key = Microsoft.Win32.Registry.LocalMachine.CreateSubKey($@"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AppKey\{k}");
-                        key?.SetValue("ShellExecute", exePath);
+                        if (protectedPath)
+                        {
+                            using var key = Microsoft.Win32.Registry.LocalMachine.CreateSubKey(AppKeyPath + k);
+                            key?.SetValue("ShellExecute", quoted);
+                        }
+                        else
+                        {
+                            // Never leave a user-writable path registered machine-wide.
+                            Microsoft.Win32.Registry.LocalMachine.DeleteSubKeyTree(AppKeyPath + k, false);
+                        }
                     }
                     catch { }
                 }
@@ -354,6 +364,15 @@ namespace PredatorControlApp
             catch { }
         }
 
+        /// <summary>Removes the AppKey registrations created by RegisterAppKeyInRegistry.</summary>
+        public static void UnregisterAppKeyInRegistry()
+        {
+            foreach (var k in AppKeyIds)
+            {
+                try { Microsoft.Win32.Registry.CurrentUser.DeleteSubKeyTree(AppKeyPath + k, false); } catch { }
+                try { Microsoft.Win32.Registry.LocalMachine.DeleteSubKeyTree(AppKeyPath + k, false); } catch { }
+            }
+        }
         public void Dispose()
         {
             if (!_disposed)

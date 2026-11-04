@@ -240,6 +240,7 @@ public partial class WmiController
             {
                 0x10 => HardwareWriteGate.InScope(HardwareFeature.LcdOverdrive, "acer-wmi-misc"),
                 0x0E => HardwareWriteGate.InScope(HardwareFeature.BootSound, "acer-wmi-misc"),
+                0x06 or 0x106 => HardwareWriteGate.InScope(HardwareFeature.BootSound, "acer-wmi-misc"),
                 0x0C or 0x0D => HardwareWriteGate.InScope(HardwareFeature.UsbCharging, "acer-wmi-misc"),
                 _ when (input & 0xFFUL) == 0x02 && ((input >> 8) & 0xFFUL) is >= 1 and <= 3 =>
                     HardwareWriteGate.InScope(HardwareFeature.GpuMux, "acer-agent"),

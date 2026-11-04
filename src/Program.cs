@@ -48,7 +48,7 @@ namespace PredatorControlApp
             get
             {
                 using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
-                return Path.Combine(SecureLaunch.ProgramDataDir, "logs",
+                return Path.Combine(SecureLaunch.ProtectedDataDir, "logs",
                     identity.User!.Value, "crash.log");
             }
         }
@@ -56,13 +56,14 @@ namespace PredatorControlApp
         internal static void Report(Exception ex, bool fatal)
         {
             string key = $"{ex.GetType().FullName}|{ex.StackTrace}";
+            string? writtenLog = null, loggingFailure = null;
 
             try
             {
                 var path = LogPath;
                 lock (LogLock)
                 {
-                    SecureLaunch.CreateAdminOnlyDirectory(SecureLaunch.ProgramDataDir);
+                    SecureLaunch.CreateAdminOnlyDirectory(SecureLaunch.ProtectedDataDir);
                     SecureLaunch.CreateAdminOnlyDirectory(Path.GetDirectoryName(Path.GetDirectoryName(path)!)!);
                     SecureLaunch.CreateAdminOnlyDirectory(Path.GetDirectoryName(path)!);
                     if (File.Exists(path))
@@ -71,9 +72,10 @@ namespace PredatorControlApp
                         if (new FileInfo(path).Length > 1024 * 1024) File.Delete(path);
                     }
                     File.AppendAllText(path, $"[{DateTime.Now:u}] {(fatal ? "FATAL" : "ERROR")} {ex}\n\n");
+                    writtenLog = path;
                 }
             }
-            catch { }
+            catch (Exception logError) { loggingFailure = logError.Message; }
 
             // Never display a modal dialog if Windows is shutting down / logging off
             if (Form1.IsShuttingDown || Environment.HasShutdownStarted) return;
@@ -88,7 +90,8 @@ namespace PredatorControlApp
             try
             {
                 MessageBox.Show(
-                    $"{(fatal ? "Fatal" : "Error")}: {ex.Message}\n\nLogged to:\n{LogPath}",
+                    $"{(fatal ? "Fatal" : "Error")}: {ex.Message}\n\n" +
+                    (writtenLog != null ? $"Logged to:\n{writtenLog}" : $"Could not write crash log:\n{loggingFailure}"),
                     "Predator Control", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             catch { }
@@ -128,14 +131,37 @@ namespace PredatorControlApp
             catch { }
         }
 
+        internal static bool IsDiagnosticPathAllowed(string path)
+        {
+            try
+            {
+                string full = Path.GetFullPath(path);
+                if (!full.EndsWith(".json", StringComparison.OrdinalIgnoreCase)) return false;
+                foreach (var folder in new[] { Environment.SpecialFolder.Windows, Environment.SpecialFolder.ProgramFiles,
+                    Environment.SpecialFolder.ProgramFilesX86, Environment.SpecialFolder.CommonApplicationData })
+                {
+                    string root = Environment.GetFolderPath(folder);
+                    if (root.Length > 0 && full.StartsWith(root.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase)) return false;
+                }
+                return true;
+            }
+            catch { return false; }
+        }
+
         [STAThread]
         static void Main(string[] args)
         {
+            if (args.Length == 1 && args[0].Equals("--clean-uninstall", StringComparison.OrdinalIgnoreCase))
+            {
+                Environment.ExitCode = Form1.CleanUninstall() ? 0 : 1;
+                return;
+            }
             if (args.Length == 2 && args[0] == "--diagnostics")
             {
                 // Read-only compatibility mode: bypass startup preferences, service optimization and UI hooks.
                 try
                 {
+                    if (!IsDiagnosticPathAllowed(args[1])) throw new ArgumentException("Diagnostics must be written to a .json file outside system folders.");
                     using var controller = new WmiController();
                     SafeFile.WriteText(Path.GetFullPath(args[1]), controller.ExportDiagnosticReport());
                 }

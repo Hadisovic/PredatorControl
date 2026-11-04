@@ -164,8 +164,8 @@ namespace PredatorControlApp
 
         private static string ReportDirectory()
         {
-            SecureLaunch.CreateAdminOnlyDirectory(SecureLaunch.ProgramDataDir);
-            string root = SecureLaunch.CreateAdminOnlyDirectory(Path.Combine(SecureLaunch.ProgramDataDir, "reports"));
+            SecureLaunch.CreateAdminOnlyDirectory(SecureLaunch.ProtectedDataDir);
+            string root = SecureLaunch.CreateAdminOnlyDirectory(Path.Combine(SecureLaunch.ProtectedDataDir, "reports"));
             using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
             var sid = identity.User ?? throw new UnauthorizedAccessException("No report owner is available.");
             return SecureLaunch.CreateAdminOnlyDirectory(Path.Combine(root, sid.Value), reader: sid);

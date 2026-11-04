@@ -62,3 +62,7 @@ release-*/
 __pycache__/
 .venv/
 hardcoded-scan.json
+
+# Documentation & Markdown files
+docs/
+*.md

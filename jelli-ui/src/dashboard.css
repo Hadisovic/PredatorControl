@@ -32,14 +32,22 @@
 .quick-actions span { font-size: 10px; color: var(--jelli-accent); }
 .quick-actions strong { font-size: 12px; font-weight: 500; margin: 4px 0 0; }
 .quick-actions small { position: absolute; top: 12px; right: 10px; color: #a4bac3; font-size: 13px; }
-.section-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; align-items: start; }
-.hardware-card, .dashboard-content > section { min-width: 0; border: 1px solid #acc7db15; border-radius: 10px; padding: 11px 12px; background: #ffffff03; margin: 0; }
-.card-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 7px; }
+.section-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; align-items: start; }
+.hardware-card, .dashboard-content > section { min-width: 0; border: 1px solid #acc7db15; border-radius: 10px; padding: 12px 14px; background: #ffffff03; margin: 0; }
+.card-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
 .card-heading h2 { margin: 0; font-size: 10px; letter-spacing: .1em; line-height: 1.6; }
 .card-heading .status-pill { max-width: none; white-space: nowrap; flex-shrink: 0; }
-.card-power .control-shell:not(.control-select) { flex-basis: 100%; }
 .card-indicator { flex-shrink: 0; width: 5px; height: 5px; background: var(--jelli-accent); opacity: .5; border-radius: 50%; }
-.card-rgb, .card-keyboard, .card-keyboardProfile, .card-games, .card-hardware { grid-column: 1 / -1; }
+.card-rgb, .card-keyboard, .card-keyboardProfile, .card-games, .card-power, .card-fans, .card-hardware, .card-app, .card-compatibility, .card-gpu, .card-display, .card-battery { grid-column: 1 / -1; }
+.card-power .control-button { flex: 1 1 calc(25% - 6px); min-width: 72px; }
+.card-fans .control-button, .card-gpu .control-button { flex: 1 1 calc(33.33% - 6px); min-width: 80px; }
+.card-display .control-button { flex: 1 1 calc(50% - 4px); min-width: 90px; }
+.card-battery .control-button, .card-hardware .control-button, .card-games .control-button, .card-app .control-shell, .card-compatibility .control-shell { flex-basis: 100%; }
+.card-power .control-shell .mode, .card-fans .control-shell .mode, .card-hardware .control-shell .mode, .card-games .control-shell .mode, .card-gpu .control-shell .mode, .card-display .control-shell .mode, .card-battery .control-shell .mode { min-height: 36px; padding: 9px 12px; font-size: 11.5px; border-radius: 8px; }
+.card-gpu .toggle-row, .card-display .toggle-row, .card-battery .toggle-row, .card-hardware .toggle-row, .card-fans .toggle-row, .card-games .toggle-row { min-height: 36px; font-size: 12px; padding: 7px 2px; }
+.card-app .toggle-row { min-height: 40px; font-size: 13px; padding: 8px 2px; }
+.card-app .control-shell .mode, .card-compatibility .control-shell .mode { min-height: 38px; padding: 10px 14px; font-size: 12px; border-radius: 8px; }
+.game-hud-card { margin-top: 8px; }
 .section-intro, .keyboard-intro { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 9px; padding: 3px 2px 8px; border-bottom: 1px solid #ffffff0c; }
 .compact-hint, .cooling-state { color: #9cb1bc; font-size: 10px; }
 .inline-metrics { display: flex; gap: 16px; }
@@ -116,3 +124,34 @@
 .single-color-keyboard > span { display: block; text-align: right; font-size: 8px; letter-spacing: .1em; margin-top: 6px; }
 
 .toggle-state { margin-left: auto; color: #bdcdd3; font-size: 10px; }
+
+/* Shared dashboard rhythm; explicit RGB groups never share a wrapping button row. */
+.dashboard .dashboard-content { padding: 12px; }
+.dashboard .section-grid { gap: 12px; }
+.dashboard .hardware-card, .dashboard .dashboard-content > section { padding: 14px; margin: 0; }
+.dashboard .dashboard-content > section + section { margin-top: 12px; }
+.dashboard .card-heading { gap: 8px; margin-bottom: 8px; }
+.dashboard .controls, .dashboard .segments { gap: 8px; }
+.dashboard .control-shell .mode, .dashboard .toggle-row, .dashboard .unknown-toggle,
+.dashboard .field, .dashboard .segments button, .dashboard .launch { min-height: 36px; }
+.dashboard .toggle-row, .dashboard .unknown-toggle { gap: 8px; padding: 8px 0; }
+.dashboard .toggle-row > span:first-child, .dashboard .field > span { min-width: 0; overflow-wrap: anywhere; }
+.dashboard .field { gap: 8px; margin: 0; align-items: center; }
+.dashboard select, .dashboard input[type=color] { flex-shrink: 0; min-height: 36px; }
+.dashboard .control-range { flex-basis: calc(50% - 4px); }
+.dashboard .control-shell .mode { padding: 8px; height: auto; overflow-wrap: anywhere; }
+.dashboard .keyboard-preview { margin-bottom: 12px; }
+.dashboard .rgb-controls { display: flex; flex-direction: column; gap: 12px; }
+.dashboard .rgb-zones, .dashboard .rgb-presets { display: grid; gap: 8px; align-items: stretch; }
+.dashboard .rgb-presets { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.dashboard .rgb-zones .mode { padding: 6px 3px; font-size: 10px; height: 100%; }
+.dashboard .rgb-presets .mode { height: 100%; }
+.dashboard .rgb-zones .control-shell { min-width: 0; }
+.dashboard .new-profile-prompt { flex-wrap: wrap; gap: 8px !important; }
+.dashboard .new-profile-prompt input { min-width: 0; min-height: 36px; }
+.dashboard .quick-actions { gap: 8px; margin: 12px 0; }
+.dashboard .keyboard-intro, .dashboard .section-intro { margin-bottom: 12px; gap: 8px; }
+
+.dashboard .telemetry-cards { gap: 8px; }
+.dashboard .dashboard-content > .section-grid + section { margin-top: 12px; }
+.dashboard .hardware-card button:not(.keyboard-preview button) { min-height: 36px; }

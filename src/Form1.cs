@@ -124,6 +124,13 @@ namespace PredatorControlApp
         private static string FormatTemp(int? temp) => (temp.HasValue && temp.Value >= 0 && temp.Value < _cachedTemps.Length) ? _cachedTemps[temp.Value] : (temp.HasValue ? $"{temp.Value}\u00b0C" : "--\u00b0C");
         private DarkScrollPanel _contentPanel = null!;
         private Panel _pnlTitle = null!;
+        private Panel _pnlTabBar = null!;
+        private Panel? _tabBarSeparator;
+        private Panel _pnlTabContainer = null!;
+        private readonly PredatorButton[] _tabBtns = new PredatorButton[5];
+        private readonly DarkScrollPanel[] _tabPanels = new DarkScrollPanel[5];
+        private int _activeTabIndex;
+        private PredatorButton? _btnExportCompatibility;
 
         private bool? _isPluggedIn;
         private bool? _pendingPluggedIn;
@@ -359,6 +366,8 @@ namespace PredatorControlApp
 
             LoadMemory();
             ApplyCapabilityUi();
+            PerformCustomLayout();
+            AdjustWindowHeightToActiveTab();
             StartFanSafetyWatchdog();
 
             try
@@ -752,6 +761,7 @@ namespace PredatorControlApp
                 {
                     foreach (var svcName in OemServiceManager.OptimizationCandidates)
                     {
+                        if (!OemServiceManager.CanManageService(svcName)) continue;
                         SetServiceStartup(svcName, disable: false);
                         StartServiceSafe(svcName);
                     }
@@ -985,6 +995,8 @@ namespace PredatorControlApp
             if (WindowState == FormWindowState.Minimized)
                 WindowState = FormWindowState.Normal;
 
+            PerformCustomLayout();
+            AdjustWindowHeightToActiveTab();
             ShowWindow(Handle, SW_RESTORE);
             SetForegroundWindow(Handle);
             TopMost = true;

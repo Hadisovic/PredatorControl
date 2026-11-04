@@ -32,6 +32,9 @@ internal sealed class JelliHostForm : Form
     internal CoreWebView2 Browser => _web.CoreWebView2;
     internal bool Ready => _ready;
     internal bool DashboardOpen => _surface == "dashboard";
+    internal static string BrowserProfilePath(bool persist) => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PredatorControl",
+        persist ? "WebView2-v3" : "WebView2-Test-v3");
     internal JelliHostForm(IJelliBackend backend, bool persist = true)
     {
         _backend = backend;
@@ -77,8 +80,8 @@ internal sealed class JelliHostForm : Form
                 ?? throw new InvalidOperationException("The native loader resource is missing.");
             using var bytes = new MemoryStream();
             stream.CopyTo(bytes);
-            SecureLaunch.CreateAdminOnlyDirectory(SecureLaunch.ProgramDataDir);
-            string root = SecureLaunch.CreateAdminOnlyDirectory(Path.Combine(SecureLaunch.ProgramDataDir, "native"));
+            SecureLaunch.CreateAdminOnlyDirectory(SecureLaunch.ProtectedDataDir);
+            string root = SecureLaunch.CreateAdminOnlyDirectory(Path.Combine(SecureLaunch.ProtectedDataDir, "native"));
             byte[] resource = bytes.ToArray();
             byte[] hash = System.Security.Cryptography.SHA256.HashData(resource);
             string dir = SecureLaunch.CreateAdminOnlyDirectory(Path.Combine(root, Convert.ToHexString(hash)));
@@ -125,19 +128,17 @@ internal sealed class JelliHostForm : Form
         if (!Visible) Show();
         await Task.Yield(); // pump message loop so HWND is visible to the OS
 
-        // A user-writable browser profile can persist scripts/cache across an elevation boundary.
-        SecureLaunch.CreateAdminOnlyDirectory(SecureLaunch.ProgramDataDir);
-        string profileRoot = SecureLaunch.CreateAdminOnlyDirectory(Path.Combine(SecureLaunch.ProgramDataDir, "webview"));
-        using var profileIdentity = System.Security.Principal.WindowsIdentity.GetCurrent();
-        string profileUser = SecureLaunch.CreateAdminOnlyDirectory(Path.Combine(profileRoot,
-            profileIdentity.User!.Value));
-        string profile = SecureLaunch.CreateAdminOnlyDirectory(Path.Combine(profileUser, _persist ? "v2" : "test-v2"));
+        // WebView2's sandboxed processes need a writable per-user UDF. Admin-only storage
+        // is reserved for the native loader, never the browser cache. Do not reuse old profiles.
+        string profile = BrowserProfilePath(_persist);
         var options = new CoreWebView2EnvironmentOptions
         {
             AdditionalBrowserArguments = "--disable-gpu --disable-background-networking --disable-component-update --disable-extensions --disable-speech-api --js-flags=\"--max-old-space-size=16 --max-semi-space-size=1 --optimize-for-size\""
         };
         var env = await CoreWebView2Environment.CreateAsync(userDataFolder: profile, options: options);
-        await _web.EnsureCoreWebView2Async(env);
+        var controller = env.CreateCoreWebView2ControllerOptions();
+        controller.IsInPrivateModeEnabled = true;
+        await _web.EnsureCoreWebView2Async(env, controller);
         var core = _web.CoreWebView2;
         try { core.MemoryUsageTargetLevel = CoreWebView2MemoryUsageTargetLevel.Low; } catch { }
         core.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.All);

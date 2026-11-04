@@ -95,13 +95,23 @@ internal static class SafeFile
         catch { parent.Dispose(); throw; }
     }
 
-    internal static string ReadText(string path, int limit = 1024 * 1024)
+    internal static FileStream OpenRead(string path)
     {
         string fullPath = Path.GetFullPath(path);
         using var parent = OpenDirectory(fullPath, create: false);
-        using var handle = Open(Path.GetFileName(fullPath), parent, directory: false, create: false);
-        if (!GetFileInformationByHandle(handle, out var info) || info.Links != 1) throw new IOException("The data file must have one link.");
-        using var file = new FileStream(handle, FileAccess.Read);
+        var handle = Open(Path.GetFileName(fullPath), parent, directory: false, create: false);
+        try
+        {
+            if (!GetFileInformationByHandle(handle, out var info) || info.Links != 1)
+                throw new IOException("The data file must have one link.");
+            return new FileStream(handle, FileAccess.Read);
+        }
+        catch { handle.Dispose(); throw; }
+    }
+
+    internal static string ReadText(string path, int limit = 1024 * 1024)
+    {
+        using var file = OpenRead(path);
         if (file.Length > limit) throw new IOException("The data file is too large.");
         using var reader = new StreamReader(file);
         char[] text = new char[limit + 1];

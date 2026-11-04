@@ -1,3 +1,5 @@
+using System.Drawing;
+using System.Windows.Forms;
 using System.Diagnostics;
 using System.IO.Pipes;
 using System.Reflection;
@@ -22,9 +24,31 @@ internal static class AuditChecks
         bool Rejects(MethodInfo method, object?[] args)
         {
             try { method.Invoke(null, args); return false; }
-            catch (TargetInvocationException ex) when (ex.InnerException is ArgumentException or InvalidOperationException or IOException) { return true; }
+            catch (TargetInvocationException ex) when (ex.InnerException is ArgumentException or InvalidOperationException or IOException or UnauthorizedAccessException) { return true; }
         }
         var ipc = typeof(SingleInstanceIpc);
+        await check("WebView2 browser data remains writable per-user and separate from protected native storage", () =>
+        {
+            var profile = assembly.GetType("PredatorControlApp.JelliHostForm")!.GetMethod("BrowserProfilePath", Static)!;
+            string userData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData) + Path.DirectorySeparatorChar;
+            string production = (string)profile.Invoke(null, [true])!;
+            string isolatedTest = (string)profile.Invoke(null, [false])!;
+            return Task.FromResult(production.StartsWith(userData, StringComparison.OrdinalIgnoreCase) &&
+                isolatedTest.StartsWith(userData, StringComparison.OrdinalIgnoreCase) && production != isolatedTest);
+        });
+        await check("Jelli and other privileged caches use a protected root independent of legacy ProgramData", () =>
+        {
+            var secure = assembly.GetType("PredatorControlApp.SecureLaunch")!;
+            var field = secure.GetField("ProtectedDataDir", Static) ?? secure.GetField("ProgramDataDir", Static)!;
+            string path = (string)field.GetValue(null)!;
+            string programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+            string legacy = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "PredatorControl");
+            var protectedDirectory = secure.GetMethod("IsAdminOnlyDirectory", Static)!;
+            return Task.FromResult(path.StartsWith(programFiles + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) &&
+                !path.StartsWith(legacy + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) &&
+                !path.Equals(legacy, StringComparison.OrdinalIgnoreCase) &&
+                (bool)protectedDirectory.Invoke(null, [programFiles])!);
+        });
         await check("GUI and headless startup share an exclusive mutex without using the live app name", () =>
         {
             var acquire = ipc.GetMethod("TryAcquireHardwareLock", Static)!;
@@ -271,6 +295,127 @@ internal static class AuditChecks
                 return Task.FromResult(BatteryHealthMonitor.GetBatteryHealth() == null);
             }
             finally { stamp.SetValue(null, previousStamp); cached.SetValue(null, previousCached); }
+        });
+        await check("diagnostics output path must be a .json file outside system folders", () =>
+        {
+            var allowed = assembly.GetType("PredatorControlApp.Program")!.GetMethod("IsDiagnosticPathAllowed", Static)!;
+            bool Ok(string p) => (bool)allowed.Invoke(null, [p])!;
+            string windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+            string programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+            return Task.FromResult(Ok(Path.Combine(Path.GetTempPath(), "report.json")) &&
+                !Ok(Path.Combine(windows, "System32", "drivers", "etc", "hosts")) && !Ok(Path.Combine(programFiles, "x.json")) &&
+                !Ok(Path.Combine(Path.GetTempPath(), "report.exe")));
+        });
+        await check("service image paths parse quoted and unquoted forms without trusting a fake .exe folder", () =>
+        {
+            var parse = assembly.GetType("PredatorControlApp.OemServiceManager")!.GetMethod("ParseExePath", Static)!;
+            string dir = Path.Combine(Path.GetTempPath(), "PC-parse-" + Guid.NewGuid().ToString("N") + ".exe.d");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                string real = Path.Combine(dir, "svc.exe");
+                File.WriteAllText(real, "x");
+                string P(string s) => (string)parse.Invoke(null, [s])!;
+                return Task.FromResult(P("\"" + real + "\" -arg") == real && P(real + " -arg") == real &&
+                    P(Path.Combine(dir, "missing.exe") + " -arg") == "" && P("\"unterminated") == "");
+            }
+            finally { Directory.Delete(dir, true); }
+        });
+        await check("USB debug file writer and executable ACL mutation helpers are absent", () =>
+        {
+            var secure = assembly.GetType("PredatorControlApp.SecureLaunch")!;
+            return Task.FromResult(typeof(WmiController).GetMethod("LogUsbTrace", Static) == null &&
+                new[] { "HardenFile", "UnhardenFile", "IsFileLocked" }.All(n => secure.GetMethod(n, Static) == null));
+        });
+        await check("startup cleanup checks both tasks and fails closed on incomplete or unknown removal", () =>
+        {
+            var remove = typeof(Form1).GetMethod("RemoveStartupTasks", Static)!;
+            var commands = new List<string>();
+            bool Run(bool absent, int deleteExit)
+            {
+                commands.Clear();
+                Func<string, int> run = command => { commands.Add(command); return deleteExit; };
+                bool result = (bool)remove.Invoke(null, [run, (Func<bool>)(() => absent)])!;
+                if (commands.Count != 2 || !commands[0].Contains("PredatorControlBoot") ||
+                    !commands[1].Contains("\"PredatorControl\"")) throw new Exception("Both tasks must be processed");
+                return result;
+            }
+            if (!Run(true, 0) || !Run(true, 1) || Run(false, 0) || Run(false, 1)) return Task.FromResult(false);
+            Func<string, int> noop = _ => 0;
+            Func<bool> unavailable = () => throw new IOException("Simulated scheduler failure");
+            return Task.FromResult(!(bool)remove.Invoke(null, [noop, unavailable])!);
+        });
+        await check("native image identity accepts the pinned process image and rejects replacement bytes", () =>
+        {
+            var installer = assembly.GetType("PredatorControlApp.StartupInstallation")!;
+            var verify = installer.GetMethod("VerifyRunningImage", Static)!;
+            var open = assembly.GetType("PredatorControlApp.SafeFile")!.GetMethod("OpenRead", Static)!;
+            using (var live = (FileStream)open.Invoke(null, [Environment.ProcessPath!])!) verify.Invoke(null, [live]);
+            string dir = Path.Combine(Path.GetTempPath(), "PC-identity-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            try
+            {
+                string replacement = Path.Combine(dir, "replacement.exe");
+                File.Copy(Environment.ProcessPath!, replacement);
+                using (var copy = (FileStream)open.Invoke(null, [replacement])!)
+                {
+                    if (!Rejects(verify, [copy])) return Task.FromResult(false);
+                    try { File.Move(replacement, replacement + ".old"); return Task.FromResult(false); }
+                    catch (IOException) { }
+                }
+                File.Move(replacement, replacement + ".old");
+                if (!CreateHardLink(replacement, replacement + ".old", IntPtr.Zero)) throw new IOException("Fixture hardlink failed");
+                if (!Rejects(open, [replacement])) return Task.FromResult(false);
+                using var source = (FileStream)open.Invoke(null, [Environment.ProcessPath!])!;
+                return Task.FromResult(Rejects(installer.GetMethod("InstallPinnedImage", Static)!, [source, dir]));
+            }
+            finally { Directory.Delete(dir, true); }
+        });
+        await check("startup task pair rolls back required registration failures independently of shortcuts", () =>
+        {
+            var pair = typeof(Form1).GetMethod("RegisterStartupPair", Static)!;
+            foreach (int failure in new[] { 0, 1, 2 })
+            {
+                int calls = 0, rollbacks = 0;
+                Func<string, string, bool, bool> register = (name, xml, system) =>
+                {
+                    calls++;
+                    if (!xml.Contains(@"C:\Program Files\PredatorControl\app.exe") || system != (calls == 2) ||
+                        xml.Contains("<LogonType>ServiceAccount</LogonType>") || (system && !xml.Contains("S-1-5-18"))) throw new Exception("Wrong task target/principal");
+                    return calls != failure;
+                };
+                Func<bool> rollback = () => { rollbacks++; return true; };
+                bool result = (bool)pair.Invoke(null, [@"C:\Program Files\PredatorControl\app.exe", register, rollback])!;
+                if (result != (failure == 0) || rollbacks != (failure == 0 ? 0 : 1)) return Task.FromResult(false);
+            }
+            return Task.FromResult(true);
+        });
+        await check("optional shortcut denial or exception becomes a specific warning without failing startup", () =>
+        {
+            var method = typeof(Form1).GetMethod("TryStartupShortcut", Static)!;
+            const string executable = @"C:\Program Files\PredatorControl\app.exe";
+            string Run(Func<string, bool> create, Func<string> reason) => (string)method.Invoke(null, [executable, create, reason])!;
+            if (Run(_ => true, () => throw new Exception("Must not read failure on success")).Length != 0) return Task.FromResult(false);
+            string denied = Run(_ => false, () => "Start Menu permission fixture denied");
+            string exception = Run(_ => throw new IOException("Shortcut save fixture failed"), () => "");
+            string unspecified = Run(_ => false, () => "");
+            return Task.FromResult(denied.Contains("Start Menu permission fixture denied") && denied.Contains(executable) &&
+                exception.Contains("Shortcut save fixture failed") && unspecified.Length > 0);
+        });
+        await check("Classic chrome reserves the title and tab bars at every supported scale", () =>
+        {
+            var layout = typeof(Form1).GetMethod("LayoutClassicChrome", Static)!;
+            foreach (float scale in new[] { 1f, 1.25f, 1.5f, 2f })
+            foreach (int height in new[] { 320, 480, 900 })
+            {
+                using var form = new Form { ClientSize = new Size((int)(540 * scale), (int)(height * scale)) };
+                using var title = new Panel(); using var tabs = new Panel(); using var content = new Panel();
+                form.Controls.Add(content); form.Controls.Add(tabs); form.Controls.Add(title);
+                layout.Invoke(null, [title, tabs, content, form.ClientSize, (int)(40 * scale), (int)(42 * scale)]);
+                if (content.Top != tabs.Bottom || tabs.Top != title.Bottom || content.Bottom != form.ClientSize.Height || content.Height <= 0)
+                    return Task.FromResult(false);
+            }
+            return Task.FromResult(true);
         });
         await check("OEM reply parsers complete without a blocked UI synchronization context", () =>
         {

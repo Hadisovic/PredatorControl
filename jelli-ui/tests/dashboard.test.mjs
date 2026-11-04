@@ -1,18 +1,19 @@
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
-import {tabs, restoreTab, sectionTab, canPreviewZones, deviceBrand, powerProfileSummary} from '../src/bridge/dashboard.ts'
+import {tabs, restoreTab, sectionTab, canPreviewZones, deviceBrand, powerProfileSummary, groupRgbControls} from '../src/bridge/dashboard.ts'
 
 test('old tab preferences migrate without dropping keyboard navigation', () => {
   assert.equal(restoreTab('System'), 'Overview')
+  assert.equal(restoreTab('Cooling'), 'Hardware')
   assert.equal(restoreTab('Lighting'), 'Keyboard')
   assert.equal(restoreTab('unrecognised'), 'Overview')
   tabs.forEach(tab => assert.equal(restoreTab(tab), tab))
 })
 test('every backend section has a deliberate dashboard home', () => {
-  for (const id of ['power', 'fans']) assert.equal(sectionTab(id), 'Cooling')
+  for (const id of ['power', 'fans', 'hardware']) assert.equal(sectionTab(id), 'Hardware')
   for (const id of ['keyboard', 'rgb', 'keyboardProfile']) assert.equal(sectionTab(id), 'Keyboard')
   for (const id of ['battery', 'display', 'gpu']) assert.equal(sectionTab(id), 'Overview')
-  for (const id of ['hardware', 'app']) assert.equal(sectionTab(id), 'Settings')
+  for (const id of ['app', 'compatibility']) assert.equal(sectionTab(id), 'Settings')
   assert.equal(sectionTab('games'), 'Games')
 })
 test('binary and unknown keyboards cannot show fake RGB zones', () => {
@@ -56,4 +57,17 @@ test('Nitro performance selector tracks active profile and disabled AC-only mode
   assert.equal(onBattery.activeLabel, 'Default')
   assert.deepEqual(onBattery.enabledIds, ['power.balanced'])
   assert.deepEqual(onBattery.disabledIds, ['power.quiet', 'power.performance'])
+})
+
+test('RGB zones have a dedicated ordered row and presets retain backend identity', () => {
+  const controls = ['rgb.preset0','rgb.zone3','rgb.mode','rgb.zone1','rgb.all','rgb.zone0','rgb.zone2','rgb.preset1','rgb.color','rgb.profile','rgb.profile.save'].map(id => ({id, enabled: id !== 'rgb.zone1', value: id === 'rgb.all'}))
+  const groups = groupRgbControls(controls, 4)
+  assert.deepEqual(groups.zones.map(c => c.id), ['rgb.all','rgb.zone0','rgb.zone1','rgb.zone2','rgb.zone3'])
+  assert.deepEqual(groups.presets.map(c => c.id), ['rgb.preset0','rgb.preset1'])
+  assert.equal(groups.zones[2], controls.find(c => c.id === 'rgb.zone1'))
+  assert.equal(groups.zones[0].value, true)
+  assert.deepEqual(groups.remaining.map(c => c.id), ['rgb.color','rgb.profile','rgb.profile.save'])
+  assert.deepEqual(groupRgbControls(controls, 2).zones.map(c => c.id), ['rgb.all','rgb.zone0','rgb.zone1'])
+  assert.deepEqual(groupRgbControls(controls, 0).zones, [])
+  assert.deepEqual(groupRgbControls(controls, 5).zones, [])
 })

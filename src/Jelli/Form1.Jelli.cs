@@ -79,6 +79,8 @@ public partial class Form1 : IJelliBackend
         if (_wmi.Capabilities.SupportsCoolBoost && _switchCoolBoost != null)
         {
             fans.Add(Toggle("fans.coolboost", "Acer CoolBoost", _switchCoolBoost));
+            if (_switchAutoCoolBoost != null)
+                fans.Add(Toggle("hardware.autocoolboost", "Auto-CoolBoost on Perf / Turbo", _switchAutoCoolBoost));
         }
         if (_wmi.Capabilities.CanWrite(HardwareFeature.FanManual) && GetCurrentFanByte() == 3)
         {
@@ -254,8 +256,6 @@ public partial class Form1 : IJelliBackend
             hwControls.Add(Toggle("hardware.bootsound", "Startup Animation & Sound", _switchBootSound));
         if (_switchUsbCharging != null)
             hwControls.Add(Toggle("hardware.usbcharging", "Power-off USB charging", _switchUsbCharging));
-        if (_switchAutoCoolBoost != null)
-            hwControls.Add(Toggle("hardware.autocoolboost", "Auto-CoolBoost on Perf / Turbo", _switchAutoCoolBoost));
 
         // Hardware Key Actions (Image 2)
         if (_cboTurboAction != null)
@@ -271,10 +271,12 @@ public partial class Form1 : IJelliBackend
 
         sections.Add(new("hardware", "Hardware", hwControls.ToArray()));
         sections.Add(new("games", "Game Sync", [Toggle("games.enabled", "Apply profiles when games launch", _switchGameSync), Button("games.configure", "Configure game profiles ↗", _btnConfigureGames)]));
-        sections.Add(new("app", "Application", [Toggle("app.startup", "Start with Windows", _switchStartWithWindows), Button("app.updates", "Check for updates", _btnCheckUpdates),
-            Button("app.teal", "Teal", _btnThemeTeal), Button("app.crimson", "Crimson", _btnThemeCrimson), Button("app.oled", "OLED", _btnThemeOled)]));
-        _jelliActions["compatibility.export"] = _ => ExportCompatibility();
-        sections.Add(new("compatibility", "Device compatibility", [new("compatibility.export", "Export privacy-safe compatibility report", "button", false)]));
+        sections.Add(new("app", "Application", [
+            Toggle("app.startup", "Start with Windows", _switchStartWithWindows),
+            Button("app.updates", "Check for updates", _btnCheckUpdates)
+        ]));
+        _jelliActions["compatibility.export"] = _ => { if (InvokeRequired) BeginInvoke(new Action(ExportCompatibility)); else ExportCompatibility(); };
+        sections.Add(new("compatibility", "Device compatibility", [new("compatibility.export", "Export compatibility report to JSON", "button", false)]));
         sections.Add(new("keyboardProfile", "Keyboard compatibility", Array.Empty<JelliControl>()));
         _jelliMenuActions.Clear();
         JelliMenu[] Menu(ToolStripItemCollection items, string prefix) => items.OfType<ToolStripMenuItem>().Where(i => i.Available).Select((item, index) => {

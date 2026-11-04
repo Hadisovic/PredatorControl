@@ -21,7 +21,14 @@ namespace PredatorControlApp
             var theme = ThemeManager.Current;
             BackColor = theme.FormBg;
             _pnlTitle.BackColor = theme.TitleBarBg;
+            if (_pnlTabBar != null) _pnlTabBar.BackColor = theme.TitleBarBg;
+            if (_pnlTabContainer != null) _pnlTabContainer.BackColor = theme.FormBg;
             _contentPanel.BackColor = theme.FormBg;
+            if (_tabPanels != null)
+            {
+                foreach (var p in _tabPanels)
+                    if (p != null) p.BackColor = theme.FormBg;
+            }
             if (_pnlCustomFan != null) _pnlCustomFan.BackColor = theme.FormBg;
 
             var activeThemeBtn = theme.Mode switch
@@ -317,11 +324,6 @@ namespace PredatorControlApp
                     ? limited ? "80% limit confirmed" : "Full charging confirmed" : "Charge-limit state N/A";
                 _isUpdatingBattery = false;
 
-                if (IsStartupEnabled())
-                {
-                    Task.Run(() => { try { SetStartupEnabled(true); } catch { } });
-                }
-
                 // LCD Overdrive
                 int savedLcdOverdrive = GetInt(key, "LcdOverdrive", 0, 0, 1);
                 if (_switchLcdOverdrive != null) _switchLcdOverdrive.Checked = (savedLcdOverdrive == 1);
@@ -517,32 +519,167 @@ namespace PredatorControlApp
         private const string StartupTaskName = "PredatorControl";
         private const string BootTaskName = "PredatorControlBoot";
 
+        private static readonly object StartupLock = new();
+        internal static string StartupFailureReason { get; private set; } = "";
+        internal static string StartupWarningReason { get; private set; } = "";
+
+        private static string _startupStatusReason = "";
         private static bool IsStartupEnabled()
         {
-            return RunSchtasks($"/Query /TN \"{StartupTaskName}\"") == 0;
+            _startupStatusReason = "";
+            bool Missing(string reason) { _startupStatusReason = reason; return false; }
+            object? service = null, folder = null, logon = null, boot = null;
+            try
+            {
+                service = Activator.CreateInstance(Type.GetTypeFromProgID("Schedule.Service")!);
+                ((dynamic)service!).Connect();
+                folder = ((dynamic)service).GetFolder(@"\");
+                logon = ((dynamic)folder).GetTask(StartupTaskName);
+                boot = ((dynamic)folder).GetTask(BootTaskName);
+                string? executable = null;
+                foreach (var pair in new[] { (Task: logon, Argument: "-hidden"), (Task: boot, Argument: "--boot-limit") })
+                {
+                    dynamic task = pair.Task;
+                    dynamic definition = task.Definition;
+                    if (!(bool)task.Enabled || (int)definition.Actions.Count != 1 || (int)definition.Principal.RunLevel != 1) return Missing("Task disabled or unexpected actions/run level.");
+                    string principal = definition.Principal.UserId;
+                    using var identity = WindowsIdentity.GetCurrent();
+                    var actualSid = principal.StartsWith("S-1-", StringComparison.OrdinalIgnoreCase)
+                        ? new SecurityIdentifier(principal) : (SecurityIdentifier)new NTAccount(principal).Translate(typeof(SecurityIdentifier));
+                    var expectedSid = pair.Argument == "--boot-limit"
+                        ? new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null) : identity.User!;
+                    if (!actualSid.Equals(expectedSid)) return Missing("Unexpected task account: " + principal);
+                    dynamic action = definition.Actions[1];
+                    string path = action.Path;
+                    if ((int)action.Type != 0 || (string)action.Arguments != pair.Argument || !SecureLaunch.IsAdminOnly(path) ||
+                        !string.Equals((string)action.WorkingDirectory, Path.GetDirectoryName(path), StringComparison.OrdinalIgnoreCase)) return Missing("Task action or protected path mismatch: " + path);
+                    if (executable != null && !executable.Equals(path, StringComparison.OrdinalIgnoreCase)) return Missing("Task executable paths differ.");
+                    executable = path;
+                }
+                return true;
+            }
+            catch (Exception ex) { return Missing("Cannot read task configuration: " + ex.Message); }
+            finally
+            {
+                foreach (var item in new[] { boot, logon, folder, service })
+                    if (item != null && System.Runtime.InteropServices.Marshal.IsComObject(item))
+                        System.Runtime.InteropServices.Marshal.FinalReleaseComObject(item);
+            }
         }
 
         private static bool SetStartupEnabled(bool enable)
         {
-            RemoveLegacyRunKey();
-
-            if (!enable)
+            lock (StartupLock)
             {
-                RunSchtasks($"/Delete /TN \"{BootTaskName}\" /F");
-                return RunSchtasks($"/Delete /TN \"{StartupTaskName}\" /F") == 0 || !IsStartupEnabled();
+                StartupFailureReason = "";
+                StartupWarningReason = "";
+                RemoveLegacyRunKey();
+                if (!enable)
+                {
+                    bool removed = RemoveStartupTasks(RunSchtasks, StartupTasksAbsent);
+                    PredatorKeyHook.UnregisterAppKeyInRegistry();
+                    return removed;
+                }
+                try
+                {
+                    string executable = StartupInstallation.InstallRunningImage();
+                    bool success = RegisterStartupPair(executable, RegisterStartupTask,
+                        () => RemoveStartupTasks(RunSchtasks, StartupTasksAbsent));
+                    if (!success)
+                    {
+                        if (StartupFailureReason.Length == 0) StartupFailureReason = "Installation or startup registration failed; startup was not enabled.";
+                        return false;
+                    }
+                    if (!IsStartupEnabled())
+                    {
+                        bool removed = RemoveStartupTasks(RunSchtasks, StartupTasksAbsent);
+                        StartupFailureReason = removed ? "Startup registration could not be verified and was rolled back: " + _startupStatusReason
+                            : "Startup registration could not be verified and cleanup failed. Use cleanup before deleting the installed copy.";
+                        return false;
+                    }
+                    PredatorKeyHook.RegisterAppKeyInRegistry(executable);
+                    // A shortcut is convenience only. Its failure must not roll back verified tasks.
+                    StartupWarningReason = TryStartupShortcut(executable, StartupInstallation.CreateShortcut,
+                        () => StartupInstallation.ShortcutFailureReason);
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    bool removed = RemoveStartupTasks(RunSchtasks, StartupTasksAbsent);
+                    StartupFailureReason = ex.Message + (removed ? "" : " Existing startup tasks could not be confirmed removed; use cleanup before deleting the old executable.");
+                    return false;
+                }
             }
+        }
 
-            // Tasks run with elevated rights, so they may only point at a binary in an admin-only location.
-            string? taskExe = SecureLaunch.PrepareTaskBinary(out string taskExeReason);
-            if (taskExe == null)
+        internal static bool RegisterStartupPair(string executable, Func<string, string, bool, bool> register,
+            Func<bool> rollback)
+        {
+            try
             {
-                Debug.WriteLine("Startup task refused: " + taskExeReason);
-                return false;
+                if (register(StartupTaskName, BuildStartupTaskXml(executable), false) &&
+                    register(BootTaskName, BuildBootTaskXml(executable), true)) return true;
             }
+            catch { }
+            if (!rollback()) StartupFailureReason = "Startup rollback could not confirm removal of both tasks. Use cleanup before deleting the installed copy.";
+            return false;
+        }
 
-            bool logonOk = RegisterStartupTask(StartupTaskName, BuildStartupTaskXml(taskExe));
-            RegisterStartupTask(BootTaskName, BuildBootTaskXml(taskExe), system: true);
-            return logonOk;
+        internal static string TryStartupShortcut(string executable, Func<string, bool> create, Func<string> failureReason)
+        {
+            string detail;
+            try
+            {
+                if (create(executable)) return "";
+                detail = failureReason();
+                if (string.IsNullOrWhiteSpace(detail)) detail = "Windows did not create the shortcut.";
+            }
+            catch (Exception ex) { detail = ex.Message; }
+            return "A Start Menu shortcut could not be created: " + detail +
+                "\n\nThe installed app is here:\n" + executable;
+        }
+
+        // Never relax executable ownership/ACLs during cleanup: another task or installation may use it.
+        internal static bool RemoveStartupTasks(Func<string, int> run, Func<bool> confirmAbsent)
+        {
+            try
+            {
+                run($"/Delete /TN \"{BootTaskName}\" /F");
+                run($"/Delete /TN \"{StartupTaskName}\" /F");
+                return confirmAbsent();
+            }
+            catch { return false; }
+        }
+
+        private static bool StartupTasksAbsent()
+        {
+            object? service = null, folder = null, tasks = null;
+            try
+            {
+                service = Activator.CreateInstance(Type.GetTypeFromProgID("Schedule.Service")!);
+                ((dynamic)service!).Connect();
+                folder = ((dynamic)service).GetFolder(@"\");
+                tasks = ((dynamic)folder).GetTasks(1); // Include hidden tasks; enumeration failure is not absence.
+                for (int i = 1; i <= ((dynamic)tasks).Count; i++)
+                {
+                    object task = ((dynamic)tasks)[i];
+                    try
+                    {
+                        string name = ((dynamic)task).Name;
+                        if (name.Equals(StartupTaskName, StringComparison.OrdinalIgnoreCase) ||
+                            name.Equals(BootTaskName, StringComparison.OrdinalIgnoreCase)) return false;
+                    }
+                    finally { System.Runtime.InteropServices.Marshal.FinalReleaseComObject(task); }
+                }
+                return true;
+            }
+            catch { return false; }
+            finally
+            {
+                foreach (var item in new[] { tasks, folder, service })
+                    if (item != null && System.Runtime.InteropServices.Marshal.IsComObject(item))
+                        System.Runtime.InteropServices.Marshal.FinalReleaseComObject(item);
+            }
         }
 
         private static bool RegisterStartupTask(string taskName, string xml, bool system = false)
@@ -550,13 +687,15 @@ namespace PredatorControlApp
             string? xmlPath = null;
             try
             {
-                SecureLaunch.CreateAdminOnlyDirectory(SecureLaunch.ProgramDataDir);
-                string dir = SecureLaunch.CreateAdminOnlyDirectory(Path.Combine(SecureLaunch.ProgramDataDir, "tasks"));
+                SecureLaunch.CreateAdminOnlyDirectory(SecureLaunch.ProtectedDataDir);
+                string dir = SecureLaunch.CreateAdminOnlyDirectory(Path.Combine(SecureLaunch.ProtectedDataDir, "tasks"));
                 xmlPath = Path.Combine(dir, Guid.NewGuid().ToString("N") + ".xml");
                 byte[] bytes = Encoding.Unicode.GetPreamble().Concat(Encoding.Unicode.GetBytes(xml)).ToArray();
                 using var held = SecureLaunch.WriteLockedResource(xmlPath, bytes);
                 string account = system ? " /RU \"NT AUTHORITY\\SYSTEM\"" : "";
-                return RunSchtasks($"/Create /TN \"{taskName}\" /XML \"{xmlPath}\"{account} /F") == 0;
+                bool success = RunSchtasks($"/Create /TN \"{taskName}\" /XML \"{xmlPath}\"{account} /F") == 0;
+                if (!success) StartupFailureReason = "Could not register " + taskName + ": " + _lastTaskError;
+                return success;
             }
             catch { return false; }
             finally { if (xmlPath != null) try { File.Delete(xmlPath); } catch { } }
@@ -637,7 +776,6 @@ namespace PredatorControlApp
   <Principals>
     <Principal id=""Author"">
       <UserId>S-1-5-18</UserId>
-      <LogonType>ServiceAccount</LogonType>
       <RunLevel>HighestAvailable</RunLevel>
     </Principal>
   </Principals>
@@ -664,6 +802,8 @@ namespace PredatorControlApp
 </Task>";
         }
 
+        private static string _lastTaskError = "";
+
         private static int RunSchtasks(string args)
         {
             try
@@ -678,8 +818,17 @@ namespace PredatorControlApp
                     RedirectStandardError = true
                 });
                 if (p == null) return -1;
-                p.WaitForExit(15000);
-                return p.HasExited ? p.ExitCode : -1;
+                var output = p.StandardOutput.ReadToEndAsync();
+                var error = p.StandardError.ReadToEndAsync();
+                if (!p.WaitForExit(15000))
+                {
+                    p.Kill(entireProcessTree: true);
+                    p.WaitForExit(); // No outstanding /Create process may race the rollback.
+                    return -1;
+                }
+                _lastTaskError = error.GetAwaiter().GetResult().Trim();
+                _ = output.GetAwaiter().GetResult();
+                return p.ExitCode;
             }
             catch { return -1; }
         }
@@ -694,20 +843,30 @@ namespace PredatorControlApp
             catch { }
         }
 
-        private static void MigrateLegacyStartup()
+        /// <summary>Removes every system hook this app created so the executable can be deleted without leftovers.</summary>
+        internal static bool CleanUninstall()
         {
-            bool hadLegacy;
-            try
+            RemoveLegacyRunKey();
+            lock (StartupLock)
             {
-                using var key = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", false);
-                hadLegacy = key?.GetValue(StartupTaskName) != null;
+                bool tasksGone = RemoveStartupTasks(RunSchtasks, StartupTasksAbsent);
+                PredatorKeyHook.UnregisterAppKeyInRegistry();
+                return tasksGone;
             }
-            catch { return; }
+        }
 
-            if (hadLegacy && !IsStartupEnabled())
-                SetStartupEnabled(true);
-            else if (hadLegacy)
-                RemoveLegacyRunKey();
+        private void RunCleanUninstallPrompt()
+        {
+            bool ok = CleanUninstall();
+            _suppressStartupToggle = true;
+            _switchStartWithWindows.Checked = false;
+            _suppressStartupToggle = false;
+            _jelli?.PublishState();
+            IWin32Window owner = _jelli?.Visible == true ? _jelli : this;
+            MessageBox.Show(owner,
+                ok ? "All startup tasks and system hooks were removed. You can now close the app and safely delete this file."
+                   : "Some startup hooks could not be removed. Make sure the app is running as administrator and try again.",
+                "Predator Control", MessageBoxButtons.OK, ok ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
         }
 
         #endregion

@@ -29,9 +29,6 @@ export function Settings({state: s}: {state: State}) {
     }
   }
 
-  const currentMode = (s.settings.overlayMode ?? s.overlayMode ?? 'default')
-  const currentScale = (s.settings.overlayScale ?? s.overlayScale ?? 100)
-
   const update = (values: Partial<Preferences>) => send('settings', {...s.settings, ...values})
 
   const toggle = (label: string, key: 'syncRgb' | 'overlayGraphs' | 'overlayPower' | 'overlayUsage') => (
@@ -40,14 +37,6 @@ export function Settings({state: s}: {state: State}) {
       <span className={`switch ${s.settings[key] ? 'on' : ''}`}><i /></span>
     </button>
   )
-
-  const setOverlayMode = (mode: 'light' | 'default' | 'full' | 'complete') => {
-    update({ overlayMode: mode })
-  }
-
-  const setOverlayScale = (scale: number) => {
-    update({ overlayScale: scale })
-  }
 
   return <>
     <section>
@@ -101,7 +90,30 @@ export function Settings({state: s}: {state: State}) {
     </section>
 
     <section>
-      <h2>Gaming HUD</h2>
+      <h2>About Predator Control</h2>
+      <p className="muted">Version {s.version} - Jelli UI<br/>For compatible Acer laptops using the PredatorSense hardware/service stack. Features vary by model.</p>
+      <p className="footnote">All telemetry queried locally on-device without internet access.</p>
+      <button
+        disabled={isSwitching}
+        onClick={() => handleToggleJelli(false)}
+      >
+        {isSwitching ? 'Switching...' : 'Switch to classic control panel'}
+      </button>
+    </section>
+  </>
+}
+
+export function GamingHud({state: s}: {state: State}) {
+  const currentMode = (s.settings.overlayMode ?? s.overlayMode ?? 'default')
+  const currentScale = (s.settings.overlayScale ?? s.overlayScale ?? 100)
+  const update = (values: Partial<Preferences>) => send('settings', {...s.settings, ...values})
+
+  return (
+    <section className="hardware-card game-hud-card">
+      <div className="card-heading">
+        <h2>Gaming HUD</h2>
+        <span aria-hidden="true" className="card-indicator"/>
+      </div>
       <p className="muted">Jelli sleeps off-screen while the native benchmark HUD is active. Ctrl + Shift + O toggles the overlay.</p>
 
       <label className="field"><span>HUD Mode</span></label>
@@ -111,7 +123,7 @@ export function Settings({state: s}: {state: State}) {
             key={m}
             className={currentMode === m ? 'selected' : ''}
             aria-pressed={currentMode === m}
-            onClick={() => setOverlayMode(m)}
+            onClick={() => update({ overlayMode: m })}
           >
             {m === 'light' ? 'Light' : m === 'default' ? 'Default' : m === 'full' ? 'Full' : 'Complete'}
           </button>
@@ -126,7 +138,7 @@ export function Settings({state: s}: {state: State}) {
           max={200}
           step={5}
           value={currentScale}
-          onChange={e => setOverlayScale(Number(e.target.value))}
+          onChange={e => update({ overlayScale: Number(e.target.value) })}
         />
       </label>
 
@@ -163,17 +175,5 @@ export function Settings({state: s}: {state: State}) {
         {s.overlay ? 'Gaming mode active (Ctrl+Shift+O to close)' : 'Enter gaming mode'}
       </button>
     </section>
-
-    <section>
-      <h2>About Predator Control</h2>
-      <p className="muted">Version {s.version} - Jelli UI<br/>For compatible Acer laptops using the PredatorSense hardware/service stack. Features vary by model.</p>
-      <p className="footnote">All telemetry queried locally on-device without internet access.</p>
-      <button
-        disabled={isSwitching}
-        onClick={() => handleToggleJelli(false)}
-      >
-        {isSwitching ? 'Switching...' : 'Switch to classic control panel'}
-      </button>
-    </section>
-  </>
+  )
 }

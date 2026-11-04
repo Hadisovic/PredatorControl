@@ -23,6 +23,7 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography.X509Certificates;
 using System.ServiceProcess;
+using System.Text;
 using System.Windows.Forms;
 using Microsoft.Win32;
 using System.Management;
@@ -65,17 +66,58 @@ namespace PredatorControlApp
         public static ServiceEvidence ReadServiceEvidence(string name)
         {
             if (!HardwareServices.Contains(name, StringComparer.OrdinalIgnoreCase)) return new(name, false, false, false);
+            return ReadEvidenceCore(name);
+        }
+
+        /// <summary>True only for a known Acer service whose registered binary is protected and Acer-signed.</summary>
+        internal static bool CanManageService(string name) =>
+            (HardwareServices.Contains(name, StringComparer.OrdinalIgnoreCase) ||
+             OptimizationCandidates.Contains(name, StringComparer.OrdinalIgnoreCase)) &&
+            ReadEvidenceCore(name) is { Exists: true, Trusted: true };
+
+        private static ServiceEvidence ReadEvidenceCore(string name)
+        {
             try
             {
                 using var controller = new ServiceController(name);
                 bool running = controller.Status == ServiceControllerStatus.Running;
                 using var key = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\" + name);
                 string image = Environment.ExpandEnvironmentVariables(key?.GetValue("ImagePath") as string ?? "").Trim();
-                int extension = image.IndexOf(".exe", StringComparison.OrdinalIgnoreCase);
-                string path = image.StartsWith('"') ? image.Split('"')[1] : extension >= 0 ? image[..(extension + 4)] : "";
-                return new(name, true, running, IsAcerSignedBinary(path));
+                return new(name, true, running, IsAcerSignedBinary(ParseExePath(image)));
             }
             catch { return new(name, false, false, false); }
+        }
+
+        // Quoted paths are taken verbatim; unquoted ones must resolve to an existing file at some ".exe" boundary.
+        internal static string ParseExePath(string image)
+        {
+            image = image.Trim();
+            if (image.StartsWith('"'))
+            {
+                int end = image.IndexOf('"', 1);
+                return end > 1 ? image[1..end] : "";
+            }
+            for (int i = image.IndexOf(".exe", StringComparison.OrdinalIgnoreCase); i >= 0;
+                 i = image.IndexOf(".exe", i + 4, StringComparison.OrdinalIgnoreCase))
+            {
+                string candidate = image[..(i + 4)];
+                if (File.Exists(candidate)) return candidate;
+            }
+            return "";
+        }
+
+        private static bool IsTrustedCatalogPublisher(string catPath)
+        {
+            try
+            {
+#pragma warning disable SYSLIB0057
+                using var cert = new X509Certificate2(X509Certificate.CreateFromSignedFile(catPath));
+#pragma warning restore SYSLIB0057
+                string name = cert.GetNameInfo(X509NameType.SimpleName, false);
+                return name.Equals("Acer Incorporated", StringComparison.OrdinalIgnoreCase) ||
+                       name.Equals("Microsoft Windows Hardware Compatibility Publisher", StringComparison.OrdinalIgnoreCase);
+            }
+            catch { return false; } // Fail closed when the signer cannot be read.
         }
 
         private static bool IsAcerSignedBinary(string path)
@@ -117,8 +159,7 @@ namespace PredatorControlApp
 
                 // Accept only the service's own signed worker child, located beside the service binary.
                 string expanded = Environment.ExpandEnvironmentVariables(servicePath).Trim();
-                int ext = expanded.IndexOf(".exe", StringComparison.OrdinalIgnoreCase);
-                string servicePathExe = expanded.StartsWith('"') ? expanded.Split('"')[1] : ext >= 0 ? expanded[..(ext + 4)] : "";
+                string servicePathExe = ParseExePath(expanded);
                 string? serviceDir = Path.GetDirectoryName(servicePathExe);
                 if (string.IsNullOrEmpty(serviceDir)) return false;
                 using var child = new ManagementObjectSearcher($"SELECT Name, ParentProcessId, ExecutablePath FROM Win32_Process WHERE ProcessId={pid}");
@@ -130,9 +171,12 @@ namespace PredatorControlApp
                         string name = row["Name"]?.ToString() ?? "";
                         if (!AgentWorkerImages.Contains(name, StringComparer.OrdinalIgnoreCase)) return false;
                         string image = row["ExecutablePath"]?.ToString() ?? "";
-                        string candidate = string.IsNullOrEmpty(image) ? Path.Combine(serviceDir, name) : image;
-                        if (!string.Equals(Path.GetDirectoryName(candidate), serviceDir, StringComparison.OrdinalIgnoreCase)) return false;
-                        return IsAcerSignedBinary(candidate);
+                        if (string.IsNullOrEmpty(image))
+                        {
+                            image = TryGetProcessImage(pid) ?? Path.Combine(serviceDir, name);
+                        }
+                        if (!string.Equals(Path.GetDirectoryName(image), serviceDir, StringComparison.OrdinalIgnoreCase)) return false;
+                        return IsAcerSignedBinary(image);
                     }
             }
             catch { }
@@ -194,6 +238,37 @@ namespace PredatorControlApp
 
         [DllImport("wintrust.dll", ExactSpelling = true, SetLastError = false, CharSet = CharSet.Unicode)]
         private static extern int WinVerifyTrust(IntPtr hwnd, [MarshalAs(UnmanagedType.LPStruct)] Guid pgActionID, ref WINTRUST_DATA pWVTData);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern IntPtr OpenProcess(uint processAccess, bool bInheritHandle, uint processId);
+
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        private static extern bool QueryFullProcessImageName(IntPtr hProcess, uint dwFlags, StringBuilder lpExeName, ref uint lpdwSize);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool CloseHandle(IntPtr hObject);
+
+        private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+
+        private static string? TryGetProcessImage(uint pid)
+        {
+            try
+            {
+                IntPtr h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+                if (h == IntPtr.Zero) return null;
+                try
+                {
+                    var sb = new StringBuilder(1024);
+                    uint size = (uint)sb.Capacity;
+                    if (QueryFullProcessImageName(h, 0, sb, ref size))
+                        return sb.ToString();
+                }
+                finally { CloseHandle(h); }
+            }
+            catch { }
+            return null;
+        }
 
         private const uint WTD_UI_NONE = 2;
         private const uint WTD_REVOKE_NONE = 0;
@@ -345,11 +420,11 @@ namespace PredatorControlApp
                         return false;
                     }
 
-                    // 2. The catalog file must pass WinVerifyTrust
+                    // 2. Every catalog must be signed by a trusted publisher; at least one must be present.
                     bool anyCatValid = false;
                     foreach (var cat in catFiles)
                     {
-                        if (VerifyWinTrust(cat) == 0)
+                        if (VerifyWinTrust(cat) == 0 && IsTrustedCatalogPublisher(cat))
                         {
                             anyCatValid = true;
                             break;
@@ -362,23 +437,13 @@ namespace PredatorControlApp
                         return false;
                     }
 
-                    // 3. Any EXEs in the driver package directory must also be verified as Acer-signed
+                    // 3. EVERY EXE in the driver package directory must be verified as Acer-signed
                     var dirExes = Directory.GetFiles(dir, "*.exe", SearchOption.AllDirectories);
-                    if (dirExes.Length > 0)
+                    foreach (var dirExe in dirExes)
                     {
-                        bool anyExeVerified = false;
-                        foreach (var dirExe in dirExes)
+                        if (!VerifyFileAuthenticity(dirExe, out string exeFail))
                         {
-                            if (VerifyFileAuthenticity(dirExe, out _))
-                            {
-                                anyExeVerified = true;
-                                break;
-                            }
-                        }
-
-                        if (!anyExeVerified)
-                        {
-                            failureReason = $"Driver package contains executables, but none passed Acer signature verification for {Path.GetFileName(fullPath)}";
+                            failureReason = $"Driver package executable rejected ({Path.GetFileName(dirExe)}): {exeFail}";
                             return false;
                         }
                     }
@@ -511,6 +576,8 @@ namespace PredatorControlApp
         public static void EnsureServiceAutoAndRunning(string serviceName)
         {
             if (!IsServiceInstalled(serviceName)) return;
+            // Never enable or start a service whose registered binary is unprotected or not Acer-signed.
+            if (!CanManageService(serviceName)) return;
 
             // 1. Configure startup to Automatic (both via sc.exe and direct registry)
             RunProcess("sc.exe", $"config \"{serviceName}\" start= auto", 2000);

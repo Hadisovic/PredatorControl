@@ -54,7 +54,8 @@ public partial class Form1
         for (int i = 0; i < available.Length; i++)
         {
             var c = available[i];
-            c.Button.Left = pad + (w + gap) * i; c.Button.Width = w;
+            c.Button.Left = pad + (w + gap) * i;
+            c.Button.Width = (i == available.Length - 1) ? (width - (c.Button.Left - pad)) : w;
             c.Button.Text = _wmi.Capabilities.PowerModes.First(m => m.Value == c.Mode).Label;
             if (c.Tray != null) c.Tray.Text = c.Button.Text;
         }
@@ -164,6 +165,7 @@ public partial class Form1
     private void ExportCompatibility()
     {
         using var save = new SaveFileDialog { Filter = "JSON report|*.json", FileName = "PredatorControl-compatibility.json" };
-        if (save.ShowDialog(this) == DialogResult.OK) SafeFile.WriteText(save.FileName, _wmi.ExportDiagnosticReport());
+        IWin32Window owner = _jelli?.Visible == true ? _jelli : this;
+        if (save.ShowDialog(owner) == DialogResult.OK) SafeFile.WriteText(save.FileName, _wmi.ExportDiagnosticReport());
     }
 }

@@ -1,3 +1,4 @@
+using System.Security.AccessControl;
 using System.Reflection;
 using System.Diagnostics;
 using System.Net;
@@ -117,11 +118,15 @@ await Check("Game Sync edits reject invalid names and preserve a valid profile",
     controller.UpdateProfile(new GameProfile { ExecutableName = "fixture-game.exe", DisplayName = "Updated" });
     return Task.FromResult(controller.Profiles.Count == 1 && controller.Profiles[0].DisplayName == "Updated");
 });
-await Check("startup refuses promotion from the writable test executable", () =>
+await Check("startup refuses the test image in a writable folder without changing its ACL", () =>
 {
-    var prepare = assembly.GetType("PredatorControlApp.SecureLaunch")!.GetMethod("PrepareTaskBinary", BindingFlags.NonPublic | BindingFlags.Static)!;
+    var secure = assembly.GetType("PredatorControlApp.SecureLaunch")!;
+    var prepare = secure.GetMethod("PrepareTaskBinary", BindingFlags.NonPublic | BindingFlags.Static)!;
+    var path = Environment.ProcessPath!;
+    var before = new FileInfo(path).GetAccessControl().GetSecurityDescriptorBinaryForm();
     object?[] args = [null];
-    return Task.FromResult(prepare.Invoke(null, args) == null && !string.IsNullOrWhiteSpace(args[0] as string));
+    bool rejected = prepare.Invoke(null, args) == null && !string.IsNullOrWhiteSpace(args[0] as string);
+    return Task.FromResult(rejected && before.SequenceEqual(new FileInfo(path).GetAccessControl().GetSecurityDescriptorBinaryForm()));
 });
 await AuditChecks.Run(assembly, Check);
 Console.WriteLine($"{passed} passed, {failed} failed. Temporary data only; no hardware or elevated operations.");

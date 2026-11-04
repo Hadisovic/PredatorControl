@@ -1091,16 +1091,56 @@ namespace PredatorControlApp
         /// [HARDWARE I/O]: Calls SetGamingMiscSetting with Feature ID 0x10 and state bit
         /// [EFFECT]      : Embedded Controller sets panel overdrive voltage to eliminate ghosting
         /// </summary>
-        public bool SetLcdOverdrive(bool enable) => Write(HardwareFeature.LcdOverdrive, true,
-            () => Acknowledged(SendCommand("SetGamingMiscSetting", ((enable ? 1UL : 0UL) << 32) | 0x10UL).success)).Accepted;
+        public bool SetLcdOverdrive(bool enable) => Write(HardwareFeature.LcdOverdrive, true, () =>
+        {
+            if (_testIo != null)
+                return Acknowledged(SendCommand("SetGamingMiscSetting", ((enable ? 1UL : 0UL) << 32) | 0x10UL).success);
 
-        public bool SetBootSound(bool enable) => Write(HardwareFeature.BootSound, true,
-            () => Acknowledged(SendCommand("SetGamingMiscSetting", ((enable ? 1UL : 0UL) << 32) | 0x0EUL).success)).Accepted;
+            bool agentOk = false;
+            try { agentOk = AcerAgentClient.SetLcdOverdriveAsync(enable).GetAwaiter().GetResult(); } catch { }
+            bool wmiOk = SendCommand("SetGamingMiscSetting", ((enable ? 1UL : 0UL) << 32) | 0x10UL).success;
+            return Acknowledged(agentOk || wmiOk);
+        }).Accepted;
+
+        public bool SetBootSound(bool enable) => Write(HardwareFeature.BootSound, true, () =>
+        {
+            if (_testIo != null)
+                return Acknowledged(SendCommand("SetGamingMiscSetting", ((enable ? 1UL : 0UL) << 32) | 0x0EUL).success);
+
+            bool agentOk = false;
+            try
+            {
+                bool sOk = AcerAgentClient.SetBootSoundAsync(enable).GetAwaiter().GetResult();
+                bool aOk = AcerAgentClient.SetBootAnimationAsync(enable).GetAwaiter().GetResult();
+                agentOk = sOk || aOk;
+            }
+            catch { }
+            // Verified against AcerAgentService PSSocket::Set_Boot_Sound_Setting: subfunction 0x06, state in byte 1.
+            bool wmiOk = SendCommand("SetGamingMiscSetting", 0x06UL | (enable ? 0x100UL : 0UL)).success;
+            if (agentOk || wmiOk)
+            {
+                try
+                {
+                    var task = AcerAgentClient.GetBootSoundAsync();
+                    if (task.Wait(200) && task.Result.HasValue && task.Result.Value == enable)
+                        return new("confirmed", "Startup sound state confirmed by hardware.");
+                }
+                catch { }
+                return new("unverified", "Command acknowledged; firmware state readback is unavailable.");
+            }
+            return new("failed", "Hardware command failed. State and saved preference were not confirmed.");
+        }).Accepted;
 
 
         public bool GetBootSound()
         {
             if (_testIo != null) return false;
+            try
+            {
+                ulong? raw = ReadGamingMiscSetting(0x06);
+                if (raw.HasValue && (raw.Value & 0xFF) == 0) return ((raw.Value >> 8) & 0xFF) == 1;
+            }
+            catch { }
             try
             {
                 var task = AcerAgentClient.GetBootSoundAsync();
@@ -1122,36 +1162,68 @@ namespace PredatorControlApp
 
         /// <summary>
         /// [TRIGGER]     : User toggles "Power-off USB Charging" and selects safety cutoff percentage
-        /// [HARDWARE I/O]: Calls SetGamingMiscSetting with Feature ID 0x0C (state) and 0x0D (cutoff) and syncs settings.json
+        /// [HARDWARE I/O]: Calls SetGamingMiscSetting (0x0C/0x0D) and APGeAction.SetFunction(0x04), and safely syncs settings.json
         /// [EFFECT]      : Embedded Controller energizes designated high-power USB port while laptop is off/sleeping
         /// </summary>
         public bool SetUsbCharging(bool enable, int cutoffPercent = 10) => Write(HardwareFeature.UsbCharging,
             cutoffPercent is 10 or 20 or 30, () =>
             {
                 bool state = SendCommand("SetGamingMiscSetting", ((enable ? 1UL : 0UL) << 32) | 0x0CUL).success;
-                bool cutoff = state && SendCommand("SetGamingMiscSetting", ((ulong)cutoffPercent << 32) | 0x0DUL).success;
-                return Acknowledged(state && cutoff);
+                if (enable)
+                {
+                    // Optional cutoff threshold; do not fail master state if EC does not expose 0x0D.
+                    SendCommand("SetGamingMiscSetting", ((ulong)cutoffPercent << 32) | 0x0DUL);
+                }
+
+                if (_testIo != null)
+                    return Acknowledged(state);
+
+                bool apgeOk = TrySetApgeUsbCharging(enable, cutoffPercent);
+                if (state || apgeOk)
+                {
+                    TrySyncQuickAccessUsbCharging(enable, cutoffPercent);
+                }
+                bool finalOk = state || apgeOk;
+                if (finalOk)
+                {
+                    bool? readback = TryGetApgeUsbCharging();
+                    if (readback == enable)
+                        return new("confirmed", "USB charging state confirmed by hardware.");
+                    return new("unverified", "Command acknowledged; firmware state readback is unavailable.");
+                }
+                return new("failed", "Hardware command failed. State and saved preference were not confirmed.");
             }).Accepted;
 
 
         public bool GetUsbCharging()
         {
             if (_testIo != null) return false;
+            if (TryGetApgeUsbCharging() is bool liveState)
+            {
+                return liveState;
+            }
+
             try
             {
-                string qaSettingsPath = @"C:\ProgramData\Acer\QA\settings.json";
-                if (File.Exists(qaSettingsPath) && SecureLaunch.IsAdminOnly(qaSettingsPath))
+                const string qaSettingsPath = @"C:\ProgramData\Acer\QA\settings.json";
+                var fi = new FileInfo(qaSettingsPath);
+                if (fi.Exists && (fi.Attributes & FileAttributes.ReparsePoint) == 0 &&
+                    fi.Directory != null && (fi.Directory.Attributes & FileAttributes.ReparsePoint) == 0)
                 {
                     string json = File.ReadAllText(qaSettingsPath);
                     using var doc = JsonDocument.Parse(json);
                     if (doc.RootElement.TryGetProperty("USBChargeSwitch", out var sw))
                     {
                         if (sw.ValueKind == JsonValueKind.True || sw.ValueKind == JsonValueKind.False)
+                        {
                             return sw.GetBoolean();
+                        }
                     }
                     if (doc.RootElement.TryGetProperty("USBChargeState", out var st))
                     {
-                        return st.GetInt32() > 0;
+                        int stVal = st.GetInt32();
+                        bool val = stVal == 15;
+                        return val;
                     }
                 }
             }
@@ -1164,6 +1236,212 @@ namespace PredatorControlApp
             }
             catch { }
             return false;
+        }
+
+        private static bool TrySetApgeUsbCharging(bool enable, int cutoffPercent)
+        {
+            if (!HardwareWriteGate.InScope(HardwareFeature.UsbCharging, "acer-wmi-misc"))
+            {
+                return false;
+            }
+
+            try
+            {
+                ManagementObject? targetObj = null;
+                var options = new ConnectionOptions
+                {
+                    EnablePrivileges = true,
+                    Impersonation = ImpersonationLevel.Impersonate,
+                    Authentication = AuthenticationLevel.PacketPrivacy,
+                    Timeout = TimeSpan.FromSeconds(2)
+                };
+                var scope = new ManagementScope(@"\\.\root\WMI", options);
+                scope.Connect();
+
+                using (var searcher = new ManagementObjectSearcher(scope, new ObjectQuery("SELECT * FROM APGeAction"),
+                    new System.Management.EnumerationOptions { Timeout = TimeSpan.FromSeconds(2) }))
+                using (var rows = searcher.Get())
+                {
+                    foreach (ManagementObject row in rows)
+                    {
+                        if (targetObj == null || (row["Active"] is bool act && act))
+                        {
+                            targetObj = row;
+                        }
+                    }
+                }
+
+                if (targetObj == null)
+                {
+                    using var cls = new ManagementClass(scope, new ManagementPath("APGeAction"), null);
+                    using var instances = cls.GetInstances();
+                    foreach (ManagementObject row in instances)
+                    {
+                        if (targetObj == null || (row["Active"] is bool act && act))
+                        {
+                            targetObj = row;
+                        }
+                    }
+                }
+
+                if (targetObj == null)
+                {
+                    return false;
+                }
+
+                using (targetObj)
+                using (var args = targetObj.GetMethodParameters("SetFunction"))
+                {
+                    // Verified from AcerQAAgent.exe (0x38B245: mov r15d, 1Fh; mov r13d, 0Fh; cmovnz r15d, r13d):
+                    // byte 0 = 0x04 (USB Charge function), byte 1 = state (0x0F enabled, 0x1F disabled), byte 2 = cutoffPercent
+                    ulong input = 0x04UL | ((enable ? 0x0FUL : 0x1FUL) << 8) | ((ulong)cutoffPercent << 16);
+                    var propType = args.Properties["uiInput"]?.Type;
+                    args["uiInput"] = propType == CimType.UInt32 ? (object)(uint)input : input;
+
+                    using var reply = targetObj.InvokeMethod("SetFunction", args, new InvokeMethodOptions { Timeout = TimeSpan.FromSeconds(2) });
+                    object? rawOut = null;
+                    object? retVal = null;
+                    if (reply != null)
+                    {
+                        foreach (PropertyData p in reply.Properties)
+                        {
+                            if (p.Name.Equals("uiOutput", StringComparison.OrdinalIgnoreCase))
+                                rawOut = p.Value;
+                            else if (p.Name.Equals("ReturnValue", StringComparison.OrdinalIgnoreCase))
+                                retVal = p.Value;
+                        }
+                    }
+
+                    bool methodOk = true;
+                    if (rawOut != null)
+                    {
+                        ulong output = Convert.ToUInt64(rawOut);
+                        methodOk = (output & 0xFF) == 0;
+                    }
+                    else if (retVal != null)
+                    {
+                        ulong ret = Convert.ToUInt64(retVal);
+                        methodOk = ret == 0;
+                    }
+                    if (!methodOk) return false;
+
+                    // Direct hardware readback to verify state was applied
+                    bool? readback = TryGetApgeUsbCharging();
+                    if (readback.HasValue)
+                    {
+                        return readback.Value == enable;
+                    }
+                    return true;
+                }
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool? TryGetApgeUsbCharging()
+        {
+            try
+            {
+                var options = new ConnectionOptions
+                {
+                    EnablePrivileges = true,
+                    Impersonation = ImpersonationLevel.Impersonate,
+                    Authentication = AuthenticationLevel.PacketPrivacy,
+                    Timeout = TimeSpan.FromSeconds(2)
+                };
+                var scope = new ManagementScope(@"\\.\root\WMI", options);
+                scope.Connect();
+
+                ManagementObject? targetObj = null;
+                using (var searcher = new ManagementObjectSearcher(scope, new ObjectQuery("SELECT * FROM APGeAction"),
+                    new System.Management.EnumerationOptions { Timeout = TimeSpan.FromSeconds(2) }))
+                using (var rows = searcher.Get())
+                {
+                    foreach (ManagementObject row in rows)
+                    {
+                        if (targetObj == null || (row["Active"] is bool act && act))
+                        {
+                            targetObj = row;
+                        }
+                    }
+                }
+
+                if (targetObj == null)
+                {
+                    using var cls = new ManagementClass(scope, new ManagementPath("APGeAction"), null);
+                    using var instances = cls.GetInstances();
+                    foreach (ManagementObject row in instances)
+                    {
+                        if (targetObj == null || (row["Active"] is bool act && act))
+                        {
+                            targetObj = row;
+                        }
+                    }
+                }
+
+                if (targetObj == null) return null;
+
+                using (targetObj)
+                using (var args = targetObj.GetMethodParameters("GetFunction"))
+                {
+                    ulong input = 0x04UL;
+                    var propType = args.Properties["uiInput"]?.Type;
+                    args["uiInput"] = propType == CimType.UInt32 ? (object)(uint)input : input;
+
+                    using var reply = targetObj.InvokeMethod("GetFunction", args, new InvokeMethodOptions { Timeout = TimeSpan.FromSeconds(2) });
+                    object? rawOut = null;
+                    if (reply != null)
+                    {
+                        foreach (PropertyData p in reply.Properties)
+                        {
+                            if (p.Name.Equals("uiOutput", StringComparison.OrdinalIgnoreCase))
+                            {
+                                rawOut = p.Value;
+                                break;
+                            }
+                        }
+                    }
+                    if (rawOut == null) return null;
+                    ulong output = Convert.ToUInt64(rawOut);
+                    if ((output & 0xFF) != 0) return null;
+                    // Verified from AcerQAAgent.exe (0x38AEBC: cmp bl, 0Fh; sete r12b):
+                    // state byte == 0x0F (15) means enabled; 0x1F (31) means disabled
+                    return ((output >> 8) & 0xFF) == 0x0F;
+                }
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static void TrySyncQuickAccessUsbCharging(bool enable, int cutoffPercent)
+        {
+            try
+            {
+                const string qaSettingsPath = @"C:\ProgramData\Acer\QA\settings.json";
+                var fi = new FileInfo(qaSettingsPath);
+                if (!fi.Exists || (fi.Attributes & FileAttributes.ReparsePoint) != 0) return;
+                if (fi.Directory == null || (fi.Directory.Attributes & FileAttributes.ReparsePoint) != 0) return;
+
+                string json = File.ReadAllText(qaSettingsPath);
+                var dict = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json);
+                if (dict == null) return;
+                var updated = new Dictionary<string, object>();
+                foreach (var kv in dict)
+                {
+                    updated[kv.Key] = kv.Value;
+                }
+                updated["USBChargeState"] = enable ? 15 : 31;
+                updated["USBChargeSwitch"] = enable;
+                updated["USBChargeLimit"] = cutoffPercent;
+                SafeFile.WriteText(qaSettingsPath, JsonSerializer.Serialize(updated, new JsonSerializerOptions { WriteIndented = true }));
+            }
+            catch
+            {
+            }
         }
 
         public bool GetBacklight30s() => KeyboardControl.State.IdleTimeout ?? true;

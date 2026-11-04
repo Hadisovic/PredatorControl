@@ -12,7 +12,9 @@ internal static class SecureLaunch
     /// <summary>Resolves a built-in tool (sc.exe, schtasks.exe, ...) to its System32 path so it cannot be hijacked by search order.</summary>
     internal static string System32(string exe) => Path.IsPathRooted(exe) ? exe : Path.Combine(Environment.SystemDirectory, exe);
 
-    internal static readonly string ProgramDataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "PredatorControl");
+    // Older versions created a user-writable ProgramData\PredatorControl for profiles.
+    // Generated privileged files must not depend on, re-ACL or migrate that legacy directory.
+    internal static readonly string ProtectedDataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "PredatorControlData");
 
     private static readonly SecurityIdentifier LocalSystem = new(WellKnownSidType.LocalSystemSid, null);
     private static readonly SecurityIdentifier Admins = new(WellKnownSidType.BuiltinAdministratorsSid, null);
@@ -96,11 +98,11 @@ internal static class SecureLaunch
         for (var parent = info.Parent; parent != null; parent = parent.Parent)
             if (!parent.Exists || (parent.Attributes & FileAttributes.ReparsePoint) != 0 ||
                 HasUntrustedWriter(parent.GetAccessControl(), AncestorWrite))
-                throw new UnauthorizedAccessException("The directory has an untrusted ancestor.");
+                throw new UnauthorizedAccessException("The directory has an untrusted ancestor: " + parent.FullName);
         if (info.Exists)
         {
             if (!IsAdminOnlyDirectory(info.FullName))
-                throw new UnauthorizedAccessException("The existing directory is not protected.");
+                throw new UnauthorizedAccessException("The existing directory is not protected: " + info.FullName);
             return info.FullName;
         }
         var security = new DirectorySecurity();
@@ -136,7 +138,6 @@ internal static class SecureLaunch
             reason = "";
             return current;
         }
-        // A portable image can be renamed while running. Copying its old pathname can promote replacement bytes.
         reason = "Open the app from an administrator-protected folder before enabling Start with Windows.";
         return null;
     }

@@ -447,6 +447,16 @@ using (var controller = new WmiController(fixedRed, io))
 {
     Check(!controller.Capabilities.SupportsWinKey && !controller.SetWinKeyLock(true) && io.Writes.Count == 0, "Unverified WinKey profile rejects firmware WinKey writes");
 }
+using (var io = new FakeIo { FailAtWrite = 2 })
+using (var controller = new WmiController(predator, io))
+{
+    Check(controller.SetUsbCharging(true, 10) && io.Writes.Count == 2 && io.Writes[0] == ("SetGamingMiscSetting", (1UL << 32) | 0x0CUL),
+        "USB charging enable succeeds when master 0x0C succeeds even if optional 0x0D cutoff is unsupported");
+    io.Writes.Clear();
+    io.FailAtWrite = -1;
+    Check(controller.SetUsbCharging(false, 10) && io.Writes.SequenceEqual([("SetGamingMiscSetting", 0x0CUL)]),
+        "USB charging disable dispatches only master 0x0C without redundant 0x0D cutoff command");
+}
 
 // v1.4.2 Hardware Logic & Security Review checks (H1, H2, H3, H4, S1, S2, S3, S4)
 Check(FanCurveSafety.FloorSpeed(79, 75) == 0 && FanCurveSafety.FloorSpeed(80, 60) == 55 &&

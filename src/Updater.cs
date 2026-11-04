@@ -207,6 +207,14 @@ namespace PredatorControlApp
             using var updateCert = new X509Certificate2(updateRaw);
             if (!SameSigningKey(installedCert, updateCert))
                 throw new InvalidOperationException("The update's signing key differs from the installed publisher. Install a verified publisher-key change manually.");
+            // WinVerifyTrust here uses cached revocation data only; explicitly reject a revoked signer.
+            using var chain = new X509Chain();
+            chain.ChainPolicy.RevocationMode = X509RevocationMode.Online;
+            chain.ChainPolicy.RevocationFlag = X509RevocationFlag.EntireChain;
+            chain.ChainPolicy.UrlRetrievalTimeout = TimeSpan.FromSeconds(10);
+            chain.Build(updateCert);
+            if (chain.ChainStatus.Any(s => s.Status.HasFlag(X509ChainStatusFlags.Revoked)))
+                throw new InvalidOperationException("The update's signing certificate has been revoked.");
         }
 
         private static HttpClient NewTrustedClient(TimeSpan timeout)
@@ -360,8 +368,8 @@ namespace PredatorControlApp
         // Elevated handoff must fail closed if a protected location cannot be established.
         private static string SecureSubdirectory(string name)
         {
-            SecureLaunch.CreateAdminOnlyDirectory(SecureLaunch.ProgramDataDir);
-            return SecureLaunch.CreateAdminOnlyDirectory(Path.Combine(SecureLaunch.ProgramDataDir, name));
+            SecureLaunch.CreateAdminOnlyDirectory(SecureLaunch.ProtectedDataDir);
+            return SecureLaunch.CreateAdminOnlyDirectory(Path.Combine(SecureLaunch.ProtectedDataDir, name));
         }
 
         private static string CreateStagingDirectory()

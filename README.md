@@ -22,7 +22,7 @@ Windows 10 (2004 or later) / Windows 11 · x64 · Administrator approval require
 
 | Download | Best for | What happens |
 |---|---|---|
-| [Installer](https://github.com/Hadisovic/PredatorControl/releases/download/v1.4.3/PredatorControl-Setup-1.4.3.exe) | Regular use on one laptop | Installs the app, adds a Start Menu shortcut and provides an uninstaller. |
+| [Installer](https://github.com/Hadisovic/PredatorControl/releases/download/v1.4.3/PredatorControl-Setup-1.4.3.exe) | Regular use on one laptop | Installs the app, adds Start Menu and desktop shortcuts and provides an uninstaller. |
 | [Portable EXE](https://github.com/Hadisovic/PredatorControl/releases/download/v1.4.3/PredatorControl-Portable-1.4.3.exe) | Running without a conventional installation | Run one EXE; no shortcut or startup task is created unless you enable startup. |
 
 Both contain the same app, .NET and the complete WebView2 browser runtime used by Jelli. Setup and runtime preparation work offline. Downloads are larger because these components are included.
@@ -32,7 +32,9 @@ Both contain the same app, .NET and the complete WebView2 browser runtime used b
 1. Download **PredatorControl-Setup-1.4.3.exe** from the release page.
 2. Open it and approve Windows administrator access.
 3. Leave **Start Predator Control with Windows** checked, or clear it if you prefer manual launch.
-4. Finish setup and open **Predator Control** from the Start Menu.
+4. Finish setup and open **Predator Control** from the desktop shortcut or Start Menu.
+
+If the destination already exists, choose **Yes** to continue with a verified repair, or **No** to cancel and remove the old installation or conflicting file first. Setup does not delete it automatically. Unsafe paths are still refused.
 
 The app installs beneath Program Files. You can delete the downloaded setup file afterward. Remove the installed app through Windows **Settings → Apps → Installed apps**. Removal clears its startup tasks; preferences and the reusable browser cache are retained.
 

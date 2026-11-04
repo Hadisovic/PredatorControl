@@ -1,51 +1,68 @@
 <div align="center">
 
-![Predator Control banner](https://raw.githubusercontent.com/Hadisovic/PredatorControl/4f127a67d805aa97db9d14f82124461d0c0b1580/assets/banner.jpg)
-
 # 🪼 Predator Control
 
-[![Version](https://img.shields.io/badge/version-1.4.3-00E5FF?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Hadisovic/PredatorControl/releases/tag/v1.4.3)
-[![Jelli UI](https://img.shields.io/badge/Jelli%20UI-Desktop%20Companion-FF69B4?style=for-the-badge)](#dual-interface)
-[![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11%20x64-00B4CC?style=for-the-badge&logo=windows&logoColor=white)](#quick-setup)
-[![Framework](https://img.shields.io/badge/.NET-10%20Windows-512BD4?style=for-the-badge&logo=dotnet&logoColor=white)](#building-from-source)
+**A control panel and desktop companion for compatible Acer Predator and Nitro laptops.**
 
-**A focused control panel and desktop companion for compatible Acer Predator and Nitro laptops.**
+[Download 1.4.3](https://github.com/Hadisovic/PredatorControl/releases/tag/v1.4.3) · [Source](https://github.com/Hadisovic/PredatorControl/tree/revisions) · [Report a problem](https://github.com/Hadisovic/PredatorControl/issues)
 
-[Download 1.4.3](https://github.com/Hadisovic/PredatorControl/releases/tag/v1.4.3) · [Current source](https://github.com/Hadisovic/PredatorControl/tree/revisions) · [Report an issue](https://github.com/Hadisovic/PredatorControl/issues)
+Windows 10 (2004 or later) / Windows 11 · x64 · Administrator approval required
 
 </div>
 
-## Overview
-
-Predator Control brings laptop performance, cooling, lighting, display and battery controls into one Windows application. Choose the Classic control panel for a conventional dashboard, or Jelli for a floating companion with an expandable interface. Available controls follow the laptop's detected capabilities and installed Acer interfaces.
-
-The current **1.4.3 source is on `revisions`** and the release is tagged `v1.4.3`. The `master` branch still contains earlier application source; its README describes the latest published release. Use `revisions` or the release tag to build 1.4.3.
-
 ## What's new in 1.4.3
 
-- **Tabbed Classic UI:** Overview, Hardware, Keyboard, Games and Settings organize the controls.
-- **Jelli spacing:** consistent card padding, clearer groups and aligned labels and switches.
-- **RGB layout:** All zones, Zone 1, Zone 2, Zone 3 and Zone 4 share a dedicated selector row on supported four-zone keyboards.
-- **Color choices:** presets appear beneath the zone selectors in three columns, with the small zone-color indicators restored.
-- **Simpler startup:** enabling Start with Windows installs a persistent copy. A missing optional Start Menu shortcut no longer interrupts successful setup.
+- Classic's five tabs organize Overview, Hardware, Keyboard, Games and Settings.
+- Jelli has more consistent spacing and clearer control groups.
+- Supported RGB keyboards get a separate zone row, little zone-color indicators and a three-column preset grid.
+- Choose an offline installer or a fully bundled portable EXE. No separate .NET or WebView2 installation is required.
+- Startup setup and application packaging have been streamlined.
 
-## Why Predator Control?
+## Choose your download
 
-- A focused alternative interface for supported Acer laptop controls.
-- Classic and companion interfaces share the same available hardware features.
-- Single-file downloads, with a self-contained option.
-- Profiles, tray controls and an optional gaming overlay for everyday use.
+| Download | Best for | What happens |
+|---|---|---|
+| [Installer](https://github.com/Hadisovic/PredatorControl/releases/download/v1.4.3/PredatorControl-Setup-1.4.3.exe) | Regular use on one laptop | Installs the app, adds a Start Menu shortcut and provides an uninstaller. |
+| [Portable EXE](https://github.com/Hadisovic/PredatorControl/releases/download/v1.4.3/PredatorControl-Portable-1.4.3.exe) | Running without a conventional installation | Run one EXE; no shortcut or startup task is created unless you enable startup. |
 
-Memory usage and responsiveness vary with the machine, runtime, active interface and enabled features.
+Both contain the same app, .NET and the complete WebView2 browser runtime used by Jelli. Setup and runtime preparation work offline. Downloads are larger because these components are included.
 
-## Dual interface
+### Install
 
-| Interface | Experience |
-|---|---|
-| **Classic control panel** | Native Windows dashboard with five tabs, dark themes and direct access to available controls. |
-| **Jelli desktop companion** | Floating jellyfish companion, live metrics, expandable dashboard and attached-flyout presentation. |
+1. Download **PredatorControl-Setup-1.4.3.exe** from the release page.
+2. Open it and approve Windows administrator access.
+3. Leave **Start Predator Control with Windows** checked, or clear it if you prefer manual launch.
+4. Finish setup and open **Predator Control** from the Start Menu.
 
-Both dashboards use **Overview · Hardware · Keyboard · Games · Settings**. Switch between Jelli and Classic in Settings. Theme choices include Teal, Crimson and OLED Black.
+The app installs beneath Program Files. You can delete the downloaded setup file afterward. Remove the installed app through Windows **Settings → Apps → Installed apps**. Removal clears its startup tasks; preferences and the reusable browser cache are retained.
+
+### Run portable
+
+1. Download **PredatorControl-Portable-1.4.3.exe** and keep it in a convenient local folder.
+2. Open it and approve Windows administrator access.
+3. Review the bundled browser terms when first opening Jelli, then allow browser preparation to finish. Choosing **Use Classic** keeps the native interface available.
+
+The portable EXE contains everything required by the application. It unpacks the browser into a protected local cache and keeps preferences/browser data per user, so it is not a zero-footprint USB application. Later launches reuse the verified cache. No browser runtime is downloaded in the background.
+
+If you enable **Start with Windows** in Settings, the app creates a persistent protected copy for startup. After closing the current session, you may delete the original downloaded EXE. Turning startup off removes the startup tasks and retains the installed copy.
+
+## Current interface previews
+
+These images show the current 1.4.3 interface. **Jelli uses simulated preview readings; Classic was captured on an unsupported virtual machine.** Available controls on your laptop may differ.
+
+<p align="center">
+<img src="assets/app-1.4.3/jelli-overview-1.4.3.png" width="360" alt="Jelli overview in version 1.4.3, with simulated readings" />
+<img src="assets/app-1.4.3/jelli-keyboard-1.4.3.png" width="360" alt="Jelli RGB zones with color indicators above the preset colors" />
+</p>
+<p align="center">
+<img src="assets/app-1.4.3/classic-settings-1.4.3.png" width="550" alt="Classic Settings with startup, Jelli and theme controls" />
+</p>
+
+## Two interfaces
+
+Choose the **Classic control panel** for a conventional Windows dashboard or **Jelli** for a floating jellyfish companion with an expandable dashboard and attached flyout. Both use the same supported hardware features.
+
+Switch interfaces in Settings. Theme choices include Teal, Crimson and OLED Black.
 
 ## Core capabilities
 
@@ -78,101 +95,25 @@ Choose **Light**, **Default**, **Full** or **Complete** layouts. Available readi
 
 The overlay uses Windows tracing and available GPU telemetry rather than injecting a DLL into the game. Compatibility with individual games and anti-cheat configurations is not guaranteed.
 
-## Interface previews
+## Updating from an earlier build
 
-<details>
-<summary>View the earlier Jelli, Classic and overlay previews</summary>
+Close the old app, then run the new installer or portable EXE. This packaging replaces the earlier standalone and win-x64 download choices.
 
-These screenshots are retained from the old README and show **version 1.4.2**. The 1.4.3 Classic tabs, spacing and RGB arrangement are described above. Images are linked to the archived source so they remain available on both branches without restoring generated or historical files.
+For an older portable startup installation, use the new app to turn **Start with Windows** off and on again so future launches use the new copy. Setup refreshes startup registration when its startup option is selected.
 
-<div align="center">
-  <h4>Jelli — earlier expanded overview</h4>
-  <a href="https://raw.githubusercontent.com/Hadisovic/PredatorControl/4f127a67d805aa97db9d14f82124461d0c0b1580/assets/preview_jelli.png"><img src="https://raw.githubusercontent.com/Hadisovic/PredatorControl/4f127a67d805aa97db9d14f82124461d0c0b1580/assets/preview_jelli.png" width="430" alt="Version 1.4.2 Jelli overview"/></a>
-  <h4>Classic — earlier interface</h4>
-  <a href="https://raw.githubusercontent.com/Hadisovic/PredatorControl/4f127a67d805aa97db9d14f82124461d0c0b1580/assets/preview_dashboard.png"><img src="https://raw.githubusercontent.com/Hadisovic/PredatorControl/4f127a67d805aa97db9d14f82124461d0c0b1580/assets/preview_dashboard.png" width="340" alt="Version 1.4.2 Classic dashboard before the tabbed redesign"/></a>
-  <a href="https://raw.githubusercontent.com/Hadisovic/PredatorControl/4f127a67d805aa97db9d14f82124461d0c0b1580/assets/preview_controls.png"><img src="https://raw.githubusercontent.com/Hadisovic/PredatorControl/4f127a67d805aa97db9d14f82124461d0c0b1580/assets/preview_controls.png" width="340" alt="Version 1.4.2 Classic lighting controls"/></a>
-  <h4>Gaming overlay layouts</h4>
-  <table>
-    <tr><th>Light</th><th>Default</th></tr>
-    <tr>
-      <td><img src="https://raw.githubusercontent.com/Hadisovic/PredatorControl/4f127a67d805aa97db9d14f82124461d0c0b1580/assets/preview_overlay_light.png" width="179" alt="Light overlay preview from version 1.4.2"/></td>
-      <td><img src="https://raw.githubusercontent.com/Hadisovic/PredatorControl/4f127a67d805aa97db9d14f82124461d0c0b1580/assets/preview_overlay.png" width="328" alt="Default overlay preview from version 1.4.2"/></td>
-    </tr>
-    <tr><th>Full</th><th>Complete</th></tr>
-    <tr>
-      <td><img src="https://raw.githubusercontent.com/Hadisovic/PredatorControl/4f127a67d805aa97db9d14f82124461d0c0b1580/assets/preview_overlay_full.png" width="340" alt="Full overlay preview from version 1.4.2"/></td>
-      <td><img src="https://raw.githubusercontent.com/Hadisovic/PredatorControl/4f127a67d805aa97db9d14f82124461d0c0b1580/assets/preview_overlay_complete.png" width="340" alt="Complete overlay preview from version 1.4.2"/></td>
-    </tr>
-  </table>
-</div>
-
-</details>
-
-## Quick setup
-
-Requires **Windows 10/11 x64**. Approve the Windows administrator prompt when launching the application.
-
-| Download | Runtime requirement |
-|---|---|
-| [**PredatorControl-standalone.exe**](https://github.com/Hadisovic/PredatorControl/releases/download/v1.4.3/PredatorControl-standalone.exe) | Bundles .NET 10.0.14; no separate .NET installation is needed. |
-| [**PredatorControl-win-x64.exe**](https://github.com/Hadisovic/PredatorControl/releases/download/v1.4.3/PredatorControl-win-x64.exe) | Requires [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0), version 10.0.14 or a compatible newer 10.0 patch. |
-| [**checksums.txt**](https://github.com/Hadisovic/PredatorControl/releases/download/v1.4.3/checksums.txt) | SHA-256 checksums for both downloads. |
-
-**Jelli requires an installed [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/).** The .NET self-contained download does not bundle the WebView2 browser runtime.
-
-1. Download the preferred EXE from [Releases](https://github.com/Hadisovic/PredatorControl/releases/tag/v1.4.3).
-2. Run it and approve administrator access.
-3. Choose Classic or Jelli and configure the available controls.
-4. Optionally enable **Start with Windows** in Settings.
-
-### Start with Windows
-
-Manual launches remain portable. Enabling Start with Windows installs a persistent copy beneath `C:\Program Files\PredatorControl\1.4.3\<build-hash>\PredatorControl.exe` and configures startup. The current downloaded session continues running.
-
-After closing that session, you can delete the downloaded EXE. Future sign-ins use the installed copy. A Start Menu shortcut is attempted when possible; shortcut creation is optional and does not prevent startup. You can also open the installed EXE directly.
-
-Turning startup off removes its tasks and retains the installed files. This toggle is not a full uninstall.
-
-### Updating
-
-Close the running application before opening a newer download. If you use Start with Windows, turn it **off and back on in the new build** to refresh the installed startup copy. Downloads and version information are available on the [release page](https://github.com/Hadisovic/PredatorControl/releases/tag/v1.4.3).
-
-## Building from source
-
-Use Windows x64, the **.NET 10 SDK** and **Node.js 24**. The frontend build uses npm and the committed lockfile.
-
-```powershell
-git clone --branch revisions https://github.com/Hadisovic/PredatorControl.git
-cd PredatorControl
-
-# Build and run the hardware-free checks
-.\scripts\Test-Compatibility.ps1
-
-# Self-contained single-file executable
-dotnet publish src/PredatorControlApp.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o publish/standalone
-
-# Framework-dependent single-file executable
-dotnet publish src/PredatorControlApp.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o publish/win-x64
-```
-
-The current source has **281 hardware-free checks** covering compatibility, keyboard behavior, frontend logic and other regression cases. Passing these checks does not replace physical-laptop validation.
-
-### Project structure
-
-```text
-src/          Windows application and hardware integration
-src/Jelli/    Embedded Jelli host and UI bridge
-jelli-ui/     React, TypeScript and Vite frontend
-tests/        Hardware-free regression and renderer tests
-scripts/      Local validation runner
-tools/        Source-checking and checksum utilities
-```
+The version number remains **1.4.3**, so existing 1.4.3 copies will not announce this replacement as a newer version. Download it manually from the release page. These builds are unsigned; automatic installation remains unavailable. Windows may ask you to review the publisher before running them.
 
 ## Compatibility and feedback
 
-Support depends on the exact model, firmware and installed OEM services. Preserve the Acer components required by your laptop's controls. When reporting a problem, include the app version, laptop model, Windows version and reproduction steps. A compatibility report can be exported from Settings; review its contents before sharing it.
+Support depends on the exact laptop model, firmware and required Acer services. Bundled runtimes do not add support for unavailable hardware. Keep the Acer components needed by your laptop's controls.
 
-[Open an issue](https://github.com/Hadisovic/PredatorControl/issues) · [Browse current source](https://github.com/Hadisovic/PredatorControl/tree/revisions)
+When reporting a problem, include the laptop model, Windows version, app version and reproduction steps. Export a compatibility report from Settings if useful, and review its contents before sharing it.
+
+## Building from source
+
+The current 1.4.3 application source is on **revisions**; **master** retains the earlier application source and describes the latest release here.
+
+Development requires the .NET 10 SDK and Node.js. Run `scripts/Test-Compatibility.ps1` for the hardware-free checks. For the bundled packages, use `packaging/Build.ps1` with the official WebView2 Fixed Version 156.0.4314.58 x64 CAB and Inno Setup 6.7.4. The script checks the CAB hash, packages its complete contents and builds both downloads. See the script parameters for input/output locations. The browser runtime and build outputs are not stored in Git.
 
 ## Credits and attribution
 

@@ -32,7 +32,7 @@ Both contain the same app, .NET and the complete WebView2 browser runtime used b
 1. Download **PredatorControl-Setup-1.4.3.exe** from the release page.
 2. Open it and approve Windows administrator access.
 3. Leave **Start Predator Control with Windows** checked, or clear it if you prefer manual launch.
-4. Finish setup and open **Predator Control** from the desktop shortcut or Start Menu.
+4. Leave **Launch PredatorControl** checked on the finish page to open the app, or launch it later from the desktop shortcut or Start Menu.
 
 If the destination already exists, choose **Yes** to continue with a verified repair, or **No** to cancel and remove the old installation or conflicting file first. Setup does not delete it automatically. Unsafe paths are still refused.
 

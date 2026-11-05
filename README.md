@@ -1,5 +1,7 @@
 <div align="center">
 
+![Predator Control banner](assets/banner.jpg)
+
 # 🪼 Predator Control
 
 **A control panel and desktop companion for compatible Acer Predator and Nitro laptops.**

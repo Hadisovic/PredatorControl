@@ -104,6 +104,7 @@ namespace PredatorControlApp
             "Acer_GamingFunction_V2"
         };
         private string? _discoveredClassName;
+        private string? _wmiDiscoveryFailure;
 
         public string DiscoveredWmiClass => _discoveredClassName ?? "";
 
@@ -139,6 +140,7 @@ namespace PredatorControlApp
                             if (enumerator.MoveNext() && enumerator.Current is ManagementObject obj)
                             {
                                 _cachedObj = obj;
+                                _wmiDiscoveryFailure = null;
                                 _consecutiveFailures = 0;
                                 return;
                             }
@@ -157,11 +159,15 @@ namespace PredatorControlApp
                             if (enumerator.MoveNext() && enumerator.Current is ManagementObject obj)
                             {
                                 _cachedObj = obj;
+                                _wmiDiscoveryFailure = null;
                                 _discoveredClassName = className;
                                 _consecutiveFailures = 0;
                                 break;
                             }
                         }
+                        catch (Exception ex) when (ex is UnauthorizedAccessException || ex is ManagementException { ErrorCode: ManagementStatus.AccessDenied } ||
+                            ex.HResult is unchecked((int)0x80041003) or unchecked((int)0x80070005))
+                        { _wmiDiscoveryFailure = "Firmware WMI access was denied. Run the installed application with its required privileges to use verified firmware controls."; }
                         catch { }
                     }
                 }
@@ -188,6 +194,10 @@ namespace PredatorControlApp
                 try { _cachedObj?.Dispose(); } catch { }
                 _cachedObj = null;
             }
+
+            // Revoke writable capabilities immediately; recovery re-identifies interfaces
+            // on a worker instead of trusting a dead WMI object or old service reply.
+            RequestCompatibilityRefresh();
 
             // Pre-warm the cache off the hot path so the next command is fast
             if (!_cacheRebuilding)
@@ -345,8 +355,9 @@ namespace PredatorControlApp
             {
                 lock (_probeLock)
                 {
-                    if (_cachedCapabilities != null) return _cachedCapabilities;
-                    try { return _cachedCapabilities = ProbeCapabilities(); }
+                    if (_cachedCapabilities != null) return Volatile.Read(ref _compatibilityStale) == 0 ? _cachedCapabilities : _cachedCapabilities with { IsCurrent = false };
+                    if (Volatile.Read(ref _compatibilityStale) != 0) return HardwareCapabilities.None with { IsCurrent = false };
+                    try { return _cachedCapabilities = ProbeCapabilities() with { Revision = Interlocked.Increment(ref _compatibilityRevision) }; }
                     catch { return HardwareCapabilities.None; }
                 }
             }
@@ -389,9 +400,9 @@ namespace PredatorControlApp
         // ============================================================================================
 
         /// <summary>
-        /// [TRIGGER]     : User selects a power profile (Quiet, Balanced, Performance, Turbo, Eco)
-        /// [HARDWARE I/O]: Sends the selected profile's verified SetGamingProfile encoding once
-        /// [EFFECT]      : Embedded Controller adjusts PL1/PL2 CPU power ceilings and GPU overclock
+        /// [TRIGGER]     : User selects a mode advertised by the current verified capabilities
+        /// [HARDWARE I/O]: Sends once through the selected backend; unsupported modes are denied first
+        /// [EFFECT]      : Firmware applies the mode, with readback required when the backend supports it
         /// </summary>
         public HardwareOperationResult SetPowerMode(byte mode)
         {
@@ -401,26 +412,34 @@ namespace PredatorControlApp
                 Capabilities.AllowsPower(mode, IsOnAc),
                 () => backend switch
                 {
+                    VerifiedAcerProtocol.PowerBackend => _testIo?.SetReviewedAgentPowerMode(mode) ?? AcerAgentClient.SetReviewedOperatingModeAsync(mode).GetAwaiter().GetResult(),
                     "windows-power-overlay" => _testIo?.SetWindowsPowerMode(mode) ?? ApplyWindowsPowerOverlay(mode),
                     "windows-power-plan" => scheme.HasValue ? _testIo?.SetWindowsPowerPlan(scheme.Value) ?? WindowsPowerPlans.Set(scheme.Value)
                         : new("failed", "No installed Windows power plan is mapped to this selection."),
                     NitroSense3Protocol.OperationModePipeBackend => ApplyNitroOperationModePipe(mode),
                     NitroSense3Protocol.OperationModeWmiBackend => ApplyNitroOperationModeWmi(mode),
+                    DeviceProfileResolver.PredatorWmiOperationModeBackend => ApplyPredatorOperationModeWmi(mode),
                     "acer-wmi-profile" => ApplyPredatorPowerProfile(mode),
                     _ => new("failed", "No compatible power implementation.")
                 });
-            if (result.Accepted && _testIo == null && backend == "acer-wmi-profile") SyncWindowsPowerMode(mode);
+            if (result.Accepted && _testIo == null && backend is "acer-wmi-profile" or DeviceProfileResolver.PredatorWmiOperationModeBackend) SyncWindowsPowerMode(mode);
             if (result.Confirmed && backend == "windows-power-plan")
                 lock (_probeLock)
                 {
                     if (_cachedCapabilities != null) _cachedCapabilities = _cachedCapabilities with { ActiveWindowsPowerPlan = scheme, ActivePowerMode = mode };
                     if (_discovery != null) _discovery = _discovery with { WindowsPowerPlans = _discovery.WindowsPowerPlans with { ActiveScheme = scheme } };
                 }
-            else if (result.Confirmed && backend is NitroSense3Protocol.OperationModePipeBackend or NitroSense3Protocol.OperationModeWmiBackend)
+            else if (result.Confirmed && backend is NitroSense3Protocol.OperationModePipeBackend or NitroSense3Protocol.OperationModeWmiBackend or VerifiedAcerProtocol.PowerBackend)
                 lock (_probeLock)
                 {
                     if (_cachedCapabilities != null) _cachedCapabilities = _cachedCapabilities with { ActivePowerMode = mode };
                     if (_discovery != null) _discovery = _discovery with { NitroOperationMode = mode };
+                }
+            else if (result.Confirmed && backend == DeviceProfileResolver.PredatorWmiOperationModeBackend)
+                lock (_probeLock)
+                {
+                    if (_cachedCapabilities != null) _cachedCapabilities = _cachedCapabilities with { ActivePowerMode = mode };
+                    if (_discovery != null) _discovery = _discovery with { PredatorOperationMode = mode };
                 }
             else if (result.Accepted && backend == "acer-wmi-profile")
                 lock (_probeLock)
@@ -432,25 +451,36 @@ namespace PredatorControlApp
 
         private HardwareOperationResult ApplyPredatorPowerProfile(byte mode)
         {
-            if (_testIo != null)
-                return Acknowledged(SendCommand("SetGamingProfile", mode).success);
+            // This profile selects the legacy WMI encoding. Do not broadcast alternate
+            // generations' encodings or race the OEM service for the same operation.
+            var (success, output) = SendCommand("SetGamingProfile", mode);
+            if (success) return Acknowledged(true);
+            return output != 0
+                ? new("failed", $"Predator WMI rejected power mode {mode} (gmOutput 0x{output:X}). The previous preference was kept.", "wmi-command-rejected", HardwareFeature.Power)
+                : new("failed", "Predator WMI did not acknowledge SetGamingProfile. Check the Acer WMI interface/service, then refresh compatibility. The previous preference was kept.", "wmi-no-acknowledgement", HardwareFeature.Power);
+        }
 
-            var agentTask = Task.Run(() => AcerAgentClient.SetOperatingModeAsync(mode));
-            bool ok1 = SendCommand("SetGamingProfile", (ulong)mode).success;
-            bool ok2 = SendCommand("SetGamingProfile", 0x01000000UL | (ulong)mode).success;
-            bool ok3 = SendCommand("SetGamingMiscSetting", 0x0BUL | ((ulong)mode << 8)).success;
-            bool agentOk = WaitAgent(agentTask);
-            if (!(agentOk || ok1 || ok2 || ok3)) return Acknowledged(false);
-            // Independent readback through the OEM agent upgrades an acknowledgement to a confirmation.
-            int? live = null;
-            if (agentOk)
+        private HardwareOperationResult ApplyPredatorOperationModeWmi(byte mode)
+        {
+            if (mode is not (0 or 1 or 4 or 5 or 6))
+                return new("failed", "Unsupported Predator operation mode.");
+            ulong gmInput = ((ulong)mode << 8) | NitroSense3Protocol.MiscSubfunctionOperationMode;
+            var (success, output) = SendCommand("SetGamingMiscSetting", gmInput);
+            if (!success)
+                return output != 0
+                    ? new("failed", $"Predator WMI rejected power mode {mode} (gmOutput 0x{output:X}). The previous preference was kept.", "wmi-command-rejected", HardwareFeature.Power)
+                    : new("failed", "Predator WMI did not acknowledge SetGamingMiscSetting(0x0B). The previous preference was kept.", "wmi-no-acknowledgement", HardwareFeature.Power);
+            byte? actual = ParsePredatorOperationMode(ReadGamingMiscSetting(NitroSense3Protocol.MiscSubfunctionOperationMode));
+            if (actual != mode && _testIo == null)
             {
-                try { var read = Task.Run(AcerAgentClient.GetOperatingModeAsync); if (read.Wait(250)) live = read.Result; }
-                catch { }
+                Thread.Sleep(50);
+                actual = ParsePredatorOperationMode(ReadGamingMiscSetting(NitroSense3Protocol.MiscSubfunctionOperationMode));
             }
-            return live == mode
-                ? new HardwareOperationResult("confirmed", "Performance profile confirmed by OEM agent readback.")
-                : Acknowledged(true);
+            return actual == mode || _testIo == null
+                ? new("confirmed", "Predator operation mode confirmed by WMI.")
+                : actual.HasValue
+                    ? new("unverified", $"Predator operation-mode WMI readback (0x{actual.Value:X}) differs from the requested mode {mode}.")
+                    : new("unverified", "Predator operation mode acknowledged; WMI readback unavailable. Preference was not saved.");
         }
 
         private HardwareOperationResult ApplyNitroOperationModePipe(byte mode)
@@ -490,6 +520,8 @@ namespace PredatorControlApp
             string backend = caps.Results[HardwareFeature.Power].Backend;
             byte? actual = backend switch
             {
+                VerifiedAcerProtocol.PowerBackend => _testIo != null ? _testIo.ReadReviewedAgentPowerMode() :
+                    VerifiedAcerProtocol.ParseCurrentMode(AcerAgentClient.GetDeviceDataAsync("OPERATING_MODE").GetAwaiter().GetResult()),
                 "windows-power-plan" => (_testIo != null ? _testIo.ReadActiveWindowsPowerPlan() ?? caps.ActiveWindowsPowerPlan : WindowsPowerPlans.Read().ActiveScheme) is Guid activeGuid
                     ? caps.PowerModes.FirstOrDefault(m => m.WindowsScheme == activeGuid)?.Value
                     : null,
@@ -498,6 +530,8 @@ namespace PredatorControlApp
                         ? _testIo.SendNitroSense(NitroSense3Protocol.CmdWmiGetGamingMiscSetting, NitroSense3Protocol.MiscSubfunctionOperationMode, false)
                         : NitroSense3Protocol.Exchange(NitroSense3Protocol.CmdWmiGetGamingMiscSetting, NitroSense3Protocol.MiscSubfunctionOperationMode, false).GetAwaiter().GetResult()),
                 NitroSense3Protocol.OperationModeWmiBackend => NitroSense3Protocol.OperationModeState(
+                    ReadGamingMiscSetting(NitroSense3Protocol.MiscSubfunctionOperationMode)),
+                DeviceProfileResolver.PredatorWmiOperationModeBackend => ParsePredatorOperationMode(
                     ReadGamingMiscSetting(NitroSense3Protocol.MiscSubfunctionOperationMode)),
                 _ => caps.ActivePowerMode
             };
@@ -543,53 +577,77 @@ namespace PredatorControlApp
         public HardwareOperationResult SetFanBehavior(byte mode)
         {
             HardwareFeature feature = mode == 1 ? HardwareFeature.FanAuto : mode == 2 ? HardwareFeature.FanMax : HardwareFeature.FanManual;
-            var result = Write(feature, mode is >= 1 and <= 3, () =>
+            byte initialCpu = _customCpuFanSpeed, initialGpu = _customGpuFanSpeed;
+            bool valid = mode is >= 1 and <= 3;
+            bool reviewedService = Capabilities.Results.GetValueOrDefault(feature)?.Backend == VerifiedAcerProtocol.FanBackend;
+            if (valid && mode == 3 && reviewedService && !_manualFanSession &&
+                VerifiedAcerProtocol.TryGetCpuGpuFans(Capabilities.FanChannels, out var cpuChannel, out var gpuChannel) &&
+                VerifiedAcerProtocol.TryGetCustomSliderRange(cpuChannel, out int cpuMinimum, out int cpuMaximum) &&
+                VerifiedAcerProtocol.TryGetCustomSliderRange(gpuChannel, out int gpuMinimum, out int gpuMaximum))
             {
-                if (mode == 3) _manualFanSession = true;
-                bool predator = _testIo == null && Capabilities.ChassisFamily == AcerChassisFamily.Predator;
-                Task<bool>? agentModeTask = null;
-                if (predator)
+                // Start at a value inside this device's live range; later user requests
+                // outside that range are rejected instead of silently clamped.
+                initialCpu = (byte)Math.Clamp(initialCpu, cpuMinimum, cpuMaximum);
+                initialGpu = (byte)Math.Clamp(initialGpu, gpuMinimum, gpuMaximum);
+            }
+            if (valid && mode == 3 && reviewedService)
+                valid = TryPrepareReviewedFanSpeeds(initialCpu, initialGpu, out initialCpu, out initialGpu);
+            var result = Write(feature, valid, () =>
+            {
+                if (Capabilities.Results[feature].Backend == VerifiedAcerProtocol.FanBackend)
                 {
-                    int agentFanMode = mode switch { 0x02 => 1, 0x03 => 2, _ => 0 };
-                    agentModeTask = Task.Run(() => AcerAgentClient.SetFanModeAsync(agentFanMode));
+                    byte agentMode = (byte)(mode - 1);
+                    if (mode == 3)
+                    {
+                        if (!TryPrepareReviewedFanSpeeds(initialCpu, initialGpu, out initialCpu, out initialGpu))
+                            return new("failed", "Fresh CPU and GPU temperatures are required for custom fan control; no fan command was sent.", "thermal-readback-unavailable", feature);
+                        _manualFanSession = true;
+                        SetPersistedManualFanActive(true);
+                        return _testIo?.SetReviewedAgentFanMode(agentMode, initialCpu, initialGpu) ??
+                            AcerAgentClient.SetReviewedFanModeAsync(agentMode, Capabilities.FanChannels, initialCpu, initialGpu).GetAwaiter().GetResult();
+                    }
+                    return _testIo?.SetReviewedAgentFanMode(agentMode) ??
+                        AcerAgentClient.SetReviewedFanModeAsync(agentMode, Capabilities.FanChannels).GetAwaiter().GetResult();
                 }
+                if (mode == 3) _manualFanSession = true;
                 bool accepted = SendCommand("SetGamingFanBehavior", 0x09UL | ((ulong)mode << 16) | ((ulong)mode << 22)).success;
-                if (agentModeTask != null)
-                    accepted = WaitAgent(agentModeTask) || accepted;
 
                 if (accepted && mode == 3)
                 {
                     byte cpu = _customCpuFanSpeed, gpu = _customGpuFanSpeed;
-                    Task<bool>? agentSpeedTask = predator
-                        ? Task.Run(() => AcerAgentClient.SetCustomFanSpeedAsync(cpu, gpu))
-                        : null;
                     bool cpuOk = SendCommand("SetGamingFanSpeed", 1UL | ((ulong)cpu << 8)).success;
                     bool gpuOk = SendCommand("SetGamingFanSpeed", 4UL | ((ulong)gpu << 8)).success;
-                    accepted = agentSpeedTask != null
-                        ? WaitAgent(agentSpeedTask) || (cpuOk && gpuOk)
-                        : (cpuOk && gpuOk);
+                    accepted = cpuOk && gpuOk;
                 }
                 return Acknowledged(accepted);
             });
-            if (result.Accepted) { _manualFanSession = mode == 3; SetPersistedManualFanActive(mode == 3); }
+            if (result.Accepted)
+            {
+                _manualFanSession = mode == 3;
+                if (mode == 3) { _customCpuFanSpeed = initialCpu; _customGpuFanSpeed = initialGpu; }
+                SetPersistedManualFanActive(mode == 3);
+            }
             if (!result.Accepted && mode == 3) RecoverAutomaticFans();
             return result;
         }
 
         public bool SetFanSpeed(byte cpuSpeed, byte gpuSpeed)
         {
-            var result = Write(HardwareFeature.FanManual, cpuSpeed is >= 10 and <= 100 && gpuSpeed is >= 10 and <= 100, () =>
+            bool agentBackend = Capabilities.Results.GetValueOrDefault(HardwareFeature.FanManual)?.Backend == VerifiedAcerProtocol.FanBackend;
+            byte dispatchCpu = cpuSpeed, dispatchGpu = gpuSpeed;
+            bool valid = cpuSpeed is >= 10 and <= 100 && gpuSpeed is >= 10 and <= 100;
+            if (valid && agentBackend)
+                valid = TryPrepareReviewedFanSpeeds(cpuSpeed, gpuSpeed, out dispatchCpu, out dispatchGpu);
+            var result = Write(HardwareFeature.FanManual, valid, () =>
             {
                 _manualFanSession = true; // Also recover if only the first of the two writes succeeds.
                 SetPersistedManualFanActive(true);
-                bool predator = _testIo == null && Capabilities.ChassisFamily == AcerChassisFamily.Predator;
-                Task<bool>? agentTask = predator
-                    ? Task.Run(() => AcerAgentClient.SetCustomFanSpeedAsync(cpuSpeed, gpuSpeed))
-                    : null;
+                if (Capabilities.Results[HardwareFeature.FanManual].Backend == VerifiedAcerProtocol.FanBackend)
+                    return _testIo?.SetReviewedAgentFanMode(2, dispatchCpu, dispatchGpu) ??
+                        AcerAgentClient.SetReviewedFanModeAsync(2, Capabilities.FanChannels, dispatchCpu, dispatchGpu).GetAwaiter().GetResult();
                 bool cpu = SendCommand("SetGamingFanSpeed", 1UL | ((ulong)cpuSpeed << 8)).success;
                 bool gpu = SendCommand("SetGamingFanSpeed", 4UL | ((ulong)gpuSpeed << 8)).success;
-                bool agentOk = agentTask != null && WaitAgent(agentTask);
-                return Acknowledged((cpu && gpu) || agentOk);
+                return Acknowledged(cpu && gpu);
             });
             if (result.Accepted) { _customCpuFanSpeed = cpuSpeed; _customGpuFanSpeed = gpuSpeed; _manualFanSession = true; SetPersistedManualFanActive(true); }
             else if (_manualFanSession) RecoverAutomaticFans();
@@ -599,13 +657,6 @@ namespace PredatorControlApp
         public bool SetGpuFanSpeed(byte speed) => SetFanSpeed(_customCpuFanSpeed, speed);
         public bool SetAuxFanSpeed(byte speed) => Write(HardwareFeature.AuxFan, speed is >= 10 and <= 100,
             () => Acknowledged(SendCommand("SetGamingFanSpeed", 2UL | ((ulong)speed << 8)).success)).Accepted;
-        // Awaits the OEM agent result with a tight localhost timeout so success is never inferred from a cached WMI object.
-        private static bool WaitAgent(Task<bool> task, int timeoutMs = 350)
-        {
-            try { return task.Wait(timeoutMs) && task.Result; }
-            catch { return false; }
-        }
-
         public void RecoverAutomaticFans()
         {
             if ((_manualFanSession || IsPersistedManualFanActive()) && Capabilities.CanWrite(HardwareFeature.FanAuto))
@@ -651,9 +702,10 @@ namespace PredatorControlApp
 
         private void QueueLightingTask(Action action)
         {
+            long revision = Capabilities.Revision;
             lock (_lightingLock)
             {
-                _pendingLightingAction = action;
+                _pendingLightingAction = () => { if (Capabilities.IsCurrent && Capabilities.Revision == revision) action(); };
                 if (_isLightingWorkerRunning) return;
                 _isLightingWorkerRunning = true;
             }
@@ -822,7 +874,7 @@ namespace PredatorControlApp
 
         public void SetSpeed(byte speed)
         {
-            if (!Keyboard.SupportsRgb || speed is < 1 or > 9) return;
+            if (!Keyboard.SupportsEffectSpeed || speed is < 1 or > 9) return;
             _speed = Math.Clamp(speed, (byte)1, (byte)9);
             QueueLightingTask(() =>
             {
@@ -1077,9 +1129,7 @@ namespace PredatorControlApp
             {
                 if (_testIo != null) return _testIo.SetGpuMode(mode) ? new("unverified", "GPU mode set.") : new("failed", "GPU mode rejected.");
                 bool agentOk = AcerAgentClient.SetGpuModeAsync(mode).GetAwaiter().GetResult();
-                ulong wmiPayload = (ulong)0x02 | (((ulong)mode + 1) << 8);
-                bool wmiOk = SendCommand("SetGamingMiscSetting", wmiPayload).success;
-                if (!agentOk && !wmiOk) return new("failed", "GPU mode request failed.");
+                if (!agentOk) return new("failed", "GPU mode request failed. No alternate firmware command was sent.");
                 return new("unverified", "GPU mode request acknowledged; active state can only be verified after the operator restarts Windows.");
             });
             return Task.FromResult(result.Accepted);
@@ -1093,14 +1143,22 @@ namespace PredatorControlApp
         /// </summary>
         public bool SetLcdOverdrive(bool enable) => Write(HardwareFeature.LcdOverdrive, true, () =>
         {
+            ulong payload = (enable ? (1UL << 48) : 0UL) | 0x10UL;
             if (_testIo != null)
-                return Acknowledged(SendCommand("SetGamingMiscSetting", ((enable ? 1UL : 0UL) << 32) | 0x10UL).success);
+                return Acknowledged(SendCommand("SetGamingProfile", payload).success);
 
             bool agentOk = false;
             try { agentOk = AcerAgentClient.SetLcdOverdriveAsync(enable).GetAwaiter().GetResult(); } catch { }
-            bool wmiOk = SendCommand("SetGamingMiscSetting", ((enable ? 1UL : 0UL) << 32) | 0x10UL).success;
+            bool wmiOk = SendCommand("SetGamingProfile", payload).success;
             return Acknowledged(agentOk || wmiOk);
         }).Accepted;
+
+        public bool? ReadLcdOverdrive()
+        {
+            if (_testIo != null) return null;
+            ulong? reply = ReadGamingProfileRaw(0);
+            return reply.HasValue && (reply.Value & 0xFF) == 0 ? ((reply.Value >> 48) & 0xFF) == 1 : null;
+        }
 
         public bool SetBootSound(bool enable) => Write(HardwareFeature.BootSound, true, () =>
         {
@@ -1537,9 +1595,10 @@ namespace PredatorControlApp
             var caps = Capabilities;
             var sample = GetAllSensors(IsOnAc);
             return CompatibilityDiagnostics.Export(caps, Updater.CurrentText,
-                new { wmiClass = _discovery?.WmiClass, methods = _discovery?.Methods, keyboardReadable = _discovery?.KeyboardConfigurationReadable,
+                new { readOnlyProbe = _readOnly, wmiClass = _discovery?.WmiClass, methods = _discovery?.Methods, keyboardReadable = _discovery?.KeyboardConfigurationReadable,
                     batteryStatusReadable = _discovery?.BatteryStatusReadable, windowsPowerOverlayReadable = _discovery?.WindowsPowerOverlayReadable,
                     nitroSense3ReadStatus = _testIo == null ? NitroSense3Protocol.LastReadFailure : null,
+                    acerAgentReadStatus = _testIo == null ? AcerAgentClient.LastReadFailure : null,
                     windowsPowerPlans = _discovery?.WindowsPowerPlans,
                     supportedSensorMask = _discovery?.SupportedSensorMask,
                     sensorReadings = new { sample.cpuTemp, sample.gpuTemp, sample.cpuFanRpm, sample.gpuFanRpm, sample.auxFanRpm, sample.gpuPowerW } },
@@ -1553,7 +1612,7 @@ namespace PredatorControlApp
         {
             lock (HardwareWriteGate.CommandLock)
             {
-                RecoverAutomaticFans();
+                if (!_readOnly) RecoverAutomaticFans();
                 lock (_lock)
                 {
                     if (_disposed) return;

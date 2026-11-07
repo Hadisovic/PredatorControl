@@ -20,7 +20,10 @@ namespace PredatorControlApp
         float? VramTotalGb = null,
         float? RamUsedGb = null,
         float? RamTotalGb = null,
-        int? AuxFanRpm = null
+        int? AuxFanRpm = null,
+        long SampledAtTimestamp = 0,
+        int? CpuClockMhz = null,
+        int? GpuClockMhz = null
     );
 
     [SupportedOSPlatform("windows")]
@@ -71,10 +74,56 @@ namespace PredatorControlApp
             return (null, null, null);
         }
 
-        private static PerformanceCounter? _cpuPowerCounter;
-        private static bool _cpuPowerInitAttempted;
+        private PerformanceCounter? _cpuPowerCounter;
+        private bool _cpuPowerInitAttempted;
+        private PerformanceCounter? _cpuFrequencyCounter;
+        private bool _cpuFrequencyInitAttempted;
+        private long _cpuFrequencyRetryAfter;
 
-        private static float? GetCpuPower()
+        private int? GetCpuClockMhz()
+        {
+            if (_cpuFrequencyCounter == null &&
+                (!_cpuFrequencyInitAttempted || Stopwatch.GetTimestamp() >= _cpuFrequencyRetryAfter))
+            {
+                _cpuFrequencyInitAttempted = true;
+                _cpuFrequencyRetryAfter = Stopwatch.GetTimestamp() + 30 * Stopwatch.Frequency;
+                try
+                {
+                    var category = new PerformanceCounterCategory("Processor Information");
+                    string? totalInstance = category.GetInstanceNames()
+                        .FirstOrDefault(name => name.Equals("_Total", StringComparison.OrdinalIgnoreCase));
+                    if (totalInstance != null && category.CounterExists("Processor Frequency"))
+                    {
+                        _cpuFrequencyCounter = new PerformanceCounter(
+                            "Processor Information", "Processor Frequency", totalInstance, true);
+                        _cpuFrequencyCounter.NextValue();
+                    }
+                }
+                catch
+                {
+                    _cpuFrequencyCounter?.Dispose();
+                    _cpuFrequencyCounter = null;
+                }
+            }
+
+            try
+            {
+                if (_cpuFrequencyCounter == null) return null;
+                float mhz = _cpuFrequencyCounter.NextValue();
+                return float.IsFinite(mhz) && mhz is >= 100 and <= 10000
+                    ? (int)Math.Round(mhz)
+                    : null;
+            }
+            catch
+            {
+                _cpuFrequencyCounter?.Dispose();
+                _cpuFrequencyCounter = null;
+                _cpuFrequencyRetryAfter = Stopwatch.GetTimestamp() + 5 * Stopwatch.Frequency;
+                return null;
+            }
+        }
+
+        private float? GetCpuPower()
         {
             if (!_cpuPowerInitAttempted)
             {
@@ -86,6 +135,8 @@ namespace PredatorControlApp
                 }
                 catch
                 {
+                    _cpuPowerCounter?.Dispose();
+                    _cpuPowerCounter = null;
                     try
                     {
                         var cat = new PerformanceCounterCategory("Energy Meter");
@@ -109,7 +160,7 @@ namespace PredatorControlApp
                 try
                 {
                     float mw = _cpuPowerCounter.NextValue();
-                    if (mw > 0)
+                    if (float.IsFinite(mw) && mw is > 0 and <= 1000000)
                     {
                         return mw / 1000.0f; // mW to Watts
                     }
@@ -154,7 +205,6 @@ namespace PredatorControlApp
         public void SetOverlayActive(bool active)
         {
             _isOverlayActive = active;
-            if (active) { _includeGpu = true; _includeCpuPower = true; }
             UpdatePollInterval();
         }
 
@@ -170,11 +220,6 @@ namespace PredatorControlApp
 
         public void SetSensorMask(bool includeGpu)
         {
-            if (_isOverlayActive)
-            {
-                _includeGpu = true;
-                return;
-            }
             _includeGpu = includeGpu;
         }
 
@@ -216,6 +261,8 @@ namespace PredatorControlApp
                 {
                     try
                     {
+                        long sampledAt = Stopwatch.GetTimestamp();
+                        bool includeGpu = _includeGpu || _isOverlayActive;
                         var power = SystemInformation.PowerStatus;
                         var powerLine = power.PowerLineStatus;
                         bool isPluggedIn = powerLine == PowerLineStatus.Online;
@@ -223,7 +270,7 @@ namespace PredatorControlApp
                             ? (float)Math.Round(power.BatteryLifePercent * 100f) : null;
                         bool isCharging = (power.BatteryChargeStatus & BatteryChargeStatus.Charging) != 0;
 
-                        var (cpuTemp, gpuTemp, cpuRpm, gpuRpm, auxRpm, gpuPower) = _wmi.GetAllSensors(isPluggedIn, _includeGpu);
+                        var (cpuTemp, gpuTemp, cpuRpm, gpuRpm, auxRpm, gpuPower) = _wmi.GetAllSensors(isPluggedIn, includeGpu);
 
                         int? cpuUsage = CalculateCpuUsage();
 
@@ -233,8 +280,9 @@ namespace PredatorControlApp
                         int? nvmlGpuTemp = null;
                         float? vramUsedGb = null;
                         float? vramTotalGb = null;
+                        int? nvmlGpuClockMhz = null;
 
-                        if (_includeGpu && NvmlGpuMonitor.IsAvailable)
+                        if (includeGpu && NvmlGpuMonitor.IsAvailable)
                         {
                             var nvml = NvmlGpuMonitor.Query();
                             if (nvml.powerW.HasValue && nvml.powerW.Value > 0)
@@ -251,6 +299,7 @@ namespace PredatorControlApp
                             }
                             vramUsedGb = nvml.vramUsedGb;
                             vramTotalGb = nvml.vramTotalGb;
+                            nvmlGpuClockMhz = nvml.clockMhz;
                         }
 
                         float? effectiveGpuPower = dgpuPowerW ?? (gpuPower.HasValue && gpuPower.Value > 0 ? (float)gpuPower.Value : null);
@@ -260,7 +309,8 @@ namespace PredatorControlApp
                         // Power and temperature stay separate readings; they are not turned into a fake percentage.
                         int? gpuUsage = nvmlGpuUsage;
 
-                        float? cpuPowerW = _includeCpuPower ? GetCpuPower() : null;
+                        float? cpuPowerW = _includeCpuPower || _isOverlayActive ? GetCpuPower() : null;
+                        int? cpuClockMhz = _isOverlayActive ? GetCpuClockMhz() : null;
                         var (ramUsedGb, ramTotalGb, _) = GetMemoryStatus();
 
                         var snapshot = new TelemetrySnapshot(
@@ -279,7 +329,10 @@ namespace PredatorControlApp
                             vramTotalGb,
                             ramUsedGb,
                             ramTotalGb,
-                            auxRpm
+                            auxRpm,
+                            sampledAt,
+                            cpuClockMhz,
+                            nvmlGpuClockMhz
                         );
 
                         _wmi.ObserveTelemetry(snapshot);
@@ -301,6 +354,13 @@ namespace PredatorControlApp
                     catch (Exception ex)
                     {
                         Program.Report(ex, false);
+                        // Publish missing values immediately; a failed provider cannot leave its last
+                        // temperatures on screen as if they were still current.
+                        var missing = new TelemetrySnapshot(null, null, null, null, PowerLineStatus.Unknown,
+                            SampledAtTimestamp: Stopwatch.GetTimestamp());
+                        _wmi.ObserveTelemetry(missing);
+                        if (!token.IsCancellationRequested)
+                            try { _onSnapshot(missing); } catch { }
                         try { await Task.Delay(2000, token); } catch { break; }
                     }
                 }
@@ -323,12 +383,14 @@ namespace PredatorControlApp
 
             if (stopped)
             {
+                _cpuPowerCounter?.Dispose();
+                _cpuFrequencyCounter?.Dispose();
                 _cts.Dispose();
             }
             else
             {
                 // Worker still busy in a sensor read; dispose once it actually finishes.
-                _worker.ContinueWith(_ => { try { _cts.Dispose(); } catch { } }, TaskScheduler.Default);
+                _worker.ContinueWith(_ => { try { _cpuPowerCounter?.Dispose(); _cpuFrequencyCounter?.Dispose(); _cts.Dispose(); } catch { } }, TaskScheduler.Default);
             }
         }
     }

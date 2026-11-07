@@ -1,4 +1,5 @@
 using System.Security.AccessControl;
+using System.Security.Cryptography;
 using System.Security.Principal;
 
 namespace PredatorControlApp;
@@ -12,10 +13,10 @@ internal static class SecureLaunch
     /// <summary>Resolves a built-in tool (sc.exe, schtasks.exe, ...) to its System32 path so it cannot be hijacked by search order.</summary>
     internal static string System32(string exe) => Path.IsPathRooted(exe) ? exe : Path.Combine(Environment.SystemDirectory, exe);
 
-    // Earlier builds used ProgramData\PredatorControl and ProgramFiles\PredatorControlData.
-    // Some legacy directories grant the unelevated user write access. Never load privileged
-    // files from them, copy their contents, or repair their permissions in place.
-    internal static readonly string ProtectedDataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "PredatorControlData-v2");
+    // Shared, administrator-protected native data lives separately from the app folder.
+    // Existing folders are never trusted or repaired in place unless their ACLs pass validation.
+    internal static string ProtectedDataDir => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "PredatorControlData");
 
     private static readonly SecurityIdentifier LocalSystem = new(WellKnownSidType.LocalSystemSid, null);
     private static readonly SecurityIdentifier Admins = new(WellKnownSidType.BuiltinAdministratorsSid, null);
@@ -29,8 +30,20 @@ internal static class SecureLaunch
     private const FileSystemRights AncestorWrite = FileSystemRights.Delete | FileSystemRights.DeleteSubdirectoriesAndFiles |
         FileSystemRights.ChangePermissions | FileSystemRights.TakeOwnership;
 
+    // A volume root cannot itself be deleted or renamed. Rights to delete its children
+    // or change its ACL still matter, including on Windows Sandbox's system volume.
+    private static FileSystemRights AncestorRights(DirectoryInfo directory) =>
+        directory.Parent == null ? AncestorWrite & ~FileSystemRights.Delete : AncestorWrite;
+
     private static bool IsTrusted(SecurityIdentifier? sid) =>
         sid != null && (sid.Equals(LocalSystem) || sid.Equals(Admins) || sid.Equals(TrustedInstaller) || sid.Equals(CreatorOwner));
+
+    internal static bool IsSystemOwnedDirectory(string path)
+    {
+        var dir = new DirectoryInfo(path);
+        return dir.Exists && (dir.Attributes & FileAttributes.ReparsePoint) == 0 &&
+            IsTrusted(dir.GetAccessControl().GetOwner(typeof(SecurityIdentifier)) as SecurityIdentifier);
+    }
 
     private static bool HasUntrustedWriter(FileSystemSecurity security, FileSystemRights mask)
     {
@@ -60,7 +73,7 @@ internal static class SecureLaunch
             for (var dir = file.Directory; dir != null; dir = dir.Parent)
             {
                 if ((dir.Attributes & FileAttributes.ReparsePoint) != 0) return false;
-                if (HasUntrustedWriter(dir.GetAccessControl(), first ? ObjectWrite : AncestorWrite)) return false;
+                if (HasUntrustedWriter(dir.GetAccessControl(), first ? ObjectWrite : AncestorRights(dir))) return false;
                 first = false;
             }
             return true;
@@ -76,7 +89,7 @@ internal static class SecureLaunch
             for (var dir = new DirectoryInfo(Path.GetFullPath(path)); dir != null; dir = dir.Parent)
             {
                 if (!dir.Exists || (dir.Attributes & FileAttributes.ReparsePoint) != 0) return false;
-                if (HasUntrustedWriter(dir.GetAccessControl(), first ? ObjectWrite : AncestorWrite)) return false;
+                if (HasUntrustedWriter(dir.GetAccessControl(), first ? ObjectWrite : AncestorRights(dir))) return false;
                 first = false;
             }
             return true;
@@ -98,7 +111,7 @@ internal static class SecureLaunch
         // Validate ancestors before creating anything or changing an ACL.
         for (var parent = info.Parent; parent != null; parent = parent.Parent)
             if (!parent.Exists || (parent.Attributes & FileAttributes.ReparsePoint) != 0 ||
-                HasUntrustedWriter(parent.GetAccessControl(), AncestorWrite))
+                HasUntrustedWriter(parent.GetAccessControl(), AncestorRights(parent)))
                 throw new UnauthorizedAccessException("The directory has an untrusted ancestor: " + parent.FullName);
         if (info.Exists)
         {
@@ -122,12 +135,70 @@ internal static class SecureLaunch
         return info.FullName;
     }
 
+    /// <summary>
+    /// Reconciles the fixed Program Files data directory during elevated setup. A legacy
+    /// directory with a weak ACL is treated as disposable data: remove it using no-follow
+    /// handles, then create a fresh administrator-only directory. Nothing from that path is
+    /// loaded or trusted before it has been secured.
+    /// </summary>
+    internal static string PrepareProtectedDataDirectory()
+    {
+        string path = Path.GetFullPath(ProtectedDataDir);
+        string parent = Path.GetDirectoryName(path) ?? throw new IOException("The protected data directory has no parent.");
+        if (!IsAdminOnlyDirectory(parent))
+            throw new UnauthorizedAccessException("The protected data directory has an untrusted Program Files ancestor.");
+
+        FileAttributes? attributes = null;
+        try { attributes = File.GetAttributes(path); }
+        catch (FileNotFoundException) { }
+        catch (DirectoryNotFoundException) { }
+
+        if (attributes.HasValue)
+        {
+            bool isDirectory = (attributes.Value & FileAttributes.Directory) != 0;
+            bool isProtected = isDirectory ? IsAdminOnlyDirectory(path) : IsAdminOnly(path);
+            if (!isDirectory || !isProtected)
+            {
+                if ((attributes.Value & FileAttributes.ReparsePoint) != 0)
+                    throw new IOException("The protected data path is a reparse point and cannot be safely replaced.");
+                SafeFile.DeleteTree(path, isDirectory);
+            }
+        }
+
+        return CreateAdminOnlyDirectory(path);
+    }
+
+    /// <summary>Removes only the fixed Predator Control Program Files data root using no-follow handles.</summary>
+    internal static void RemoveProtectedDataDirectory()
+    {
+        string path = Path.GetFullPath(ProtectedDataDir);
+        string parent = Path.GetDirectoryName(path) ?? throw new IOException("The protected data directory has no parent.");
+        if (!IsAdminOnlyDirectory(parent))
+            throw new UnauthorizedAccessException("The protected data directory has an untrusted Program Files ancestor.");
+        FileAttributes attributes;
+        try { attributes = File.GetAttributes(path); }
+        catch (FileNotFoundException) { return; }
+        catch (DirectoryNotFoundException) { return; }
+        if ((attributes & FileAttributes.ReparsePoint) != 0)
+            throw new IOException("The protected data path is a reparse point and cannot be safely removed.");
+        SafeFile.DeleteTree(path, (attributes & FileAttributes.Directory) != 0);
+    }
+
     // Call only inside a protected directory. Hold the returned read handle throughout native loading.
     internal static FileStream WriteLockedResource(string path, byte[] bytes)
     {
         using (var output = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             output.Write(bytes);
         return new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+    }
+
+    internal static bool VerifyHashAndRewind(Stream stream, byte[] expectedHash)
+    {
+        if (!stream.CanSeek) return false;
+        stream.Position = 0;
+        byte[] actualHash = SHA256.HashData(stream);
+        stream.Position = 0;
+        return CryptographicOperations.FixedTimeEquals(actualHash, expectedHash);
     }
 
     /// <summary>Only the running copy in a protected location may become a startup task.</summary>

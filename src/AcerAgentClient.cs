@@ -21,6 +21,7 @@ using System.IO.Pipes;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -41,7 +42,7 @@ namespace PredatorControlApp
     /// - WIN_KEY: Lock (1), Unlock (0)
     /// - COOL_BOOST: Enable (1), Disable (0)
     /// </summary>
-    public static class AcerAgentClient
+    public static partial class AcerAgentClient
     {
         private const string Host = "127.0.0.1";
         private const int TcpPort = 46933;
@@ -68,19 +69,24 @@ namespace PredatorControlApp
         {
             "GPU_MODE" => HardwareWriteGate.InScope(HardwareFeature.GpuMux, "acer-agent"),
             "WIN_KEY" => HardwareWriteGate.InScope(HardwareFeature.WinKey, "acer-wmi-winkey"),
-            "OPERATING_MODE" => HardwareWriteGate.InScope(HardwareFeature.Power, "acer-wmi-profile"),
-            "FAN_CONTROL" => HardwareWriteGate.InScope(HardwareFeature.FanAuto, "acer-wmi-fans") ||
+            "OPERATING_MODE" => HardwareWriteGate.InScope(HardwareFeature.Power, "acer-wmi-profile") || HardwareWriteGate.InScope(HardwareFeature.Power, VerifiedAcerProtocol.PowerBackend),
+            "FAN_CONTROL" => HardwareWriteGate.InScope(HardwareFeature.FanAuto, VerifiedAcerProtocol.FanBackend) || HardwareWriteGate.InScope(HardwareFeature.FanMax, VerifiedAcerProtocol.FanBackend) ||
+                             HardwareWriteGate.InScope(HardwareFeature.FanManual, VerifiedAcerProtocol.FanBackend) ||
+                             HardwareWriteGate.InScope(HardwareFeature.FanAuto, "acer-wmi-fans") ||
                              HardwareWriteGate.InScope(HardwareFeature.FanMax, "acer-wmi-fans") ||
                              HardwareWriteGate.InScope(HardwareFeature.FanManual, "acer-wmi-fans"),
-            "LCD_OVERDRIVE" => HardwareWriteGate.InScope(HardwareFeature.LcdOverdrive, "acer-wmi-misc"),
+            "LCD_OVERDRIVE" => HardwareWriteGate.InScope(HardwareFeature.LcdOverdrive, "acer-wmi-lcd"),
             "BOOT_SOUND" or "CUSTOM_BOOT_LOGO" => HardwareWriteGate.InScope(HardwareFeature.BootSound, "acer-wmi-misc"),
             null => HardwareWriteGate.InScope(HardwareFeature.GpuMux, "acer-agent") ||
+                    HardwareWriteGate.InScope(HardwareFeature.Power, VerifiedAcerProtocol.PowerBackend) ||
+                    HardwareWriteGate.InScope(HardwareFeature.FanAuto, VerifiedAcerProtocol.FanBackend) || HardwareWriteGate.InScope(HardwareFeature.FanMax, VerifiedAcerProtocol.FanBackend) ||
+                    HardwareWriteGate.InScope(HardwareFeature.FanManual, VerifiedAcerProtocol.FanBackend) ||
                     HardwareWriteGate.InScope(HardwareFeature.WinKey, "acer-wmi-winkey") ||
                     HardwareWriteGate.InScope(HardwareFeature.Power, "acer-wmi-profile") ||
                     HardwareWriteGate.InScope(HardwareFeature.FanAuto, "acer-wmi-fans") ||
                     HardwareWriteGate.InScope(HardwareFeature.FanMax, "acer-wmi-fans") ||
                     HardwareWriteGate.InScope(HardwareFeature.FanManual, "acer-wmi-fans") ||
-                    HardwareWriteGate.InScope(HardwareFeature.LcdOverdrive, "acer-wmi-misc") ||
+                    HardwareWriteGate.InScope(HardwareFeature.LcdOverdrive, "acer-wmi-lcd") ||
                     HardwareWriteGate.InScope(HardwareFeature.BootSound, "acer-wmi-misc"),
             _ => false
         };
@@ -115,10 +121,17 @@ namespace PredatorControlApp
         {
             bool write = packetId == CMD_SET_DEVICE_DATA;
             if (write && !IsAuthorizedWrite()) return null;
+            if (write && (HardwareWriteGate.InScope(HardwareFeature.Power, VerifiedAcerProtocol.PowerBackend) ||
+                HardwareWriteGate.InScope(HardwareFeature.FanAuto, VerifiedAcerProtocol.FanBackend) || HardwareWriteGate.InScope(HardwareFeature.FanMax, VerifiedAcerProtocol.FanBackend) ||
+                HardwareWriteGate.InScope(HardwareFeature.FanManual, VerifiedAcerProtocol.FanBackend)) &&
+                !VerifiedAcerProtocol.AuthorizedWritePayload(jsonPayload)) return null;
             if (!write && packetId is not (CMD_INITIALIZATION or CMD_GET_MONITOR_DATA or CMD_GET_UPDATED_DATA or CMD_GET_CONNECTED_DEVICE)) return null;
             if (!await _sendLock.WaitAsync(timeoutMs).ConfigureAwait(false)) return null;
             try
             {
+                var service = OemServiceManager.ReadServiceEvidence("AASSvc");
+                if (VerifiedAcerProtocol.ReviewedService(service))
+                    return await SendReviewedSessionAsync(packetId, jsonPayload, service, Math.Max(timeoutMs, 2000)).ConfigureAwait(false);
                 using var deadline = new CancellationTokenSource(timeoutMs);
                 byte[] payload = Encoding.UTF8.GetBytes(jsonPayload);
                 if (payload.Length > 16384) return null;
@@ -132,6 +145,7 @@ namespace PredatorControlApp
                     if (!AcerAgentEndpoint.TcpConnectedToTrustedServer(tcp.Client, TcpPort, trustedListenerPid))
                         return null;
                     using var stream = tcp.GetStream();
+                    if (write && !IsAuthorizedWrite()) return null;
                     await stream.WriteAsync(packet, deadline.Token).ConfigureAwait(false);
                     return await AcerAgentProtocol.ReadReply(stream, packetId, deadline.Token).ConfigureAwait(false);
                 }
@@ -141,6 +155,7 @@ namespace PredatorControlApp
                     try { await pipe.ConnectAsync(25, deadline.Token).ConfigureAwait(false); }
                     catch (TimeoutException) { continue; }
                     if (!AcerAgentEndpoint.PipeTrusted(pipe.SafePipeHandle)) continue;
+                    if (write && !IsAuthorizedWrite()) return null;
                     await pipe.WriteAsync(packet, deadline.Token).ConfigureAwait(false);
                     return await AcerAgentProtocol.ReadReply(pipe, packetId, deadline.Token).ConfigureAwait(false);
                 }
@@ -151,6 +166,92 @@ namespace PredatorControlApp
         }
 
         #region High-Level Hardware Commands
+
+        internal static Task<string?> QueryCapabilityAsync(string function) => function is
+            "SUPPORT_OPERATING_MODE_CAPABILITY" or "SUPPORT_KEYBOARD_INFO" or "SUPPORT_FAN_CONTROL" or "SUPPORT_GPU_MODE_CAPABILITY"
+            ? SendCommandAsync(CMD_INITIALIZATION, JsonSerializer.Serialize(new { Function = function }))
+            : Task.FromResult<string?>(null);
+
+        internal static async Task<HardwareOperationResult> SetReviewedOperatingModeAsync(byte mode)
+        {
+            if (!HardwareWriteGate.InScope(HardwareFeature.Power, VerifiedAcerProtocol.PowerBackend) || mode is not (0 or 1 or 4 or 5 or 6))
+                return new("failed", "Operating mode is not authorized.", "unverified-command");
+            var liveModes = VerifiedAcerProtocol.ParseModes(await QueryCapabilityAsync("SUPPORT_OPERATING_MODE_CAPABILITY").ConfigureAwait(false));
+            bool onAc = SystemInformation.PowerStatus.PowerLineStatus == PowerLineStatus.Online;
+            var selected = liveModes.FirstOrDefault(m => m.Value == mode);
+            if (selected == null || !(onAc ? selected.OnAc : selected.OnBattery))
+                return new("failed", "Firmware mode support or the power source changed; refresh compatibility.", "stale-capabilities");
+            if (mode is 4 or 5 && (!onAc ||
+                VerifiedAcerProtocol.ParseStatus(await GetDeviceDataAsync("BATTERY_BOOST").ConfigureAwait(false), "BATTERY_BOOST") == false ||
+                VerifiedAcerProtocol.ParseStatus(await GetDeviceDataAsync("ADAPTOR_STATUS").ConfigureAwait(false), "ADAPTOR_STATUS") == false))
+                return new("failed", "Firmware has not confirmed sufficient battery and adaptor power for this mode.", "power-unavailable");
+            // One selected protocol and one write. A missing acknowledgement must never
+            // cause retransmission on another transport or through a WMI fallback.
+            string? reply = await SendCommandAsync(CMD_SET_DEVICE_DATA,
+                JsonSerializer.Serialize(new { Function = "OPERATING_MODE", Parameter = new { mode } })).ConfigureAwait(false);
+            byte? actual = VerifiedAcerProtocol.ParseCurrentMode(await GetDeviceDataAsync("OPERATING_MODE").ConfigureAwait(false));
+            return actual == mode ? new("confirmed", "Performance mode confirmed by the reviewed OEM service.")
+                : actual.HasValue && reply != null ? new("failed", "OEM performance-mode readback differs from the requested state.", "readback-mismatch")
+                : new("unverified", "OEM service responded; performance-mode readback is unavailable.", "readback-unavailable");
+        }
+
+        internal static async Task<HardwareOperationResult> SetReviewedFanModeAsync(byte mode, IReadOnlyList<OemFanChannel> fans,
+            byte? cpuSpeed = null, byte? gpuSpeed = null)
+        {
+            HardwareFeature feature = mode switch { 0 => HardwareFeature.FanAuto, 1 => HardwareFeature.FanMax, 2 => HardwareFeature.FanManual, _ => (HardwareFeature)(-1) };
+            if (feature == (HardwareFeature)(-1) || !HardwareWriteGate.InScope(feature, VerifiedAcerProtocol.FanBackend))
+                return new("failed", "Fan mode is not authorized.", "unverified-command", feature);
+            var liveFans = VerifiedAcerProtocol.ParseFans(await QueryCapabilityAsync("SUPPORT_FAN_CONTROL").ConfigureAwait(false));
+            if (!liveFans.SequenceEqual(fans)) return new("failed", "Fan interfaces changed; refresh compatibility. No command was sent.", "stale-capabilities");
+            var current = VerifiedAcerProtocol.ParseFanState(await GetDeviceDataAsync("FAN_CONTROL").ConfigureAwait(false), fans);
+            if (!current.HasValue) return new("failed", "Current fan configuration is unavailable; no command was sent.", "readback-unavailable");
+
+            object customData = current.Value.CustomData;
+            if (mode == 2)
+            {
+                if (!cpuSpeed.HasValue || !gpuSpeed.HasValue ||
+                    !VerifiedAcerProtocol.TryGetCpuGpuFans(fans, out var cpuFan, out var gpuFan) ||
+                    cpuSpeed.Value is < 10 or > 100 || gpuSpeed.Value is < 10 or > 100 ||
+                    cpuSpeed.Value < cpuFan.Minimum || cpuSpeed.Value > cpuFan.Maximum ||
+                    gpuSpeed.Value < gpuFan.Minimum || gpuSpeed.Value > gpuFan.Maximum)
+                    return new("failed", "The live CPU/GPU fan channels or requested speeds are outside their verified ranges.", "invalid-parameter", feature);
+
+                var records = JsonNode.Parse(current.Value.CustomData.GetRawText())?.AsArray();
+                if (records == null || records.Count != fans.Count) return new("failed", "Current fan records could not be updated safely.", "readback-failed", feature);
+                bool foundCpu = false, foundGpu = false;
+                foreach (var node in records)
+                {
+                    if (node is not JsonObject record || record["fan_name"] is not JsonValue nameNode || !nameNode.TryGetValue<string>(out var name) ||
+                        record["fan_index"] is not JsonValue indexNode || !indexNode.TryGetValue<int>(out int index))
+                        return new("failed", "The current fan records changed shape; no command was sent.", "readback-failed", feature);
+                    if (index == cpuFan.Index && string.Equals(name, cpuFan.Name, StringComparison.Ordinal))
+                    {
+                        record["fan_custom_speed"] = cpuSpeed.Value;
+                        record["fan_custom_auto"] = 0;
+                        foundCpu = true;
+                    }
+                    else if (index == gpuFan.Index && string.Equals(name, gpuFan.Name, StringComparison.Ordinal))
+                    {
+                        record["fan_custom_speed"] = gpuSpeed.Value;
+                        record["fan_custom_auto"] = 0;
+                        foundGpu = true;
+                    }
+                    else return new("failed", "An unrecognized fan record prevents custom mode.", "invalid-parameter", feature);
+                }
+                if (!foundCpu || !foundGpu) return new("failed", "The live fan list does not match the CPU/GPU sliders.", "invalid-parameter", feature);
+                customData = records;
+            }
+
+            string? reply = await SendCommandAsync(CMD_SET_DEVICE_DATA, JsonSerializer.Serialize(new
+                { Function = "FAN_CONTROL", Parameter = new { mode, custom_fan_data = customData } })).ConfigureAwait(false);
+            var actual = VerifiedAcerProtocol.ParseFanState(await GetDeviceDataAsync("FAN_CONTROL").ConfigureAwait(false), fans);
+            if (actual?.Mode != mode) return new("failed", reply == null ? "The fan command was not acknowledged or its readback is unavailable." : "Fan mode readback differs from the requested state.",
+                actual.HasValue ? "readback-mismatch" : "readback-unavailable", feature);
+            if (mode == 2 && (!VerifiedAcerProtocol.FanSpeedMatches(actual.Value.CustomData, fans, cpuSpeed!.Value, gpuSpeed!.Value) ||
+                !VerifiedAcerProtocol.AllFansManual(actual.Value.CustomData)))
+                return new("failed", "Custom fan speed or manual-state readback differs from the requested setting.", "readback-mismatch", feature);
+            return new("confirmed", "Fan mode confirmed by the reviewed OEM service.", null, feature);
+        }
 
         /// <summary>
         /// Sets device data via SET_DEVICE_DATA (Packet 100).
@@ -186,6 +287,8 @@ namespace PredatorControlApp
         /// </summary>
         public static async Task<int> GetGpuModeCapabilityAsync()
         {
+            if (VerifiedAcerProtocol.ReviewedService(OemServiceManager.ReadServiceEvidence("AASSvc")))
+                return VerifiedAcerProtocol.ParseGpuMask(await QueryCapabilityAsync("SUPPORT_GPU_MODE_CAPABILITY").ConfigureAwait(false));
             try
             {
                 int mask = AcerAgentProtocol.GpuMask(await SendCommandAsync(CMD_INITIALIZATION, "{}").ConfigureAwait(false));
@@ -193,25 +296,7 @@ namespace PredatorControlApp
             }
             catch { }
 
-            try
-            {
-                using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\OEM\AcerAgentService\AdvanceSettings");
-                if (key?.GetValue("dgpu_mode_capability") is int dgpuCap && dgpuCap is > 0 and <= 7)
-                    return dgpuCap;
-            }
-            catch { }
-
-            try
-            {
-                int? currentMode = await GetGpuModeAsync().ConfigureAwait(false);
-                if (currentMode.HasValue)
-                {
-                    // Live mode confirms MUX is active: 0=Optimus (1), 1=Discrete (2), 2=Auto (4) -> 7
-                    return 7;
-                }
-            }
-            catch { }
-
+            // A saved mask or one current mode cannot prove which other modes firmware supports.
             return 0;
         }
 

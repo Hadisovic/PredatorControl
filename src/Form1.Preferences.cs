@@ -223,7 +223,7 @@ namespace PredatorControlApp
                 if (_wmi.Capabilities.SupportsCoolBoost && GetInt(key, "CoolBoostEnabled", 0, 0, 1) == 1)
                     Task.Run(() => { try { _wmi.SetCoolBoost(true); } catch { } });
 
-                if (fanMode == 0x03)
+                if (fanMode == 0x03 && _wmi.Capabilities.CanWrite(HardwareFeature.FanManual))
                 {
                     if (_fanCurveEnabled)
                     {
@@ -325,9 +325,11 @@ namespace PredatorControlApp
                 _isUpdatingBattery = false;
 
                 // LCD Overdrive
-                int savedLcdOverdrive = GetInt(key, "LcdOverdrive", 0, 0, 1);
-                if (_switchLcdOverdrive != null) _switchLcdOverdrive.Checked = (savedLcdOverdrive == 1);
-                if (CompatibilitySettings.Read(key, "LcdOverdrive") != null) Task.Run(() => { try { _wmi.SetLcdOverdrive(savedLcdOverdrive == 1); } catch { } });
+                int? explicitLcd = CompatibilitySettings.Read(key, "LcdOverdrive") != null ? GetInt(key, "LcdOverdrive", 0, 0, 1) : null;
+                bool? liveLcd = _wmi.Capabilities.SupportsLcdOverdrive ? _wmi.ReadLcdOverdrive() : null;
+                bool activeLcd = explicitLcd.HasValue ? explicitLcd.Value == 1 : (liveLcd ?? false);
+                if (_switchLcdOverdrive != null) _switchLcdOverdrive.Checked = activeLcd;
+                if (_wmi.Capabilities.SupportsLcdOverdrive && explicitLcd.HasValue) Task.Run(() => { try { _wmi.SetLcdOverdrive(explicitLcd.Value == 1); } catch { } });
 
                 UpdateKeyboardSwitches();
 
@@ -524,7 +526,7 @@ namespace PredatorControlApp
         internal static string StartupWarningReason { get; private set; } = "";
 
         private static string _startupStatusReason = "";
-        private static bool IsStartupEnabled()
+        internal static bool IsStartupEnabled()
         {
             _startupStatusReason = "";
             bool Missing(string reason) { _startupStatusReason = reason; return false; }
@@ -583,7 +585,6 @@ namespace PredatorControlApp
                 bool registrationStarted = false;
                 try
                 {
-                    if (BundledBrowser.IsBundled) BundledBrowser.EnsureReady();
                     string executable = StartupInstallation.InstallRunningImage();
                     registrationStarted = true;
                     bool success = RegisterStartupPair(executable, RegisterStartupTask,

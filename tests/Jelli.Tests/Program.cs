@@ -10,8 +10,6 @@ internal static class SmokeTest
     {
         string output = Path.Combine(AppContext.BaseDirectory, "jelli-smoke-result.txt");
         ApplicationConfiguration.Initialize();
-        // This guest integration harness represents an installer user who accepted its runtime terms.
-        BundledBrowser.AcceptTerms(installerAlreadyAccepted: true);
         using var pump = new Form { ShowInTaskbar = false, WindowState = FormWindowState.Minimized };
         pump.Shown += async (_, _) =>
         {
@@ -87,7 +85,7 @@ internal sealed class NoHardwareBackend : IJelliBackend
 {
     public object State(JelliSettings settings) => new
     {
-        device = "Jelli smoke test — no hardware", theme = "PredatorTeal", version = "1.4.3", revision = 0,
+        device = "Jelli smoke test — no hardware", theme = "PredatorTeal", version = "1.4.4", revision = 0,
         telemetry = new { }, powerMode = "N/A", fanMode = "N/A", gpuMode = "N/A", doubleClickMs = 500,
         sections = Sections(), menu = Array.Empty<object>(), monitors = Array.Empty<object>(), overlay = false,
         settings,

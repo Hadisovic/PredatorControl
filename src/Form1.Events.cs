@@ -126,6 +126,7 @@ namespace PredatorControlApp
                 _jelli?.PublishState();
                 return;
             }
+            bool confirmationRequired = !_wmi.Capabilities.Results.TryGetValue(HardwareFeature.Power, out var powerEvidence) || powerEvidence.CanVerify;
 
             var prevBtn = _activePowerBtn;
             string prevLabel = _lblPowerStatus.Text;
@@ -146,7 +147,6 @@ namespace PredatorControlApp
                     UsesWindowsPowerPlans || _wmi.Capabilities.ChassisFamily == AcerChassisFamily.Nitro ? _lblPowerStatus.Text : null);
             }
 
-            if (persistPreference) SaveState("Power", mode);
             _jelli?.PublishState();
 
             int seq = Interlocked.Increment(ref _powerRequestSeq);
@@ -155,7 +155,7 @@ namespace PredatorControlApp
             _ = Task.Run(() =>
             {
                 var operation = _wmi.SetPowerMode(mode);
-                bool ok = operation.Accepted && (!_wmi.Capabilities.Results[HardwareFeature.Power].CanVerify || operation.Confirmed);
+                bool ok = PowerModeOperationPolicy.IsSuccessful(operation, confirmationRequired);
                 if (!ok)
                 {
                     SafeInvoke(() =>
@@ -168,6 +168,11 @@ namespace PredatorControlApp
                     });
                     return;
                 }
+
+                // Persist only after the backend accepted the operation (and confirmed it
+                // when the selected protocol promises readback). A failed Turbo attempt
+                // must not leave the next startup trying to restore a mode that never stuck.
+                if (persistPreference) SaveState("Power", mode);
 
                 if (autoCoolBoost && seq == Volatile.Read(ref _powerRequestSeq))
                 {
@@ -356,6 +361,7 @@ namespace PredatorControlApp
             }
 
             _fanCurveForm = new FanCurveForm();
+            _fanCurveForm.SetMinSpeed(_cpuFanSlider?.Minimum ?? 10, _gpuFanSlider?.Minimum ?? 10);
             _fanCurveForm.SetCpuCurve(_cpuCurvePoints);
             _fanCurveForm.SetGpuCurve(_gpuCurvePoints);
             _fanCurveForm.UpdateTemps(_cpuTemp ?? 0, _gpuTemp ?? 0);
@@ -376,10 +382,10 @@ namespace PredatorControlApp
                     _lastCurveCpuSpeed = cpuSpeed;
                     _lastCurveGpuSpeed = gpuSpeed;
 
-                    _cpuFanSlider.Value = Math.Clamp(cpuSpeed, 10, 100);
-                    _gpuFanSlider.Value = Math.Clamp(gpuSpeed, 10, 100);
-                    _lblCpuFanSpeedHdr.Text = $"CPU FAN: {cpuSpeed}%";
-                    _lblGpuFanSpeedHdr.Text = $"GPU FAN: {gpuSpeed}%";
+                    if (_cpuFanSlider != null) _cpuFanSlider.Value = Math.Clamp(cpuSpeed, _cpuFanSlider.Minimum, _cpuFanSlider.Maximum);
+                    if (_gpuFanSlider != null) _gpuFanSlider.Value = Math.Clamp(gpuSpeed, _gpuFanSlider.Minimum, _gpuFanSlider.Maximum);
+                    if (_lblCpuFanSpeedHdr != null) _lblCpuFanSpeedHdr.Text = $"CPU FAN: {cpuSpeed}%";
+                    if (_lblGpuFanSpeedHdr != null) _lblGpuFanSpeedHdr.Text = $"GPU FAN: {gpuSpeed}%";
 
                     SaveCurveToRegistry("CpuCurve", _cpuCurvePoints);
                     SaveCurveToRegistry("GpuCurve", _gpuCurvePoints);
@@ -474,6 +480,8 @@ namespace PredatorControlApp
 
         private void SelectZone(int zoneIndex)
         {
+            var keyboardUi = KeyboardControlProjection.From(_wmi.Capabilities);
+            if (!keyboardUi.Rgb || (zoneIndex != -1 && !keyboardUi.AllowsZone(zoneIndex))) return;
             _selectedZone = zoneIndex;
             if (_btnAllZones != null) _btnAllZones.IsActive = (zoneIndex == -1);
             for (int z = 0; z < 4; z++)
@@ -489,18 +497,20 @@ namespace PredatorControlApp
 
         private void ApplyPresetColor(Color c)
         {
-            if (!_wmi.Keyboard.SupportsRgb || _restoringLighting) return;
+            var keyboardUi = KeyboardControlProjection.From(_wmi.Capabilities);
+            if (!keyboardUi.Rgb || _restoringLighting) return;
             _colorPicker.Color = c;
 
             // Only switch to Static if currently in a mode that doesn't support custom colors (Neon, Wave, Off)
             bool wasUnsupported = (SelectedRgbMode == 2 || SelectedRgbMode == 3 || SelectedRgbMode == 8);
             int mode = wasUnsupported ? 0 : SelectedRgbMode;
+            if (!keyboardUi.AllowsEffect(mode)) return;
 
             if (mode == 0) // Static: individual physical zones supported
             {
                 if (_selectedZone == -1)
                 {
-                    for (int i = 0; i < 4; i++)
+                    for (int i = 0; i < keyboardUi.ZoneCount; i++)
                     {
                         _currentZoneColors[i] = c;
                         if (_btnZones[i] != null)
@@ -512,7 +522,7 @@ namespace PredatorControlApp
 
                     _wmi.SetKeyboardColor(c, 0);
                 }
-                else if (_selectedZone >= 0 && _selectedZone < 4)
+                else if (keyboardUi.AllowsZone(_selectedZone))
                 {
                     _currentZoneColors[_selectedZone] = c;
                     if (_btnZones[_selectedZone] != null)
@@ -544,8 +554,9 @@ namespace PredatorControlApp
 
         private void UpdateRgbControlsState(int mode)
         {
-            bool colorsEnabled = (mode != 2 && mode != 3 && mode != 8);
-            bool zonesEnabled = (mode == 0);
+            var keyboardUi = KeyboardControlProjection.From(_wmi.Capabilities);
+            bool colorsEnabled = keyboardUi.AllowsEffect(mode) && mode != 2 && mode != 3 && mode != 8;
+            bool zonesEnabled = keyboardUi.AllowsEffect(mode) && mode == 0;
 
             if (_btnAllZones != null)
             {
@@ -557,7 +568,7 @@ namespace PredatorControlApp
             {
                 if (_btnZones[z] != null)
                 {
-                    _btnZones[z].Enabled = zonesEnabled;
+                    _btnZones[z].Enabled = zonesEnabled && keyboardUi.AllowsZone(z);
                     if (!zonesEnabled) _btnZones[z].IsActive = false;
                 }
             }
@@ -576,13 +587,17 @@ namespace PredatorControlApp
             if (_btnCustomColor != null)
                 _btnCustomColor.Enabled = colorsEnabled;
 
+            if (_brightnessSlider != null)
+                _brightnessSlider.Enabled = keyboardUi.Brightness;
+
             if (_speedSlider != null)
-                _speedSlider.Enabled = (mode != 0 && mode != 8);
+                _speedSlider.Enabled = keyboardUi.EffectSpeed && mode != 0 && mode != 8;
         }
 
         private void ApplyRgbModeFromDropdown(int mode)
         {
-            if (!_wmi.Keyboard.SupportsRgb || _restoringLighting || !_rgbModeValues.Contains(mode)) return;
+            var keyboardUi = KeyboardControlProjection.From(_wmi.Capabilities);
+            if (_restoringLighting || !keyboardUi.AllowsEffect(mode)) return;
             CheckUntestedChassisWarning();
             UpdateRgbControlsState(mode);
 
@@ -597,16 +612,16 @@ namespace PredatorControlApp
             else if (mode == 0) // Static
             {
                 _speedSlider.Enabled = false;
-                _wmi.Set4ZoneColors(_currentZoneColors, 0, bright, speed);
+                _wmi.Set4ZoneColors(_currentZoneColors.Take(keyboardUi.ZoneCount).ToArray(), 0, bright, speed);
             }
             else if (mode == 2 || mode == 3) // Neon (2), Wave (3) - fixed firmware rainbow animations
             {
-                _speedSlider.Enabled = true;
+                _speedSlider.Enabled = keyboardUi.EffectSpeed;
                 _wmi.SetRgbMode(mode, _wmi.LastR, _wmi.LastG, _wmi.LastB, bright, speed, 0);
             }
             else // Breathing (1), Shifting (4), Zoom (5), Meteor (6), Twinkling (7) - custom colors supported
             {
-                _speedSlider.Enabled = true;
+                _speedSlider.Enabled = keyboardUi.EffectSpeed;
                 Color c = _colorPicker.Color;
                 _wmi.SetRgbMode(mode, c.R, c.G, c.B, bright, speed, 0);
             }
@@ -650,13 +665,14 @@ namespace PredatorControlApp
 
         internal void ApplyRgbProfile(RgbProfile profile)
         {
-            if (!_wmi.Keyboard.SupportsRgb || _restoringLighting) return;
+            var keyboardUi = KeyboardControlProjection.From(_wmi.Capabilities);
+            if (_restoringLighting || !keyboardUi.AllowsEffect(0)) return;
             if (profile == null) return;
             _isApplyingRgbProfile = true;
             try
             {
                 var colors = RgbProfileManager.ParseZoneColors(profile.Zones);
-                for (int i = 0; i < 4; i++)
+                for (int i = 0; i < keyboardUi.ZoneCount; i++)
                 {
                     _currentZoneColors[i] = colors[i];
                     if (_btnZones[i] != null)
@@ -684,7 +700,7 @@ namespace PredatorControlApp
 
                 byte bright = (byte)(_brightnessSlider?.Value ?? 100);
                 byte speed = _speedSlider != null ? GetMappedSpeed() : (byte)5;
-                _wmi?.Set4ZoneColors(_currentZoneColors, 0, bright, speed);
+                _wmi?.Set4ZoneColors(_currentZoneColors.Take(keyboardUi.ZoneCount).ToArray(), 0, bright, speed);
                 RgbProfileManager.SetActiveProfile(profile.Name);
             }
             finally
@@ -858,6 +874,13 @@ namespace PredatorControlApp
 
         private async Task PromptUpdateAsync(UpdateInfo info)
         {
+            if (Updater.UseSetupForUpdates)
+            {
+                if (MessageBox.Show(this, $"Version {info.Version.ToString(3)} is available. Open the release page to download Predator Control Setup?",
+                    "Update available", MessageBoxButtons.YesNo, MessageBoxIcon.Information) == DialogResult.Yes)
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Updater.ReleasesPage) { UseShellExecute = true });
+                return;
+            }
             bool accepted = Updater.ShowNotes(this, "Update available",
                 $"Version {info.Version.ToString(3)} is available \u2014 you have v{Updater.CurrentText}",
                 info.Notes, confirm: true);

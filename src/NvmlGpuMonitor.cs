@@ -16,6 +16,7 @@
 
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using System.Diagnostics;
 
 namespace PredatorControlApp
 {
@@ -44,6 +45,11 @@ namespace PredatorControlApp
         [DllImport(NvmlDll, EntryPoint = "nvmlDeviceGetTemperature")]
         private static extern int nvmlDeviceGetTemperature(IntPtr device, int sensorType, out uint tempC);
 
+        [DllImport(NvmlDll, EntryPoint = "nvmlDeviceGetClockInfo")]
+        private static extern int nvmlDeviceGetClockInfo(IntPtr device, int clockType, out uint clockMhz);
+
+        private const int NvmlClockGraphics = 0;
+
         [StructLayout(LayoutKind.Sequential)]
         private struct NvmlUtilization
         {
@@ -67,7 +73,8 @@ namespace PredatorControlApp
 
         private static readonly object _lock = new();
         private static bool _initialized;
-        private static bool _initFailed;
+        private static IntPtr _library;
+        private static long _retryAfter;
         private static IntPtr _deviceHandle = IntPtr.Zero;
 
         public static bool IsAvailable
@@ -81,34 +88,30 @@ namespace PredatorControlApp
 
         private static void EnsureInitialized()
         {
-            if (_initialized || _initFailed) return;
-
             lock (_lock)
             {
-                if (_initialized || _initFailed) return;
+                if (_initialized || Stopwatch.GetTimestamp() < _retryAfter) return;
+                _retryAfter = Stopwatch.GetTimestamp() + 30 * Stopwatch.Frequency;
 
                 try
                 {
                     // Load nvml.dll strictly via fully-qualified System32 path with LOAD_LIBRARY_SEARCH_SYSTEM32
                     string sys32Nvml = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "nvml.dll");
-                    IntPtr hLib = LoadLibraryEx(sys32Nvml, IntPtr.Zero, LOAD_LIBRARY_SEARCH_SYSTEM32);
-                    if (hLib == IntPtr.Zero)
-                    {
-                        _initFailed = true;
-                        return;
-                    }
+                    if (_library == IntPtr.Zero)
+                        _library = LoadLibraryEx(sys32Nvml, IntPtr.Zero, LOAD_LIBRARY_SEARCH_SYSTEM32);
+                    if (_library == IntPtr.Zero) return;
 
                     int rc = nvmlInit_v2();
                     if (rc != 0) // NVML_SUCCESS = 0
                     {
-                        _initFailed = true;
                         return;
                     }
 
                     rc = nvmlDeviceGetHandleByIndex_v2(0, out _deviceHandle);
                     if (rc != 0 || _deviceHandle == IntPtr.Zero)
                     {
-                        _initFailed = true;
+                        nvmlShutdown();
+                        _deviceHandle = IntPtr.Zero;
                         return;
                     }
 
@@ -116,55 +119,86 @@ namespace PredatorControlApp
                 }
                 catch
                 {
-                    _initFailed = true;
+                    _deviceHandle = IntPtr.Zero;
                 }
             }
         }
 
-        public static (float? powerW, int? usagePercent, int? tempC, float? vramUsedGb, float? vramTotalGb) Query()
+        public static (float? powerW, int? usagePercent, int? tempC, float? vramUsedGb, float? vramTotalGb, int? clockMhz) Query()
         {
             if (!IsAvailable)
             {
-                return (null, null, null, null, null);
+                return (null, null, null, null, null, null);
             }
 
             lock (_lock)
             {
+                if (!_initialized || _deviceHandle == IntPtr.Zero) return (null, null, null, null, null, null);
                 try
                 {
                     float? powerW = null;
-                    if (nvmlDeviceGetPowerUsage(_deviceHandle, out uint mw) == 0 && mw > 0)
+                    int powerStatus = nvmlDeviceGetPowerUsage(_deviceHandle, out uint mw);
+                    if (powerStatus == 0 && mw is > 0 and <= 1000000)
                     {
                         powerW = mw / 1000.0f;
                     }
 
                     int? usage = null;
-                    if (nvmlDeviceGetUtilizationRates(_deviceHandle, out var util) == 0)
+                    int usageStatus = nvmlDeviceGetUtilizationRates(_deviceHandle, out var util);
+                    if (usageStatus == 0 && util.gpu <= 100)
                     {
-                        usage = (int)Math.Clamp(util.gpu, 0, 100);
+                        usage = (int)util.gpu;
                     }
 
                     int? temp = null;
-                    if (nvmlDeviceGetTemperature(_deviceHandle, 0, out uint t) == 0 && t > 0)
+                    int tempStatus = nvmlDeviceGetTemperature(_deviceHandle, 0, out uint t);
+                    if (tempStatus == 0 && t is >= 1 and <= 125)
                     {
                         temp = (int)t;
                     }
 
+                    int? clockMhz = null;
+                    int clockStatus = nvmlDeviceGetClockInfo(_deviceHandle, NvmlClockGraphics, out uint clock);
+                    if (clockStatus == 0 && clock is >= 100 and <= 10000)
+                    {
+                        clockMhz = (int)clock;
+                    }
+
                     float? vramUsed = null;
                     float? vramTotal = null;
-                    if (nvmlDeviceGetMemoryInfo(_deviceHandle, out var mem) == 0 && mem.total > 0)
+                    int memoryStatus = nvmlDeviceGetMemoryInfo(_deviceHandle, out var mem);
+                    if (memoryStatus == 0 && mem.total > 0 && mem.used <= mem.total)
                     {
                         vramUsed = mem.used / (1024f * 1024f * 1024f);
                         vramTotal = mem.total / (1024f * 1024f * 1024f);
                     }
 
-                    return (powerW, usage, temp, vramUsed, vramTotal);
+                    if (NeedsReconnect(powerStatus) || NeedsReconnect(usageStatus) || NeedsReconnect(tempStatus) ||
+                        NeedsReconnect(clockStatus) || NeedsReconnect(memoryStatus))
+                    {
+                        ReconnectLater();
+                        return (null, null, null, null, null, null);
+                    }
+                    return (powerW, usage, temp, vramUsed, vramTotal, clockMhz);
                 }
                 catch
                 {
-                    return (null, null, null, null, null);
+                    ReconnectLater();
+                    return (null, null, null, null, null, null);
                 }
             }
+        }
+
+        // NVML: uninitialized, invalid argument (stale handle), GPU lost, reset required, unknown.
+        // Not-supported channels are left missing and do not repeatedly initialize the driver.
+        internal static bool NeedsReconnect(int status) => status is 1 or 2 or 15 or 16 or 999;
+
+        private static void ReconnectLater()
+        {
+            if (_initialized) try { nvmlShutdown(); } catch { }
+            _initialized = false;
+            _deviceHandle = IntPtr.Zero;
+            _retryAfter = Stopwatch.GetTimestamp() + 5 * Stopwatch.Frequency;
         }
 
         public static void Shutdown()
@@ -177,6 +211,7 @@ namespace PredatorControlApp
                     _initialized = false;
                     _deviceHandle = IntPtr.Zero;
                 }
+                _retryAfter = 0;
             }
         }
     }

@@ -48,12 +48,12 @@ namespace PredatorControlApp
             _trayFanMax = new ToolStripMenuItem("Max", null, (s, e) => ApplyFanMode(0x02, _btnMaxFan));
             _trayFanCustom = new ToolStripMenuItem("Custom", null, (s, e) => ApplyFanMode(0x03, _btnCustomFan));
             fanMenu.DropDownItems.AddRange([_trayFanAuto, _trayFanMax, _trayFanCustom]);
-            if (_wmi.Capabilities.SupportsCoolBoost)
             {
                 _trayCoolBoost = new ToolStripMenuItem("CoolBoost", null, (s, e) => ToggleCoolBoost())
                 {
                     CheckOnClick = true,
-                    Checked = _wmi.CoolBoost
+                    Checked = _wmi.CoolBoost,
+                    Visible = _wmi.Capabilities.SupportsCoolBoost
                 };
                 fanMenu.DropDownItems.Add(_trayCoolBoost);
             }
@@ -98,9 +98,13 @@ namespace PredatorControlApp
             _trayMenu.Items.Add(powerMenu);
             _trayMenu.Items.Add(fanMenu);
             _trayMenu.Items.Add(displayMenu);
-            if (_wmi.Capabilities.SupportsGpuMux) _trayMenu.Items.Add(gpuMenu);
+            _trayGpuMenu = gpuMenu;
+            gpuMenu.Visible = _wmi.Capabilities.SupportsGpuMux;
+            _trayMenu.Items.Add(gpuMenu);
             _trayMenu.Items.Add(_trayBatteryMenu);
-            if (_wmi.Capabilities.SupportsRgbLighting) _trayMenu.Items.Add(rgbMenu);
+            _trayRgbMenu = rgbMenu;
+            rgbMenu.Visible = KeyboardControlProjection.From(_wmi.Capabilities).Rgb;
+            _trayMenu.Items.Add(rgbMenu);
 
             var hardwareMenu = new ToolStripMenuItem("  Hardware Features");
             _trayWinKey = new ToolStripMenuItem("Lock Windows Key", null, (s, e) =>

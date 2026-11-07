@@ -22,6 +22,7 @@ using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography.X509Certificates;
+using System.Security.Cryptography;
 using System.ServiceProcess;
 using System.Text;
 using System.Windows.Forms;
@@ -62,11 +63,47 @@ namespace PredatorControlApp
             return ok;
         }
         private static readonly Dictionary<string, (DateTime Stamp, bool Trusted)> ServiceTrust = new(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, (DateTime Stamp, long Length, string Hash)> ServiceHashes = new(StringComparer.OrdinalIgnoreCase);
 
-        public static ServiceEvidence ReadServiceEvidence(string name)
+        private static string? BinaryFingerprint(string path)
+        {
+            try
+            {
+                var info = new FileInfo(path);
+                if (!info.Exists || !SecureLaunch.IsAdminOnly(path)) return null;
+                lock (ServiceHashes)
+                {
+                    if (ServiceHashes.TryGetValue(path, out var cached) && cached.Stamp == info.LastWriteTimeUtc && cached.Length == info.Length) return cached.Hash;
+                    using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+                    string hash = Convert.ToHexString(SHA256.HashData(stream));
+                    ServiceHashes[path] = (info.LastWriteTimeUtc, info.Length, hash);
+                    return hash;
+                }
+            }
+            catch { return null; }
+        }
+
+        private static uint ReadServiceProcessId(string name)
+        {
+            try
+            {
+                // ServiceController.ServiceHandle asks for broader access than discovery
+                // needs. Query the PID independently so limited access cannot hide an
+                // otherwise installed/running service from diagnostics.
+                using var searcher = new ManagementObjectSearcher(new ManagementScope(@"root\CIMV2"),
+                    new ObjectQuery($"SELECT ProcessId FROM Win32_Service WHERE Name='{name}'"),
+                    new System.Management.EnumerationOptions { Timeout = TimeSpan.FromSeconds(2) });
+                using var rows = searcher.Get();
+                foreach (ManagementBaseObject row in rows) using (row) return Convert.ToUInt32(row["ProcessId"]);
+            }
+            catch { }
+            return 0;
+        }
+
+        public static ServiceEvidence ReadServiceEvidence(string name, bool refreshFingerprint = false)
         {
             if (!HardwareServices.Contains(name, StringComparer.OrdinalIgnoreCase)) return new(name, false, false, false);
-            return ReadEvidenceCore(name);
+            return ReadEvidenceCore(name, refreshFingerprint);
         }
 
         /// <summary>True only for a known Acer service whose registered binary is protected and Acer-signed.</summary>
@@ -75,7 +112,7 @@ namespace PredatorControlApp
              OptimizationCandidates.Contains(name, StringComparer.OrdinalIgnoreCase)) &&
             ReadEvidenceCore(name) is { Exists: true, Trusted: true };
 
-        private static ServiceEvidence ReadEvidenceCore(string name)
+        private static ServiceEvidence ReadEvidenceCore(string name, bool refreshFingerprint = false)
         {
             try
             {
@@ -83,7 +120,24 @@ namespace PredatorControlApp
                 bool running = controller.Status == ServiceControllerStatus.Running;
                 using var key = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\" + name);
                 string image = Environment.ExpandEnvironmentVariables(key?.GetValue("ImagePath") as string ?? "").Trim();
-                return new(name, true, running, IsAcerSignedBinary(ParseExePath(image)));
+                string path = ParseExePath(image);
+                string worker = Path.Combine(Path.GetDirectoryName(path) ?? "", "AcerAgentService.exe");
+                if (refreshFingerprint)
+                {
+                    // Installer replacement can preserve timestamps and length. Discovery
+                    // and write authorization revalidate bytes and signatures explicitly.
+                    lock (ServiceTrust) { ServiceTrust.Remove(path); ServiceTrust.Remove(worker); }
+                    lock (ServiceHashes) { ServiceHashes.Remove(path); ServiceHashes.Remove(worker); }
+                }
+                bool trusted = IsAcerSignedBinary(path);
+                string? protocolHash = null;
+                if (trusted && name == "AASSvc")
+                {
+                    if (IsAcerSignedBinary(worker)) protocolHash = BinaryFingerprint(worker);
+                }
+                uint pid = running ? ReadServiceProcessId(name) : 0;
+                return new(name, true, running, trusted, Version: trusted ? FileVersionInfo.GetVersionInfo(path).FileVersion : null,
+                    BinarySha256: trusted ? BinaryFingerprint(path) : null, ProcessId: pid, ProtocolBinarySha256: protocolHash);
             }
             catch { return new(name, false, false, false); }
         }
@@ -133,7 +187,10 @@ namespace PredatorControlApp
 #pragma warning disable SYSLIB0057
                     using var cert = new X509Certificate2(X509Certificate.CreateFromSignedFile(path));
 #pragma warning restore SYSLIB0057
-                    trusted = cert.GetNameInfo(X509NameType.SimpleName, false).Equals("Acer Incorporated", StringComparison.OrdinalIgnoreCase);
+                    string publisher = cert.GetNameInfo(X509NameType.SimpleName, false);
+                    trusted = publisher.Equals("Acer Incorporated", StringComparison.OrdinalIgnoreCase) ||
+                        publisher.Equals("Microsoft Windows Hardware Compatibility Publisher", StringComparison.OrdinalIgnoreCase) &&
+                        BinaryFingerprint(path) is string reviewed && VerifiedAcerProtocol.ReviewedAttestedBinary(reviewed);
                 }
                 ServiceTrust[path] = (stamp, trusted);
                 return trusted;

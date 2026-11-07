@@ -13,8 +13,8 @@ internal static class NitroSense3Protocol
     internal const string OperationModePipeBackend = "nitrosense3-opmode";
     internal const string OperationModeWmiBackend = "nitrosense3-wmi-opmode";
     internal const ushort CmdSetOperationMode = 30;
-    internal const ushort CmdWmiSetGamingMiscSetting = 63;
-    internal const ushort CmdWmiGetGamingMiscSetting = 64;
+    internal const ushort CmdWmiSetGamingMiscSetting = 33;
+    internal const ushort CmdWmiGetGamingMiscSetting = 34;
     internal const uint MiscSubfunctionOperationMode = 0x0B;
     internal const byte ModeQuiet = 0;
     internal const byte ModeDefault = 1;
@@ -77,6 +77,7 @@ internal static class NitroSense3Protocol
             using (var args = obj.GetMethodParameters(command == 20 ? "GetFunction" : "SetFunction"))
             {
                 args["uiInput"] = input;
+                if (command == 17 && !HardwareWriteGate.InScope(HardwareFeature.CoolBoost, ApgeBackend)) return null;
                 using var reply = obj.InvokeMethod(command == 20 ? "GetFunction" : "SetFunction", args, new InvokeMethodOptions { Timeout = TimeSpan.FromSeconds(2) });
                 return reply?["uiOutput"] is object raw ? Convert.ToUInt64(raw) : null;
             }
@@ -116,6 +117,12 @@ internal static class NitroSense3Protocol
 
     internal static async Task<ulong?> Exchange(ushort command, ulong input, bool wide)
     {
+        // PredatorSense 3 uses the same pipe with shifted opcodes. Pin the reviewed
+        // service generation before even sending a read request to that endpoint.
+        var service = OemServiceManager.ReadServiceEvidence("PSSvc");
+        if (service is not { Exists: true, Running: true, Trusted: true } ||
+            !string.Equals(service.BinarySha256, VerifiedAcerProtocol.Nitro3ServiceSha256, StringComparison.OrdinalIgnoreCase))
+        { LastReadFailure = "PSSvc is unavailable or its protocol generation has not been reviewed."; return null; }
         // Only recovered CoolBoost and Nitro 2022 OperationMode operations are implemented; no general-purpose firmware command entry point.
         bool allowed = (command == 20 && !wide && input == 519) ||
             (command == 17 && wide && input is 7 or 0x10007 && HardwareWriteGate.InScope(HardwareFeature.CoolBoost, Backend)) ||
@@ -133,6 +140,8 @@ internal static class NitroSense3Protocol
             await pipe.ConnectAsync(deadline.Token).ConfigureAwait(false);
             if (!AcerAgentEndpoint.PipeTrusted(pipe.SafePipeHandle, "PSSvc")) { if (isRead) LastReadFailure = "Pipe server is not the trusted PSSvc process"; return null; }
             if (isRead) LastReadFailure = "Awaiting reply";
+            if (!isRead && !HardwareWriteGate.InScope(command == 17 ? HardwareFeature.CoolBoost : HardwareFeature.Power,
+                command == 17 ? Backend : OperationModePipeBackend)) return null;
             await pipe.WriteAsync(Encode(command, input, wide), deadline.Token).ConfigureAwait(false);
             ulong? reply = await ReadReply(pipe, isRead, deadline.Token).ConfigureAwait(false);
             if (isRead) LastReadFailure = reply.HasValue ? $"Firmware status={reply.Value & 255}, state={(reply.Value >> 8) & 255}" : "Malformed, truncated or timed-out reply";

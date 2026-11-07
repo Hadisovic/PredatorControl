@@ -45,8 +45,28 @@ namespace PredatorControlApp
         private string _fanLabel = "FAN CURVE";
         private int _dragIndex = -1;
         private int _hoverIndex = -1;
+        private int _minSpeed = 10;
 
         public event EventHandler? CurveChanged;
+
+        [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+        public int MinSpeed
+        {
+            get => _minSpeed;
+            set
+            {
+                int clamped = Math.Clamp(value, SpeedMin, SpeedMax - 10);
+                if (_minSpeed != clamped)
+                {
+                    _minSpeed = clamped;
+                    if (_points != null)
+                    {
+                        _points = Normalize(_points, _minSpeed);
+                    }
+                    Invalidate();
+                }
+            }
+        }
 
         [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
         public Color CurveColor
@@ -75,17 +95,23 @@ namespace PredatorControlApp
             get => _points;
             set
             {
-                _points = Normalize(value);
+                _points = Normalize(value, _minSpeed);
                 Invalidate();
             }
         }
 
-        public static List<Point> Normalize(List<Point>? src)
+        public static List<Point> Normalize(List<Point>? src, int minSpeed = 10)
         {
-            if (src == null || src.Count < 2) return new List<Point>(_defaultPoints);
+            int floor = Math.Clamp(minSpeed, SpeedMin, SpeedMax);
+            if (src == null || src.Count < 2)
+            {
+                return _defaultPoints
+                    .Select(p => new Point(p.X, Math.Max(floor, p.Y)))
+                    .ToList();
+            }
 
             var pts = src
-                .Select(p => new Point(Math.Clamp(p.X, TempMin, TempMax), Math.Clamp(p.Y, SpeedMin, SpeedMax)))
+                .Select(p => new Point(Math.Clamp(p.X, TempMin, TempMax), Math.Clamp(p.Y, floor, SpeedMax)))
                 .OrderBy(p => p.X)
                 .ToList();
 
@@ -94,7 +120,9 @@ namespace PredatorControlApp
             return pts;
         }
 
-        public List<Point> DefaultPoints => new(_defaultPoints);
+        public List<Point> DefaultPoints => _defaultPoints
+            .Select(p => new Point(p.X, Math.Max(_minSpeed, p.Y)))
+            .ToList();
 
         public FanCurveGraph()
         {
@@ -105,7 +133,7 @@ namespace PredatorControlApp
                 ControlStyles.ResizeRedraw, true);
 
             Size = new Size(420, 220);
-            _points = new List<Point>(_defaultPoints);
+            _points = Normalize(_defaultPoints, _minSpeed);
             Cursor = Cursors.Default;
         }
 
@@ -146,21 +174,26 @@ namespace PredatorControlApp
 
         public int InterpolateSpeed(int temperature)
         {
-            if (_points.Count == 0) return 0;
-            if (temperature <= _points[0].X) return _points[0].Y;
-            if (temperature >= _points[^1].X) return _points[^1].Y;
-
-            for (int i = 0; i < _points.Count - 1; i++)
+            if (_points.Count == 0) return _minSpeed;
+            int speed;
+            if (temperature <= _points[0].X) speed = _points[0].Y;
+            else if (temperature >= _points[^1].X) speed = _points[^1].Y;
+            else
             {
-                if (temperature >= _points[i].X && temperature <= _points[i + 1].X)
+                speed = _points[^1].Y;
+                for (int i = 0; i < _points.Count - 1; i++)
                 {
-                    float span = _points[i + 1].X - _points[i].X;
-                    if (span == 0) return _points[i].Y;
-                    float t = (temperature - _points[i].X) / span;
-                    return (int)Math.Round(_points[i].Y + t * (_points[i + 1].Y - _points[i].Y));
+                    if (temperature >= _points[i].X && temperature <= _points[i + 1].X)
+                    {
+                        float span = _points[i + 1].X - _points[i].X;
+                        if (span == 0) { speed = _points[i].Y; break; }
+                        float t = (temperature - _points[i].X) / span;
+                        speed = (int)Math.Round(_points[i].Y + t * (_points[i + 1].Y - _points[i].Y));
+                        break;
+                    }
                 }
             }
-            return _points[^1].Y;
+            return Math.Clamp(speed, _minSpeed, SpeedMax);
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -173,6 +206,7 @@ namespace PredatorControlApp
             var area = GraphArea;
 
             DrawGrid(g, area);
+            DrawMinSpeedLimit(g, area);
             DrawAxisLabels(g, area);
             DrawTitle(g, area);
             DrawStatus(g, area);
@@ -200,6 +234,36 @@ namespace PredatorControlApp
             }
         }
 
+        private void DrawMinSpeedLimit(Graphics g, RectangleF area)
+        {
+            if (_minSpeed <= SpeedMin || _minSpeed >= SpeedMax) return;
+
+            float y = SpeedToY(_minSpeed);
+
+            using (var deadzoneBrush = new SolidBrush(Color.FromArgb(12, 255, 180, 50)))
+            {
+                g.FillRectangle(deadzoneBrush, area.Left, y, area.Width, area.Bottom - y);
+            }
+
+            using (var pen = new Pen(Color.FromArgb(75, 255, 180, 50), 1f)
+            {
+                DashStyle = DashStyle.Dash,
+                DashPattern = new float[] { 4, 3 }
+            })
+            {
+                g.DrawLine(pen, area.Left, y, area.Right, y);
+            }
+
+            using var font = new Font("Segoe UI", 6.5f, FontStyle.Bold);
+            using var brush = new SolidBrush(Color.FromArgb(140, 255, 180, 50));
+            using var sf = new StringFormat
+            {
+                Alignment = StringAlignment.Far,
+                LineAlignment = StringAlignment.Far
+            };
+            g.DrawString($"MIN {_minSpeed}%", font, brush, area.Right - 4, y - 2, sf);
+        }
+
         private void DrawAxisLabels(Graphics g, RectangleF area)
         {
             using var font = new Font("Segoe UI", 7.5f);
@@ -221,6 +285,13 @@ namespace PredatorControlApp
             {
                 float y = SpeedToY(speed);
                 g.DrawString($"{speed}%", font, brush, area.Left - 4, y, sfRight);
+            }
+
+            if (_minSpeed > SpeedMin && _minSpeed % 20 != 0)
+            {
+                float yMin = SpeedToY(_minSpeed);
+                using var minBrush = new SolidBrush(Color.FromArgb(160, 255, 180, 50));
+                g.DrawString($"{_minSpeed}%", font, minBrush, area.Left - 4, yMin, sfRight);
             }
         }
 
@@ -415,7 +486,7 @@ namespace PredatorControlApp
             int temp = XToTemp(mousePos.X);
             int speed = YToSpeed(mousePos.Y);
 
-            speed = Math.Clamp(speed, SpeedMin, SpeedMax);
+            speed = Math.Clamp(speed, _minSpeed, SpeedMax);
 
             if (_dragIndex == 0)
             {

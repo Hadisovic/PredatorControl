@@ -4,8 +4,8 @@
 //
 // 📖 C++ / SYSTEMS DEVELOPER ROSETTA STONE:
 // - C++ Equivalent : Direct Win32 Advapi32 ETW session consumer (StartTraceW, OpenTraceW, ProcessTrace).
-// - Subsystem Role : Measures real-time gaming FPS and 1% lows via kernel trace events (Microsoft-Windows-DxgKrnl).
-// - Zero Injection : Safe with Riot Vanguard, EasyAntiCheat, BattlEye (zero DLL injection or hooking).
+// - Subsystem Role : Estimates presentation rate from OS trace events (not displayed-frame or 1% low analysis).
+// - Zero Injection : Consumes Windows events without DLL injection or game hooks.
 //
 // 🔄 C# -> C++ TYPE TRANSLATION REFERENCE:
 // - TRACEHANDLE (ulong)              => Win32 TRACEHANDLE (uint64_t)
@@ -54,7 +54,8 @@ namespace PredatorControlApp
         private const uint EVENT_FILTER_TYPE_EVENT_ID = 0x80000200;
         private const uint ENABLE_TRACE_PARAMETERS_VERSION_2 = 2;
 
-        private const string SessionName = "PredatorControlFpsSession";
+        // Never stop another process's trace session during startup or failed cleanup.
+        private readonly string _sessionName = $"PredatorControlFpsSession-{Environment.ProcessId}-{Guid.NewGuid():N}";
 
         [StructLayout(LayoutKind.Sequential)]
         private struct WNODE_HEADER
@@ -185,6 +186,8 @@ namespace PredatorControlApp
 
         private long _sessionHandle;
         private long _traceHandle;
+        private readonly object _sessionLock = new();
+        private bool _disposed;
 
         private const int FlushIntervalMs = 200;
         private const int MinFlushFps = 10;
@@ -209,7 +212,7 @@ namespace PredatorControlApp
             set
             {
                 if (_targetPid == value) return;
-                bool wasPaused = _targetPid == 0;
+                bool wasPaused = _targetPid <= 0;
                 lock (_frameLock)
                 {
                     // Switch pid and reset the buffer as one atomic step relative to the callback and sampler.
@@ -218,11 +221,22 @@ namespace PredatorControlApp
                     _framesFilled = 0;
                     _dxgiActiveForCurrentPid = false;
                 }
-                if (_sessionHandle == 0) return;
-                if (value == 0)
-                    EnableTraceEx2(_sessionHandle, DxgKrnlProviderId, EVENT_CONTROL_CODE_DISABLE_PROVIDER, 0, 0, 0, 0, IntPtr.Zero);
-                else if (wasPaused)
-                    EnableProvider();
+                lock (_sessionLock)
+                {
+                    if (_sessionHandle == 0 || _disposed) return;
+                    if (value <= 0)
+                    {
+                        _flushTimer?.Change(Timeout.Infinite, Timeout.Infinite);
+                        EnableTraceEx2(_sessionHandle, DxgKrnlProviderId, EVENT_CONTROL_CODE_DISABLE_PROVIDER, 0, 0, 0, 0, IntPtr.Zero);
+                        if (IsWin10)
+                            EnableTraceEx2(_sessionHandle, FlipProviderId, EVENT_CONTROL_CODE_DISABLE_PROVIDER, 0, 0, 0, 0, IntPtr.Zero);
+                    }
+                    else if (wasPaused)
+                    {
+                        EnableProvider();
+                        _flushTimer?.Change(FlushIntervalMs, FlushIntervalMs);
+                    }
+                }
             }
         }
 
@@ -280,62 +294,72 @@ namespace PredatorControlApp
         {
             if (!Environment.Is64BitProcess)
                 throw new PlatformNotSupportedException("The FPS trace structures require a 64-bit process.");
-            _targetPid = targetPid;
-
-            var stopProps = BuildSessionProperties();
-            StopTrace(0, SessionName, ref stopProps);
-
-            var props = BuildSessionProperties();
-            uint hr = StartTrace(out _sessionHandle, SessionName, ref props);
-            if (hr == 0xB7 /*ERROR_ALREADY_EXISTS*/)
+            long trace;
+            lock (_sessionLock)
             {
-                StopTrace(0, SessionName, ref stopProps);
-                hr = StartTrace(out _sessionHandle, SessionName, ref props);
-            }
-            if (hr != ERROR_SUCCESS)
-                throw new InvalidOperationException($"StartTrace failed: 0x{hr:X}");
-
-            EnableProvider();
-
-            _callbackRef = OnEventRecord;
-            IntPtr loggerNamePtr = Marshal.StringToHGlobalUni(SessionName);
-            try
-            {
-                var logfile = new EVENT_TRACE_LOGFILE
+                if (_disposed || _sessionHandle != 0) return;
+                _targetPid = targetPid;
+                var props = BuildSessionProperties();
+                uint hr = StartTrace(out _sessionHandle, _sessionName, ref props);
+                if (hr != ERROR_SUCCESS)
                 {
-                    LoggerName = loggerNamePtr,
-                    ProcessTraceMode = PROCESS_TRACE_MODE_REAL_TIME |
-                                       PROCESS_TRACE_MODE_EVENT_RECORD |
-                                       PROCESS_TRACE_MODE_RAW_TIMESTAMP,
-                    EventRecordCallback = Marshal.GetFunctionPointerForDelegate(_callbackRef),
-                };
+                    _sessionHandle = 0;
+                    throw new InvalidOperationException($"StartTrace failed: 0x{hr:X}");
+                }
+                if (_targetPid > 0) EnableProvider();
 
-                _traceHandle = OpenTrace(ref logfile);
+                _callbackRef = OnEventRecord;
+                IntPtr loggerNamePtr = Marshal.StringToHGlobalUni(_sessionName);
+                try
+                {
+                    var logfile = new EVENT_TRACE_LOGFILE
+                    {
+                        LoggerName = loggerNamePtr,
+                        ProcessTraceMode = PROCESS_TRACE_MODE_REAL_TIME |
+                                           PROCESS_TRACE_MODE_EVENT_RECORD |
+                                           PROCESS_TRACE_MODE_RAW_TIMESTAMP,
+                        EventRecordCallback = Marshal.GetFunctionPointerForDelegate(_callbackRef),
+                    };
+
+                    _traceHandle = OpenTrace(ref logfile);
+                    if (_traceHandle == -1)
+                    {
+                        _traceHandle = 0;
+                        Stop();
+                        throw new InvalidOperationException("OpenTrace failed.");
+                    }
+                }
+                finally { Marshal.FreeHGlobal(loggerNamePtr); }
+                trace = _traceHandle;
+                _flushTimer = new System.Threading.Timer(_ => FlushSession(), null,
+                    _targetPid > 0 ? FlushIntervalMs : Timeout.Infinite, FlushIntervalMs);
             }
-            finally
-            {
-                Marshal.FreeHGlobal(loggerNamePtr);
-            }
-
-            _flushTimer = new System.Threading.Timer(_ => FlushSession(), null, FlushIntervalMs, FlushIntervalMs);
-
-            ProcessTrace(new[] { _traceHandle }, 1, IntPtr.Zero, IntPtr.Zero);
+            try { ProcessTrace(new[] { trace }, 1, IntPtr.Zero, IntPtr.Zero); }
+            finally { Stop(); }
         }
 
         public void Stop()
         {
-            _flushTimer?.Dispose();
-            _flushTimer = null;
-            long session = _sessionHandle;
-            _sessionHandle = 0;
-            var props = BuildSessionProperties();
-            StopTrace(session, SessionName, ref props);
-            CloseTrace(_traceHandle);
+            lock (_sessionLock)
+            {
+                _flushTimer?.Dispose();
+                _flushTimer = null;
+                long session = _sessionHandle;
+                _sessionHandle = 0;
+                if (session != 0)
+                {
+                    var props = BuildSessionProperties();
+                    StopTrace(session, _sessionName, ref props);
+                }
+                long trace = _traceHandle;
+                _traceHandle = 0;
+                if (trace != 0) CloseTrace(trace);
+            }
         }
 
         private void FlushSession()
         {
-            if (_sessionHandle == 0) return;
+            if (_sessionHandle == 0 || _targetPid <= 0) return;
 
             long now = Stopwatch.GetTimestamp();
             bool idleFlushDue = now - _lastFlushTick >= Stopwatch.Frequency;
@@ -346,7 +370,10 @@ namespace PredatorControlApp
             ControlTrace(_sessionHandle, null, ref props, EVENT_TRACE_CONTROL_FLUSH);
         }
 
-        public void Dispose() => Stop();
+        public void Dispose()
+        {
+            lock (_sessionLock) { _disposed = true; Stop(); }
+        }
 
         private void OnEventRecord(ref EVENT_RECORD record)
         {
@@ -358,14 +385,20 @@ namespace PredatorControlApp
             int targetPid = _targetPid;
             if (targetPid <= 0 || (int)record.EventHeader.ProcessId != targetPid) return;
 
-            if (flip && _dxgiActiveForCurrentPid) return;
-            if (IsWin10 && !flip) _dxgiActiveForCurrentPid = true;
-
             lock (_frameLock)
             {
                 // Re-check under the lock: the target may have been switched (and the buffer reset)
                 // after the unlocked fast-path check above; never write an old process's frame into the new buffer.
                 if (_targetPid != targetPid) return;
+                if (flip && _dxgiActiveForCurrentPid) return;
+                if (IsWin10 && !flip && !_dxgiActiveForCurrentPid)
+                {
+                    // Do not mix the fallback flip source with presents counted for the same frame.
+                    _frameHead = _framesFilled = 0;
+                    _dxgiActiveForCurrentPid = true;
+                }
+
+                if (_framesFilled > 0 && record.EventHeader.TimeStamp <= _frameTimes[(_frameHead - 1 + RollingWindowSize) % RollingWindowSize]) return;
 
                 _frameTimes[_frameHead] = record.EventHeader.TimeStamp;
                 _frameHead = (_frameHead + 1) % RollingWindowSize;
@@ -377,34 +410,15 @@ namespace PredatorControlApp
         {
             // Take a consistent snapshot, then do the math outside the lock.
             Span<long> snap = stackalloc long[RollingWindowSize];
-            int filled, head;
+            int filled;
             lock (_frameLock)
             {
                 filled = _framesFilled;
-                head = _frameHead;
                 if (filled < 2) return 0;
-                _frameTimes.AsSpan().CopyTo(snap);
+                int start = (_frameHead - filled + RollingWindowSize) % RollingWindowSize;
+                for (int i = 0; i < filled; i++) snap[i] = _frameTimes[(start + i) % RollingWindowSize];
             }
-
-            long freq = Stopwatch.Frequency;
-            long newest = snap[(head - 1 + RollingWindowSize) % RollingWindowSize];
-
-            if (Stopwatch.GetTimestamp() - newest > 4 * freq) return 0;
-
-            long cutoff = newest - freq;
-            int count = 1;
-            long oldest = newest;
-            for (int i = 2; i <= filled; i++)
-            {
-                long t = snap[(head - i + RollingWindowSize) % RollingWindowSize];
-                if (t < cutoff) break;
-                oldest = t;
-                count++;
-            }
-
-            double elapsed = (double)(newest - oldest) / freq;
-            if (elapsed <= 0) return 0;
-            return (count - 1) / elapsed;
+            return OverlayPolicy.SampleFps(snap[..filled], Stopwatch.GetTimestamp(), Stopwatch.Frequency);
         }
 
         private static EVENT_TRACE_PROPERTIES BuildSessionProperties() => new()

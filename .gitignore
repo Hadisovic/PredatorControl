@@ -66,3 +66,11 @@ hardcoded-scan.json
 # Documentation & Markdown files
 docs/
 *.md
+
+# Sanitized protocol evidence and implementation validation; proprietary artifacts stay ignored.
+!docs/
+docs/*
+!docs/OEM_PROTOCOL_EVIDENCE.md
+!docs/oem-artifacts.json
+!docs/OVERLAY_VALIDATION.md
+!docs/CAPABILITY_IMPLEMENTATION.md

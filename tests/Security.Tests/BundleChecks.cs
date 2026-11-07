@@ -6,27 +6,24 @@ internal static class BundleChecks
     internal static async Task Run(Assembly assembly, Func<string, Func<Task<bool>>, Task> check)
     {
         const BindingFlags flags = BindingFlags.Static | BindingFlags.NonPublic;
-        var browser = assembly.GetType("PredatorControlApp.BundledBrowser")!;
-        var name = browser.GetMethod("ValidateName", flags)!;
-        await check("browser payload rejects traversal, alternate streams and malformed paths", () =>
+        var secure = assembly.GetType("PredatorControlApp.SecureLaunch")!;
+        var ancestorRights = secure.GetMethod("AncestorRights", flags)!;
+        await check("volume root ignores self-delete but still protects children and its ACL", () =>
         {
-            foreach (string path in new[] { "../escape.exe", "/root.exe", "C:/root.exe", "folder\\file.exe", "a//b", "a/./b", "a/../b", "a:b", "a. /b", "a./b", "a /b" })
-            {
-                try { name.Invoke(null, [path]); return Task.FromResult(false); }
-                catch (TargetInvocationException) { }
-            }
-            return Task.FromResult((string)name.Invoke(null, ["Locales/en-US.pak"])! == "Locales/en-US.pak");
+            const System.Security.AccessControl.FileSystemRights delete = System.Security.AccessControl.FileSystemRights.Delete;
+            const System.Security.AccessControl.FileSystemRights required = System.Security.AccessControl.FileSystemRights.DeleteSubdirectoriesAndFiles |
+                System.Security.AccessControl.FileSystemRights.ChangePermissions | System.Security.AccessControl.FileSystemRights.TakeOwnership;
+            var directory = new DirectoryInfo(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles));
+            var root = (System.Security.AccessControl.FileSystemRights)ancestorRights.Invoke(null, [directory.Root])!;
+            var child = (System.Security.AccessControl.FileSystemRights)ancestorRights.Invoke(null, [directory])!;
+            return Task.FromResult((root & (required | delete)) == required && (child & (required | delete)) == (required | delete));
         });
-        await check("browser extraction refuses user-writable staging", () =>
+        await check("app includes the native loader but no bundled WebView2 runtime", () =>
         {
-            string path = Path.Combine(Path.GetTempPath(), "PredatorBundle-" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(path);
-            try
-            {
-                try { browser.GetMethod("Extract", flags)!.Invoke(null, [null, path, null, null]); return Task.FromResult(false); }
-                catch (TargetInvocationException ex) { return Task.FromResult(ex.InnerException is UnauthorizedAccessException); }
-            }
-            finally { Directory.Delete(path); }
+            string[] names = assembly.GetManifestResourceNames();
+            return Task.FromResult(names.Contains("WebView2Loader.dll") &&
+                !names.Any(name => name.StartsWith("Browser.", StringComparison.Ordinal)) &&
+                !names.Contains("OfflineWebView2Installer.exe"));
         });
         var updater = assembly.GetType("PredatorControlApp.Updater")!;
         var pick = updater.GetMethod("PickAssetInfo", flags)!;

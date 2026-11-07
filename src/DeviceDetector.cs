@@ -12,6 +12,7 @@ internal static class DeviceDetector
         var bios = ReadClass("Win32_BIOS");
         var board = ReadClass("Win32_BaseBoard");
         var chassis = ReadClass("Win32_SystemEnclosure");
+        var cpu = ReadClass("Win32_Processor");
         string Get(Dictionary<string, object?> row, string field) => DeviceIdentity.Clean(row.GetValueOrDefault(field));
         return new()
         {
@@ -22,8 +23,26 @@ internal static class DeviceDetector
             SerialNumber = Get(bios, "SerialNumber") is { Length: > 0 } s ? s : Get(product, "IdentifyingNumber"),
             BiosVersion = Get(bios, "SMBIOSBIOSVersion"), BiosReleaseDate = Get(bios, "ReleaseDate"),
             BoardManufacturer = Get(board, "Manufacturer"), BoardProduct = Get(board, "Product"), BoardVersion = Get(board, "Version"),
+            CpuName = Get(cpu, "Name"), GpuNames = ReadGpuNames(),
             ChassisTypes = chassis.GetValueOrDefault("ChassisTypes") is ushort[] types ? Array.AsReadOnly(types) : Array.Empty<ushort>()
         };
+    }
+
+    private static IReadOnlyList<string> ReadGpuNames()
+    {
+        try
+        {
+            using var searcher = new ManagementObjectSearcher(new ManagementScope(@"root\CIMV2"),
+                new ObjectQuery("SELECT Name FROM Win32_VideoController"),
+                new System.Management.EnumerationOptions { Timeout = TimeSpan.FromSeconds(2) });
+            using var rows = searcher.Get();
+            var names = new List<string>();
+            foreach (ManagementBaseObject row in rows)
+                using (row)
+                    if (DeviceIdentity.Clean(row["Name"]) is { Length: > 0 } name) names.Add(name);
+            return Array.AsReadOnly(names.Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
+        }
+        catch { return Array.Empty<string>(); }
     }
 
     private static Dictionary<string, object?> ReadClass(string name)

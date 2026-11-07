@@ -91,8 +91,8 @@ namespace PredatorControlApp
                 _cpuFanSlider.Enabled = true;
                 _gpuFanSlider.Enabled = true;
 
-                int cpuSpeed = profile.CpuFanSpeed >= 10 ? Math.Clamp(profile.CpuFanSpeed, 10, 100) : _cpuFanSlider.Value;
-                int gpuSpeed = profile.GpuFanSpeed >= 10 ? Math.Clamp(profile.GpuFanSpeed, 10, 100) : _gpuFanSlider.Value;
+                int cpuSpeed = profile.CpuFanSpeed >= 10 ? Math.Clamp(profile.CpuFanSpeed, _cpuFanSlider.Minimum, _cpuFanSlider.Maximum) : _cpuFanSlider.Value;
+                int gpuSpeed = profile.GpuFanSpeed >= 10 ? Math.Clamp(profile.GpuFanSpeed, _gpuFanSlider.Minimum, _gpuFanSlider.Maximum) : _gpuFanSlider.Value;
                 if (profile.CpuFanSpeed >= 10)
                 {
                     _cpuFanSlider.Value = cpuSpeed;
@@ -117,10 +117,11 @@ namespace PredatorControlApp
                 bool lockKeys = profile.LockWinKey == 1;
                 if (_switchWinKeyLock != null) _switchWinKeyLock.Checked = lockKeys;
                 PredatorKeyHook.SetWinKeyLocked(lockKeys);
-                _ = Task.Run(() => { try { _wmi.SetWinKeyLock(lockKeys); } catch { } });
+                if (_wmi.Capabilities.SupportsWinKey)
+                    _ = Task.Run(() => { try { _wmi.SetWinKeyLock(lockKeys); } catch { } });
             }
 
-            if (profile.LcdOverdrive >= 0)
+            if (profile.LcdOverdrive >= 0 && _wmi.Capabilities.SupportsLcdOverdrive)
             {
                 bool enableLcd = profile.LcdOverdrive == 1;
                 if (_switchLcdOverdrive != null) _switchLcdOverdrive.Checked = enableLcd;
@@ -183,8 +184,8 @@ namespace PredatorControlApp
                     HighlightBtn(_btnFixedSpeed, ref _activeCustomSubBtn);
                     _cpuFanSlider.Enabled = true;
                     _gpuFanSlider.Enabled = true;
-                    int cpuSpeed = Math.Clamp(snap.CpuFanSpeed, 10, 100);
-                    int gpuSpeed = Math.Clamp(snap.GpuFanSpeed, 10, 100);
+                    int cpuSpeed = Math.Clamp(snap.CpuFanSpeed, _cpuFanSlider.Minimum, _cpuFanSlider.Maximum);
+                    int gpuSpeed = Math.Clamp(snap.GpuFanSpeed, _gpuFanSlider.Minimum, _gpuFanSlider.Maximum);
                     _cpuFanSlider.Value = cpuSpeed;
                     _gpuFanSlider.Value = gpuSpeed;
                     _lblCpuFanSpeedHdr.Text = $"CPU FAN: {cpuSpeed}%";
@@ -202,10 +203,11 @@ namespace PredatorControlApp
             {
                 _switchWinKeyLock.Checked = snap.WasWinKeyLocked;
                 PredatorKeyHook.SetWinKeyLocked(snap.WasWinKeyLocked);
-                _ = Task.Run(() => { try { _wmi.SetWinKeyLock(snap.WasWinKeyLocked); } catch { } });
+                if (_wmi.Capabilities.SupportsWinKey)
+                    _ = Task.Run(() => { try { _wmi.SetWinKeyLock(snap.WasWinKeyLocked); } catch { } });
             }
 
-            if (_switchLcdOverdrive != null)
+            if (_switchLcdOverdrive != null && _wmi.Capabilities.SupportsLcdOverdrive)
             {
                 _switchLcdOverdrive.Checked = snap.WasLcdOverdriveEnabled;
                 _ = Task.Run(() => { try { _wmi.SetLcdOverdrive(snap.WasLcdOverdriveEnabled); } catch { } });
@@ -239,8 +241,14 @@ namespace PredatorControlApp
 
         private void OnPowerModeChanged(object? sender, PowerModeChangedEventArgs e)
         {
-            if (e.Mode != PowerModes.Resume) return;
             if (_isClosing || IsDisposed || !IsHandleCreated) return;
+            if (e.Mode == PowerModes.Suspend)
+            {
+                _wmi.InvalidateCompatibility();
+                return;
+            }
+            if (e.Mode != PowerModes.Resume) return;
+            _wmi.InvalidateCompatibility();
 
             try { BeginInvoke(new Action(async () => await ResyncAfterResume())); }
             catch { }
@@ -260,12 +268,8 @@ namespace PredatorControlApp
                 var snap = CaptureCurrentState();
                 snap.RefreshRate = _activeDisplayBtn == _btn60Hz ? 60 : _maxHz;
 
-                // Immediately re-enforce battery limit register upon waking up
-                if (_wmi.IsBatteryControlSupported())
-                {
-                    _ = Task.Run(() => _wmi.SetBatteryChargeLimit(snap.BatteryLimit == 1));
-                }
-
+                // Re-identify interfaces before replaying any supported application state.
+                await _wmi.RefreshCompatibilityAsync();
                 await Task.Delay(2000);
                 if (_isClosing || IsDisposed) return;
 
@@ -387,7 +391,28 @@ namespace PredatorControlApp
                 _manualFloorApplied = null;
                 return;
             }
-            if (FanCurveSafety.MustRecover(_cpuTemp, _gpuTemp, Environment.TickCount64 - _lastTelemetryTick)) return;
+            if (FanCurveSafety.MustRecover(_cpuTemp, _gpuTemp, Environment.TickCount64 - _lastTelemetryTick))
+            {
+                _manualFloorApplied = null;
+                if (Interlocked.CompareExchange(ref _fanCurveWriteInFlight, 1, 0) == 0)
+                {
+                    _ = Task.Run(() =>
+                    {
+                        try
+                        {
+                            _wmi.RecoverAutomaticFans();
+                            if (_wmi.LastOperation?.Accepted == true)
+                                SafeInvoke(() =>
+                                {
+                                    HighlightBtn(_btnAutoFan, ref _activeFanBtn);
+                                    if (_lblFanStatus != null) _lblFanStatus.Text = "Sensor unavailable · firmware Auto";
+                                });
+                        }
+                        finally { Interlocked.Exchange(ref _fanCurveWriteInFlight, 0); }
+                    });
+                }
+                return;
+            }
 
             int floor = FanCurveSafety.FloorSpeed(_cpuTemp, _gpuTemp);
             int cpu = _cpuFanSlider.Value, gpu = _gpuFanSlider.Value;

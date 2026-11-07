@@ -17,7 +17,7 @@ export function sectionTab(id: string): DashboardTab {
 }
 
 export function canPreviewZones(supportsRgb: boolean, controlIds: string[], zoneCount = 4): boolean {
-  return supportsRgb && zoneCount >= 1 && zoneCount <= 4 && Array.from({length: zoneCount}, (_, i) => i).every(i => controlIds.includes(`rgb.zone${i}`))
+  return supportsRgb && Number.isInteger(zoneCount) && zoneCount >= 1 && zoneCount <= 4 && Array.from({length: zoneCount}, (_, i) => i).every(i => controlIds.includes(`rgb.zone${i}`))
 }
 
 // Branding is supplied by the backend. Model strings cannot enable features or select a brand.
@@ -38,7 +38,7 @@ export function powerProfileSummary(powerMode: string | undefined, controls: Pow
   const active = buttons.find(c => c.active)
   const validPowerMode = powerMode && buttons.some(b => b.label === powerMode) ? powerMode : undefined
   return {
-    activeLabel: active?.label ?? validPowerMode ?? buttons.find(b => b.id === 'power.balanced')?.label ?? buttons[0]?.label ?? 'Balanced',
+    activeLabel: active?.label ?? validPowerMode ?? 'N/A',
     enabledIds: buttons.filter(c => c.enabled).map(c => c.id),
     disabledIds: buttons.filter(c => !c.enabled).map(c => c.id),
   }

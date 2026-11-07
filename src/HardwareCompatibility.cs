@@ -35,6 +35,8 @@ public sealed record DeviceIdentity
     public string BoardManufacturer { get; init; } = "";
     public string BoardProduct { get; init; } = "";
     public string BoardVersion { get; init; } = "";
+    public string CpuName { get; init; } = "";
+    public IReadOnlyList<string> GpuNames { get; init; } = Array.Empty<string>();
     public IReadOnlyList<ushort> ChassisTypes { get; init; } = Array.Empty<ushort>();
     public bool IsAcer => AcerName(Manufacturer) && (string.IsNullOrWhiteSpace(ProductVendor) || AcerName(ProductVendor));
     private static bool AcerName(string? value) => Regex.IsMatch(Clean(value), @"^Acer(?: Incorporated| Inc\.?)?$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -42,7 +44,7 @@ public sealed record DeviceIdentity
     {
         get
         {
-            var models = Regex.Matches(Clean(Model) + " " + Clean(ProductName), @"\b(?:PHN|PH|PT|ANV|AN)\d{2,3}-\d{2}(?!\d)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)
+            var models = Regex.Matches(Clean(Model) + " " + Clean(ProductName), @"\b(?:PHN|PH3D|PH|PTN|PTX|PT|ANV|AN)\d{2,3}-\d{2}S?(?![0-9A-Za-z])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)
                 .Select(m => m.Value.ToUpperInvariant()).Distinct().ToArray();
             return models.Length == 1 ? models[0] : ""; // Contradictory fields cannot select firmware.
         }
@@ -53,14 +55,14 @@ public sealed record DeviceIdentity
         var m when m.StartsWith("PH", StringComparison.Ordinal) => DeviceFamily.PredatorHelios,
         var m when m.StartsWith("PT", StringComparison.Ordinal) => DeviceFamily.PredatorTriton,
         var m when m.StartsWith("ANV", StringComparison.Ordinal) => DeviceFamily.NitroV,
-        var m when m.StartsWith("AN5", StringComparison.Ordinal) => DeviceFamily.Nitro5,
+        var m when m.StartsWith("AN5", StringComparison.Ordinal) || m.StartsWith("AN7", StringComparison.Ordinal) => DeviceFamily.Nitro5,
         var m when m.StartsWith("AN", StringComparison.Ordinal) => DeviceFamily.Nitro,
         _ => NamedFamily()
     };
     private DeviceFamily NamedFamily()
     {
         string name = Model + " " + ProductName;
-        if (Regex.Matches(name, @"\b(?:PHN|PH|PT|ANV|AN)\d{2,3}-\d{2}(?!\d)", RegexOptions.IgnoreCase).Select(m => m.Value.ToUpperInvariant()).Distinct().Count() > 1)
+        if (Regex.Matches(name, @"\b(?:PHN|PH3D|PH|PTN|PTX|PT|ANV|AN)\d{2,3}-\d{2}S?(?![0-9A-Za-z])", RegexOptions.IgnoreCase).Select(m => m.Value.ToUpperInvariant()).Distinct().Count() > 1)
             return DeviceFamily.UnknownAcer;
         // Branding-only classification; exact model is still required for a firmware profile.
         if (Regex.IsMatch(name, @"\bPredator Helios Neo\b", RegexOptions.IgnoreCase)) return DeviceFamily.PredatorHeliosNeo;
@@ -116,7 +118,8 @@ public static class FanCurveSafety
     }
 }
 
-public sealed record ServiceEvidence(string Name, bool Exists, bool Running, bool Trusted, bool InterfaceWorking = false);
+public sealed record ServiceEvidence(string Name, bool Exists, bool Running, bool Trusted, bool InterfaceWorking = false,
+    string? Version = null, string? BinarySha256 = null, uint ProcessId = 0, string? ProtocolBinarySha256 = null);
 public sealed record CapabilityEvidence(CapabilityStatus Status, string Backend, string Evidence,
     string? RequiredService = null, bool Writable = false, bool CanVerify = false)
 {
@@ -158,8 +161,14 @@ public sealed record HardwareDiscovery
     public bool NitroOperationModeReadable { get; init; }
     public bool NitroDirectOperationModeReadable { get; init; }
     public bool? NitroBatteryBoostReady { get; init; }
+    public byte? PredatorOperationMode { get; init; }
+    public bool PredatorDirectOperationModeReadable { get; init; }
+    public IReadOnlyList<PowerMode> PredatorOperationModes { get; init; } = Array.Empty<PowerMode>();
     public int GpuModeMask { get; init; }
     public string WmiClass { get; init; } = "";
+    public IReadOnlyList<ProtocolEvidence> Protocols { get; init; } = Array.Empty<ProtocolEvidence>();
+    public OemKeyboardInfo? DetectedKeyboard { get; init; }
+    public IReadOnlyList<string> Warnings { get; init; } = Array.Empty<string>();
 }
 
 public record HardwareCapabilities
@@ -168,6 +177,14 @@ public record HardwareCapabilities
     public AcerChassisFamily ChassisFamily { get; init; } = AcerChassisFamily.Unsupported;
     public string ProfileId { get; init; } = "read-only";
     public string Explanation { get; init; } = "No verified profile or operational interface.";
+    public string? ProtocolId { get; init; }
+    public long Revision { get; init; }
+    public bool IsCurrent { get; init; } = true;
+    public DateTimeOffset DiscoveredAtUtc { get; init; } = DateTimeOffset.UtcNow;
+    public IReadOnlyList<string> Warnings { get; init; } = Array.Empty<string>();
+    public IReadOnlyList<OemFanChannel> FanChannels { get; init; } = Array.Empty<OemFanChannel>();
+    public bool? PerformancePowerReady { get; init; }
+    public OemKeyboardInfo? DetectedKeyboard { get; init; }
     public AcerFeature Features { get; init; }
     public IReadOnlyDictionary<HardwareFeature, CapabilityEvidence> Results { get; init; } = new Dictionary<HardwareFeature, CapabilityEvidence>();
     public IReadOnlyList<PowerMode> PowerModes { get; init; } = Array.Empty<PowerMode>();
@@ -181,8 +198,14 @@ public record HardwareCapabilities
     public bool? NitroBatteryBoostReady { get; init; }
     public Guid? ActiveWindowsPowerPlan { get; init; }
     public string? PowerPlanNotice { get; init; }
-    public bool CanWrite(HardwareFeature f) => Results.TryGetValue(f, out var c) && c.CanWrite;
+    public bool CanWrite(HardwareFeature f) => IsCurrent && Results.TryGetValue(f, out var c) && c.CanWrite;
+    public CoolingCapabilities Cooling => new(FanChannels.Count > 0 ? FanChannels.Count : Sensors.ContainsKey("cpuFanRpm") ? (HasAuxFan ? 3 : Sensors.ContainsKey("gpuFanRpm") ? 2 : 1) : 0,
+        CanWrite(HardwareFeature.FanAuto), CanWrite(HardwareFeature.FanMax), CanWrite(HardwareFeature.FanManual), CanWrite(HardwareFeature.FanCurve), SupportsCoolBoost);
+    public PerformanceCapabilities Performance => new(PowerModes, ActivePowerMode);
+    public DisplayCapabilities Display => new(SupportsGpuMux, SupportsLcdOverdrive);
+    public BatteryCapabilities Battery => new(SupportsBatteryControl, BatteryLimitEnabled);
     public bool AllowsPower(byte value, bool ac) => CanWrite(HardwareFeature.Power) &&
+        (Results[HardwareFeature.Power].Backend != VerifiedAcerProtocol.PowerBackend || value is 0 or 1 or 6 || PerformancePowerReady == true) &&
         PowerModes.Any(m => m.Value == value && (ac && NitroBatteryBoostReady != false ? m.OnAc : m.OnBattery));
     public string? PowerModeLabel(byte? value) => value.HasValue ? PowerModes.FirstOrDefault(m => m.Value == value.Value)?.Label : null;
     public bool SupportsRgbLighting => CanWrite(HardwareFeature.Rgb);
@@ -239,33 +262,31 @@ public static class NitroPowerProfileCoordinator
 
 public static class DeviceProfileResolver
 {
+    public const string PredatorWmiOperationModeBackend = "predatorsense-wmi-opmode";
     private static readonly IReadOnlyDictionary<string, ulong> LegacySensors = new ReadOnlyDictionary<string, ulong>(new Dictionary<string, ulong>
     { ["cpuTemp"] = 1, ["gpuTemp"] = 10, ["cpuFanRpm"] = 2, ["gpuFanRpm"] = 6, ["gpuPowerW"] = 13 });
     private static readonly FeatureBinding[] LegacyPredator =
     [
-        new(HardwareFeature.Power, "acer-wmi-profile", "SetGamingProfile"),
         new(HardwareFeature.FanAuto, "acer-wmi-fans", "SetGamingFanBehavior"),
         new(HardwareFeature.FanMax, "acer-wmi-fans", "SetGamingFanBehavior"),
         new(HardwareFeature.FanManual, "acer-wmi-fans", "SetGamingFanSpeed"),
         new(HardwareFeature.FanCurve, "acer-wmi-fans", "SetGamingFanSpeed"),
         new(HardwareFeature.Rgb, "acer-wmi-rgb", "SetGamingKBBacklight"),
-        new(HardwareFeature.LcdOverdrive, "acer-wmi-misc", "SetGamingMiscSetting"),
+        new(HardwareFeature.LcdOverdrive, "acer-wmi-lcd", "SetGamingProfile"),
         new(HardwareFeature.BootSound, "acer-wmi-misc", "SetGamingMiscSetting"),
         new(HardwareFeature.UsbCharging, "acer-wmi-misc", "SetGamingMiscSetting"),
         new(HardwareFeature.WinKey, "acer-wmi-winkey", "SetGamingRgbKb")
     ];
-    private static readonly PowerMode[] LegacyModes =
-    [new(0, "Quiet"), new(1, "Balanced"), new(4, "Performance", OnBattery: false), new(5, "Turbo", OnBattery: false), new(6, "Eco", OnAc: false)];
     private static readonly FeatureBinding[] Nitro2022OperationModeBindings =
     [
         new(HardwareFeature.Power, NitroPowerProfileCoordinator.OperationModePipeBackend, Service: "PSSvc", CanVerify: true)
     ];
     public static readonly IReadOnlyList<DeviceProfile> Profiles = Array.AsReadOnly(new[]
     {
-        new DeviceProfile("legacy-ph16-71", "PH16-71", "Repository legacy Predator WMI implementation; physical validation still required for each configuration.",
-            LegacyPredator, LegacyModes, new(KeyboardKind.Rgb, "Legacy Predator RGB profile", ZoneCount: 4, Effects: Enumerable.Range(0, 9).ToArray()), LegacySensors),
-        new DeviceProfile("legacy-phn16-71", "PHN16-71", "Repository legacy Helios Neo WMI implementation; physical validation still required for each configuration.",
-            LegacyPredator, LegacyModes, new(KeyboardKind.Rgb, "Legacy Helios Neo RGB profile", ZoneCount: 4, Effects: Enumerable.Range(0, 9).ToArray()), LegacySensors),
+        new DeviceProfile("legacy-ph16-71", "PH16-71", "Legacy Predator WMI sensor/fan/keyboard profile. SetGamingProfile is not authorized without a live, reviewed supported-mode capability response.",
+            LegacyPredator, Array.Empty<PowerMode>(), new(KeyboardKind.Rgb, "Legacy Predator RGB profile", ZoneCount: 4, Effects: Enumerable.Range(0, 9).ToArray()), LegacySensors),
+        new DeviceProfile("legacy-phn16-71", "PHN16-71", "Legacy Helios Neo WMI sensor/fan/keyboard profile. SetGamingProfile is not authorized without a live, reviewed supported-mode capability response.",
+            LegacyPredator, Array.Empty<PowerMode>(), new(KeyboardKind.Rgb, "Legacy Helios Neo RGB profile", ZoneCount: 4, Effects: Enumerable.Range(0, 9).ToArray()), LegacySensors),
         new DeviceProfile("conservative-an515-58", "AN515-58", "NitroSense 3.01.3056 MachineType=2 (Jimny) operation-mode profile (Quiet=0, Default=1, Performance=4 via SetOperationMode/SetGamingMiscSetting 0x0B) and fixed-red keyboard policy; physical write validation pending.",
             Nitro2022OperationModeBindings, NitroPowerProfileCoordinator.OperationModes, new(KeyboardKind.Binary, "AN515-58 conservative fixed-red profile", "#ff394b"), new Dictionary<string, ulong>()),
         new DeviceProfile("nitro-an515-46-jimny", "AN515-46", "NitroSense 3.01.3056 MachineType=2 (Jimny) operation-mode profile (Quiet=0, Default=1, Performance=4 via SetOperationMode/SetGamingMiscSetting 0x0B); physical write validation pending.",
@@ -297,6 +318,41 @@ public static class DeviceProfileResolver
         var matches = (profiles ?? Profiles).Where(p => p.Matches(d.Identity)).OrderByDescending(p => p.Specificity).ToArray();
         // Equally specific, conflicting profiles fail closed instead of using enumeration order.
         DeviceProfile? p = matches.Length > 1 && matches[0].Specificity == matches[1].Specificity ? null : matches.FirstOrDefault();
+        if (p == null && profiles == null && d.Identity.IsAcer && DynamicDeviceProfileCatalog.TryGetModel(d.Identity.NormalizedModel) is { } oemEntry)
+        {
+            if (oemEntry.MachineType == 2)
+            {
+                p = new DeviceProfile($"nitro-{oemEntry.Model.ToLowerInvariant()}-dynamic", oemEntry.Model,
+                    $"Dynamic OEM catalog profile ({oemEntry.SourcePackage}, MachineType=2 operation modes Quiet=0, Default=1, Performance=4).",
+                    Nitro2022OperationModeBindings, NitroPowerProfileCoordinator.OperationModes,
+                    new(KeyboardKind.Unknown, "Unverified keyboard configuration"), new Dictionary<string, ulong>());
+            }
+            else if (oemEntry.MachineType == 0 && d.PredatorDirectOperationModeReadable && d.Methods.Contains("SetGamingMiscSetting") && d.Methods.Contains("GetGamingMiscSetting"))
+            {
+                var modes = d.PredatorOperationModes is { Count: > 0 } ? d.PredatorOperationModes : DynamicDeviceProfileCatalog.PredatorStandardModes;
+                p = new DeviceProfile($"predator-{oemEntry.Model.ToLowerInvariant()}-dynamic", oemEntry.Model,
+                    $"Dynamic OEM catalog profile ({oemEntry.SourcePackage}, PredatorSense 5.2 WMI operation-mode subfunction 0x0A/0x0B).",
+                    LegacyPredator.Append(new(HardwareFeature.Power, PredatorWmiOperationModeBackend, "SetGamingMiscSetting", CanVerify: true)).ToArray(),
+                    modes,
+                    new(KeyboardKind.Unknown, "Unverified keyboard configuration"), LegacySensors);
+            }
+        }
+        if (p != null && p.PowerModes.Count == 0 && d.PredatorDirectOperationModeReadable && d.Methods.Contains("SetGamingMiscSetting") && d.Methods.Contains("GetGamingMiscSetting") &&
+            DynamicDeviceProfileCatalog.TryGetModel(d.Identity.NormalizedModel) is { MachineType: 0 })
+        {
+            var modes = d.PredatorOperationModes is { Count: > 0 } ? d.PredatorOperationModes : DynamicDeviceProfileCatalog.PredatorStandardModes;
+            p = p with
+            {
+                Bindings = p.Bindings.Append(new(HardwareFeature.Power, PredatorWmiOperationModeBackend, "SetGamingMiscSetting", CanVerify: true)).ToArray(),
+                PowerModes = modes
+            };
+        }
+        var protocol = VerifiedAcerProtocol.Match(d);
+        // A reviewed live protocol contributes capabilities even when the device also
+        // has an exact legacy profile. The profile remains an exception source only for
+        // features the live protocol does not describe.
+        if (protocol != null && !(matches.Length > 1 && matches[0].Specificity == matches[1].Specificity))
+            p = VerifiedAcerProtocol.CreateProfile(protocol, d.Identity, p);
         var results = Enum.GetValues<HardwareFeature>().ToDictionary(f => f, f => new CapabilityEvidence(
             d.Identity.IsAcer ? CapabilityStatus.Unknown : CapabilityStatus.Unsupported, "none", "No verified implementation for this configuration."));
         void Bind(FeatureBinding b, string evidence)
@@ -304,10 +360,14 @@ public static class DeviceProfileResolver
             if (b.Backend == "nitrosense3-pipe" && d.NitroDirectCoolBoostReadable)
                 b = b with { Backend = "nitrosense3-apge", Service = null, Method = "APGeAction.SetFunction" };
             if (b.Backend == "nitrosense3-apge") evidence = "Local signed NitroSense 3.01.3056 client and native APGeAction interface evidence; exact AN515-54 board profile plus valid read-only CoolBoost state. Setter requires matching readback; physical writes untested.";
-            if (b.Backend == NitroPowerProfileCoordinator.OperationModePipeBackend && d.NitroDirectOperationModeReadable && d.Methods.Contains("GetGamingMiscSetting"))
+            // PSSvc applies a GPU profile after its WMI write. The direct path only sets the mode.
+            if (b.Backend == NitroPowerProfileCoordinator.OperationModePipeBackend &&
+                !(d.NitroOperationModeReadable && d.Services.GetValueOrDefault("PSSvc") is
+                    { Exists: true, Running: true, Trusted: true, InterfaceWorking: true }) &&
+                d.NitroDirectOperationModeReadable && d.Methods.Contains("GetGamingMiscSetting"))
                 b = b with { Backend = NitroPowerProfileCoordinator.OperationModeWmiBackend, Service = null, Method = "SetGamingMiscSetting" };
             if (b.Backend == NitroPowerProfileCoordinator.OperationModeWmiBackend)
-                evidence = "NitroSense 3.01.3056 MachineType=2 operation-mode protocol (SetGamingMiscSetting/GetGamingMiscSetting subfunction 0x0B); setter requires matching readback; physical writes untested.";
+                evidence = "NitroSense 3.01.3056 MachineType=2 WMI mode only (subfunction 0x0B). Requires matching mode readback. PSSvc GPU profile side effects are unavailable on this path.";
             bool method = b.Method == null || d.Methods.Contains(b.Method);
             if (b.Backend == "windows-power-overlay") method &= d.WindowsPowerOverlayReadable;
             if (b.Backend == "windows-power-plan")
@@ -318,10 +378,15 @@ public static class DeviceProfileResolver
             if (b.Backend == NitroPowerProfileCoordinator.OperationModePipeBackend)
             {
                 method &= d.NitroOperationModeReadable;
-                evidence = "NitroSense 3.01.3056 PSSvc SetOperationMode (command 30) and GetGamingMiscSetting (command 64, subfunction 0x0B); setter requires matching readback; physical writes untested.";
+                evidence = "NitroSense 3.01.3056 PSSvc SetOperationMode (command 30) and GetGamingMiscSetting (command 34, subfunction 0x0B); setter requires matching readback; physical writes untested.";
             }
             if (b.Backend == NitroPowerProfileCoordinator.OperationModeWmiBackend)
                 method &= d.NitroDirectOperationModeReadable && d.Methods.Contains("SetGamingMiscSetting") && d.Methods.Contains("GetGamingMiscSetting");
+            if (b.Backend == PredatorWmiOperationModeBackend)
+            {
+                method &= d.PredatorDirectOperationModeReadable && d.Methods.Contains("SetGamingMiscSetting") && d.Methods.Contains("GetGamingMiscSetting");
+                evidence = "PredatorSense 5.2 AcerHardwareService WMI operation-mode protocol (GetGamingMiscSetting 0x0A/0x0B, SetGamingMiscSetting 0x0B) with readback verification.";
+            }
             bool service = b.Service == null || (d.Services.TryGetValue(b.Service, out var s) && s.Exists && s.Running && s.Trusted && s.InterfaceWorking);
             results[b.Feature] = new(method && service ? CapabilityStatus.Supported : CapabilityStatus.Unavailable,
                 b.Backend, method && service || b.Backend == "windows-power-plan" ? evidence : "Required method or trusted, operational OEM service is unavailable.", b.Service, true, b.CanVerify);
@@ -329,6 +394,9 @@ public static class DeviceProfileResolver
         if (d.Identity.IsAcer)
         {
             if (p != null) foreach (var b in p.Bindings) Bind(b, p.Evidence);
+            if (p != null && p.PowerModes.Count == 0 && d.Methods.Contains("SetGamingProfile"))
+                results[HardwareFeature.Power] = new(CapabilityStatus.Unavailable, "acer-wmi-profile",
+                    "SetGamingProfile exists, but this interface does not advertise per-device supported modes or verified readback. Power-mode controls are hidden; a method name alone cannot authorize writes.");
             if (p?.Keyboard.SupportsPower == true && d.KeyboardConfigurationReadable)
             {
                 Bind(new(HardwareFeature.KeyboardPower, "apge-keyboard", CanVerify: true), "Profile plus readable, validated APGe configuration.");
@@ -346,6 +414,14 @@ public static class DeviceProfileResolver
             if (d.GpuModeMask is > 0 and <= 7)
                 Bind(new(HardwareFeature.GpuMux, "acer-agent", Service: "AASSvc", CanVerify: true), "Explicit Acer Agent supported GPU mode mask.");
         }
+        if (protocol?.Fans is { Count: > 0 } && p?.Bindings.Any(b => b.Feature is HardwareFeature.FanManual or HardwareFeature.FanCurve or HardwareFeature.AuxFan) != true &&
+            !VerifiedAcerProtocol.TryGetCpuGpuFans(protocol.Fans, out _, out _))
+        {
+            results[HardwareFeature.FanManual] = new(CapabilityStatus.Unavailable, VerifiedAcerProtocol.FanBackend,
+                "OEM fan data is available, but the current UI requires one explicitly named CPU channel and one GPU channel for custom speeds. Auto and Maximum remain available.", "AASSvc");
+            results[HardwareFeature.FanCurve] = new(CapabilityStatus.Unsupported, "none",
+                "The reviewed OEM service exposes fixed custom speeds, not editable fan curves.");
+        }
         if (p?.Keyboard.Kind is KeyboardKind.Binary or KeyboardKind.None)
             results[HardwareFeature.Rgb] = new(CapabilityStatus.Unsupported, "none", "Selected keyboard profile does not implement RGB.");
         if (p?.UnsupportedFeatures != null)
@@ -357,6 +433,18 @@ public static class DeviceProfileResolver
         if (results[HardwareFeature.FanCurve].CanWrite && (!results[HardwareFeature.FanAuto].CanWrite || !results[HardwareFeature.FanManual].CanWrite))
             results[HardwareFeature.FanCurve] = new(CapabilityStatus.Unknown, "none", "Safe repeated writes and Auto recovery are required.");
         var keyboard = p?.Keyboard ?? new(KeyboardKind.Unknown, "No verified keyboard profile. Preferences cannot authorize firmware commands.");
+        bool keyboardConflict = d.DetectedKeyboard is { } observed &&
+            (keyboard.SupportsRgb && (observed.LightingType != "rgb" || observed.PerKey || observed.ZoneCount != keyboard.ZoneCount) ||
+             keyboard.Kind == KeyboardKind.Binary && observed.LightingType != "fixed-color");
+        if (keyboardConflict)
+        {
+            const string conflict = "Live OEM keyboard metadata conflicts with the model profile. Lighting controls are unavailable; firmware state is unchanged.";
+            foreach (var feature in new[] { HardwareFeature.Rgb, HardwareFeature.KeyboardPower, HardwareFeature.KeyboardTimeout })
+                results[feature] = new(CapabilityStatus.Unknown, "none", conflict);
+            keyboard = new(KeyboardKind.Unknown, conflict);
+        }
+        if (!keyboardConflict && keyboard.Kind == KeyboardKind.Unknown && d.DetectedKeyboard is { } detected)
+            keyboard = keyboard with { Evidence = $"OEM reports {detected.LightingType} lighting ({(detected.PerKey ? "per-key" : detected.ZoneCount + " zone")}); its lighting transport is not reviewed. Firmware state is unchanged." };
         if (keyboard.SupportsRgb && (keyboard.ZoneCount is < 1 or > 4 || keyboard.Effects is not { Count: > 0 } || keyboard.Effects.Any(e => e is < 0 or > 8) || !results[HardwareFeature.Rgb].CanWrite || !d.Methods.Contains("SetGamingRgbKb")))
         {
             results[HardwareFeature.Rgb] = new(CapabilityStatus.Unavailable, "acer-wmi-rgb", "Both lighting and zone interfaces are required by this RGB implementation.");
@@ -384,7 +472,7 @@ public static class DeviceProfileResolver
         byte? activePowerMode = results[HardwareFeature.Power].CanWrite
             ? powerBackend == "windows-power-plan"
                 ? resolvedModes.FirstOrDefault(m => m.WindowsScheme == d.WindowsPowerPlans.ActiveScheme)?.Value
-                : d.NitroOperationMode is byte opMode && resolvedModes.Any(m => m.Value == opMode) ? opMode : null
+                : (powerBackend == VerifiedAcerProtocol.PowerBackend ? protocol?.CurrentPowerMode : powerBackend is "acer-wmi-profile" or PredatorWmiOperationModeBackend ? d.PredatorOperationMode : d.NitroOperationMode) is byte opMode && resolvedModes.Any(m => m.Value == opMode) ? opMode : null
             : null;
         string? powerNotice = powerBackend switch
         {
@@ -392,11 +480,17 @@ public static class DeviceProfileResolver
                 d.WindowsPowerPlans.Evidence,
             NitroPowerProfileCoordinator.OperationModePipeBackend or NitroPowerProfileCoordinator.OperationModeWmiBackend when d.NitroBatteryBoostReady == false =>
                 "Battery is below 40% (BatteryBoost inactive); only Default mode is available until battery charges above 40% on AC.",
+            VerifiedAcerProtocol.PowerBackend when protocol?.BatteryBoostReady == false || protocol?.AdaptorReady != true =>
+                "Firmware has not confirmed battery and adaptor readiness. Higher performance modes are unavailable.",
             _ => null
         };
         return new()
         {
             Identity = d.Identity, ChassisFamily = d.Identity.ChassisFamily, ProfileId = p?.Id ?? "read-only",
+            ProtocolId = protocol?.Family, Warnings = Array.AsReadOnly(d.Warnings.ToArray()),
+            FanChannels = Array.AsReadOnly(protocol?.Fans?.ToArray() ?? []),
+            PerformancePowerReady = protocol == null ? null : protocol.BatteryBoostReady != false && protocol.AdaptorReady == true,
+            DetectedKeyboard = d.DetectedKeyboard,
             Explanation = p?.Evidence ?? "No unambiguous verified profile. Read-only fallback.", Features = flags,
             Results = new ReadOnlyDictionary<HardwareFeature, CapabilityEvidence>(results),
             PowerModes = Array.AsReadOnly(resolvedModes),
@@ -412,18 +506,34 @@ public static class DeviceProfileResolver
     }
 }
 
-public sealed record HardwareOperationResult(string Status, string Message)
+public sealed record HardwareOperationResult(string Status, string Message, string? Code = null, HardwareFeature? Feature = null)
 {
     public bool Confirmed => Status == "confirmed";
     public bool Accepted => Status is "confirmed" or "unverified";
+}
+
+internal static class PowerModeOperationPolicy
+{
+    // A backend that advertises readback must confirm the selected mode before UI
+    // state or the persisted preference is committed. Legacy acknowledgement-only
+    // backends retain their established unverified-success behavior.
+    internal static bool IsSuccessful(HardwareOperationResult operation, bool confirmationRequired) =>
+        operation.Accepted && (!confirmationRequired || operation.Confirmed);
 }
 
 // One gate for all firmware transports. Tests inject outcomes here; no Windows APIs are needed.
 public sealed class HardwareWriteGate(Func<HardwareCapabilities> snapshot, Func<string, bool>? serviceAvailable = null)
 {
     internal static readonly object CommandLock = new();
-    private static readonly AsyncLocal<(HardwareFeature Feature, string Backend)?> Active = new();
-    public static bool InScope(HardwareFeature feature, string backend) => Active.Value == (feature, backend);
+    private sealed record Authorization(HardwareFeature Feature, string Backend, Func<bool> IsCurrent)
+    { public bool IsActive = true; }
+    private static readonly AsyncLocal<Authorization?> Active = new();
+    public static bool InScope(HardwareFeature feature, string backend)
+    {
+        var authorization = Active.Value;
+        try { return authorization?.Feature == feature && authorization.Backend == backend && Volatile.Read(ref authorization.IsActive) && authorization.IsCurrent(); }
+        catch { return false; }
+    }
     public HardwareOperationResult? LastOperation { get; private set; }
     internal void RecordResult(HardwareOperationResult result) { lock (CommandLock) LastOperation = result; }
     public HardwareOperationResult Execute(HardwareFeature feature, bool parametersValid, Func<HardwareOperationResult> write, CancellationToken token = default)
@@ -432,24 +542,50 @@ public sealed class HardwareWriteGate(Func<HardwareCapabilities> snapshot, Func<
         {
             HardwareCapabilities caps;
             try { caps = snapshot(); }
-            catch { return LastOperation = new("failed", "Capability discovery failed. No command was sent."); }
-            if (token.IsCancellationRequested) return LastOperation = new("failed", "Operation cancelled before dispatch.");
-            if (!parametersValid || !caps.CanWrite(feature)) return LastOperation = new("failed", "Operation is not authorized for this device and parameters.");
+            catch { return LastOperation = new("failed", $"{feature}: capability discovery failed. No command was sent.", "discovery-failed", feature); }
+            if (token.IsCancellationRequested) return LastOperation = new("failed", $"{feature}: operation cancelled before dispatch.", "cancelled", feature);
+            if (!caps.IsCurrent) return LastOperation = new("failed", $"{feature}: compatibility is being refreshed. No command was sent.", "stale-capabilities", feature);
+            if (!caps.CanWrite(feature))
+            {
+                var unavailable = caps.Results.GetValueOrDefault(feature);
+                string code = unavailable?.Status switch
+                {
+                    CapabilityStatus.Unsupported => "unsupported-feature",
+                    CapabilityStatus.Unavailable when unavailable.RequiredService != null => "service-unavailable",
+                    CapabilityStatus.Unavailable => "interface-unavailable",
+                    _ when feature is HardwareFeature.KeyboardPower or HardwareFeature.KeyboardTimeout or HardwareFeature.Rgb => "unsupported-keyboard-controller",
+                    _ when caps.ProfileId == "read-only" && caps.ProtocolId == null => "unknown-protocol",
+                    _ => "unverified-command"
+                };
+                return LastOperation = new("failed", $"{feature}: {unavailable?.Evidence ?? caps.Explanation} No command was sent.", code, feature);
+            }
+            if (!parametersValid) return LastOperation = new("failed", $"{feature}: the requested value is invalid or unavailable on the current power source. No command was sent.", "invalid-parameter", feature);
             var evidence = caps.Results[feature];
             try
             {
                 if (evidence.RequiredService is string service && serviceAvailable?.Invoke(service) != true)
-                    return LastOperation = new("failed", "Required OEM service is unavailable. Refresh compatibility after repair.");
+                    return LastOperation = new("failed", $"{feature}: required OEM service {service} is unavailable or changed. Refresh compatibility after repair.", "service-unavailable", feature);
             }
-            catch { return LastOperation = new("failed", "OEM service discovery failed. No command was sent."); }
+            catch { return LastOperation = new("failed", $"{feature}: OEM service discovery failed. No command was sent.", "service-discovery-failed", feature); }
             var previous = Active.Value;
+            Authorization? authorization = null;
             try
             {
-                Active.Value = (feature, evidence.Backend);
-                return LastOperation = write();
+                Active.Value = authorization = new(feature, evidence.Backend, () =>
+                {
+                    var current = snapshot();
+                    return !token.IsCancellationRequested && current.IsCurrent && current.Revision == caps.Revision &&
+                        current.CanWrite(feature) && current.Results[feature].Backend == evidence.Backend;
+                });
+                var result = write();
+                return LastOperation = result with { Feature = feature, Code = result.Code ?? (result.Confirmed ? "confirmed" : result.Status == "unverified" ? "readback-unavailable" : "command-failed") };
             }
-            catch { return LastOperation = new("failed", "Hardware interface failed; state was not confirmed."); }
-            finally { Active.Value = previous; }
+            catch { return LastOperation = new("failed", $"{feature}: hardware interface failed; state was not confirmed.", "transport-failed", feature); }
+            finally
+            {
+                if (authorization != null) Volatile.Write(ref authorization.IsActive, false);
+                Active.Value = previous;
+            }
         }
     }
 }

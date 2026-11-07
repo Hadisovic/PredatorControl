@@ -26,10 +26,10 @@ export interface Compatibility {
 export interface State {
   identity?: DeviceIdentity; compatibility?: Compatibility; lastOperation?: OperationResult | null;
   device?: string; theme?: 'PredatorTeal' | 'NitroCrimson' | 'OledBlack';
-  keyboard?: {kind: 'unknown' | 'binary' | 'rgb' | 'none'; supportsRgb: boolean; zoneCount?: number; effects?: number[]; fixedColor?: string | null; supportsBrightness: boolean; evidence: string; notice: string};
+  keyboard?: {kind: 'unknown' | 'binary' | 'rgb' | 'none'; supportsRgb: boolean; zoneCount?: number; effects?: number[]; fixedColor?: string | null; supportsBrightness: boolean; supportsEffectSpeed?: boolean; supportsPower?: boolean; supportsIdleTimeout?: boolean; evidence: string; notice: string};
   telemetry: Record<string, number | boolean | null> | null; powerMode: string; fanMode: string; gpuMode: string;
   gpuNotice: string; fps: number | null; overlay: boolean; overlayMode?: 'light' | 'default' | 'full' | 'complete'; overlayScale?: number;
-  powerPlanNotice?: string | null;
+  powerPlanNotice?: string | null; powerNotice?: string | null;
   sections: {id: string; label: string; controls: Control[]}[];
   menu: MenuItem[]; settings: Preferences; monitors: {id: string; label: string}[]; version: string; revision?: number; doubleClickMs: number; gameSyncStatus: string; batteryNotice?: string;
 }

@@ -22,6 +22,9 @@ namespace PredatorControlApp
         };
         private const string RegPath = @"SOFTWARE\PredatorControl";
         private const StringComparison OIC = StringComparison.OrdinalIgnoreCase;
+        internal const string ReleasesPage = "https://github.com/Hadisovic/PredatorControl/releases";
+        internal static bool UseSetupForUpdates =>
+            string.Equals(Path.GetDirectoryName(Environment.ProcessPath), StartupInstallation.Root, OIC);
 
         #region Version
 
@@ -258,6 +261,8 @@ namespace PredatorControlApp
 
         internal static async Task ApplyAsync(UpdateInfo info)
         {
+            if (UseSetupForUpdates)
+                throw new InvalidOperationException("Use Predator Control Setup to update the installed app.");
             ValidateUpdateInfo(info);
             if (!Uri.TryCreate(info.DownloadUrl, UriKind.Absolute, out var downloadUri))
                 throw new InvalidOperationException("Update URL is not a valid absolute URI: " + info.DownloadUrl);
@@ -354,9 +359,8 @@ namespace PredatorControlApp
                 }
                 catch { }
 
-                // Persistent backup of the version being replaced (kept after a successful update for manual rollback).
-                string backupDir = SecureSubdirectory("backup");
-                string backup = Path.Combine(backupDir, "PredatorControl.previous.exe");
+                // Keep rollback with the transient update files only.
+                string backup = Path.Combine(stageDir, "PredatorControl.previous.exe");
 
                 File.WriteAllText(script, BuildUpdateScript(Environment.ProcessId, staged, target, backup, stageDir, stagedHash),
                     new UTF8Encoding(false));

@@ -17,16 +17,133 @@ public partial class Form1
     private byte[] _batteryModeValues = [255];
     private bool UsesWindowsPowerPlans => _wmi.Capabilities.Results.GetValueOrDefault(HardwareFeature.Power)?.Backend == "windows-power-plan";
     private Label? _lblPowerPlanNotice;
+    private PredatorButton? _btnRefreshCompatibility;
+    private bool _refreshingCompatibilityUi;
+    private Control[] _coolBoostRows = [];
+    private ToolStripMenuItem? _trayRgbMenu, _trayGpuMenu;
+    private long _lastDisplayCompatibilityRefresh;
+
+    private void RefreshCompatibilityAfterDisplayChange()
+    {
+        long now = Environment.TickCount64;
+        if (now - _lastDisplayCompatibilityRefresh < 10000) return;
+        _lastDisplayCompatibilityRefresh = now;
+        _wmi.RequestCompatibilityRefresh();
+    }
+
+    private void RefreshCoolingCapabilityUi(HardwareCapabilities capabilities)
+    {
+        if (_pnlCustomFan == null || capabilities.SupportsCoolBoost == (_coolBoostRows.Length > 0)) return;
+        var page = _tabPanels[1];
+        int start = _pnlCustomFan.Top + (_isCustomFanExpanded ? _customFanShiftHeight : 0);
+        int height = S(84);
+        page.SuspendLayout();
+        try
+        {
+            if (capabilities.SupportsCoolBoost)
+            {
+                foreach (Control control in page.Controls)
+                    if (control != _pnlCustomFan && control.Top >= start) control.Top += height;
+                var previous = _buildTarget;
+                _buildTarget = page;
+                try { BuildCoolBoostControls(ref start, capabilities); }
+                finally { _buildTarget = previous; }
+            }
+            else
+            {
+                foreach (var control in _coolBoostRows) control.Dispose();
+                _coolBoostRows = [];
+                _switchCoolBoost = _switchAutoCoolBoost = null;
+                _lblCoolBoost = _lblAutoCoolBoost = null;
+                foreach (Control control in page.Controls)
+                    if (control != _pnlCustomFan && control.Top >= start + height) control.Top -= height;
+            }
+        }
+        finally { page.ResumeLayout(true); }
+    }
+
+    private void ApplyFanSliderRanges(HardwareCapabilities capabilities)
+    {
+        int cpuMinimum = 10, cpuMaximum = 100, gpuMinimum = 10, gpuMaximum = 100;
+        bool reviewedService = capabilities.Results.GetValueOrDefault(HardwareFeature.FanManual)?.Backend == VerifiedAcerProtocol.FanBackend;
+        if (reviewedService && VerifiedAcerProtocol.TryGetCpuGpuFans(capabilities.FanChannels, out var cpu, out var gpu) &&
+            VerifiedAcerProtocol.TryGetCustomSliderRange(cpu, out cpuMinimum, out cpuMaximum) &&
+            VerifiedAcerProtocol.TryGetCustomSliderRange(gpu, out gpuMinimum, out gpuMaximum))
+        {
+            // Use only bounds from the selected service protocol's live capability reply.
+        }
+        else
+        {
+            cpuMinimum = gpuMinimum = 10;
+            cpuMaximum = gpuMaximum = 100;
+        }
+
+        void Apply(PredatorSlider? slider, Label? label, int minimum, int maximum, string fan)
+        {
+            if (slider == null || label == null) return;
+            slider.Maximum = maximum;
+            slider.Minimum = minimum;
+            slider.Value = Math.Clamp(slider.Value, minimum, maximum);
+            label.Text = $"{fan} FAN: {slider.Value}%";
+        }
+
+        Apply(_cpuFanSlider, _lblCpuFanSpeedHdr, cpuMinimum, cpuMaximum, "CPU");
+        Apply(_gpuFanSlider, _lblGpuFanSpeedHdr, gpuMinimum, gpuMaximum, "GPU");
+        if (_fanCurveForm != null && !_fanCurveForm.IsDisposed)
+        {
+            _fanCurveForm.SetMinSpeed(cpuMinimum, gpuMinimum);
+        }
+    }
+
+    private async Task RefreshCompatibilityUiAsync()
+    {
+        if (_refreshingCompatibilityUi || _isClosing) return;
+        _refreshingCompatibilityUi = true;
+        if (_btnRefreshCompatibility != null) _btnRefreshCompatibility.Enabled = false;
+        try
+        {
+            await _wmi.RefreshCompatibilityAsync();
+            if (!IsDisposed) OnCompatibilityChanged(this, EventArgs.Empty);
+        }
+        catch (Exception ex) { if (!IsDisposed) Program.Report(ex, false); }
+        finally
+        {
+            _refreshingCompatibilityUi = false;
+            if (!IsDisposed && _btnRefreshCompatibility != null) _btnRefreshCompatibility.Enabled = true;
+        }
+    }
+
+    private void OnCompatibilityChanged(object? sender, EventArgs e)
+    {
+        if (_isClosing || IsDisposed || !IsHandleCreated) return;
+        if (InvokeRequired) { SafeInvoke(() => OnCompatibilityChanged(sender, e)); return; }
+        ApplyCapabilityUi();
+        PerformCustomLayout();
+        _jelli?.PublishState();
+    }
 
     private void StartFanSafetyWatchdog()
     {
         _fanSafetyTimer.Tick += (_, _) =>
         {
-            if (!_fanCurveEnabled || GetCurrentFanByte() != 3 || Environment.TickCount64 - _lastTelemetryTick <= 5000) return;
-            _curveAwaitingSensors = true;
-            _cpuTempHistory.Clear(); _gpuTempHistory.Clear();
-            _ = Task.Run(_wmi.RecoverAutomaticFans);
-            _lblFanStatus.Text = "Telemetry stale · requested firmware Auto";
+            if (GetCurrentFanByte() != 3 || Environment.TickCount64 - _lastTelemetryTick <= 5000) return;
+            if (_fanCurveEnabled)
+            {
+                _curveAwaitingSensors = true;
+                _cpuTempHistory.Clear(); _gpuTempHistory.Clear();
+            }
+            _lblFanStatus.Text = "Telemetry stale · requesting firmware Auto";
+            if (Interlocked.CompareExchange(ref _fanCurveWriteInFlight, 1, 0) != 0) return;
+            _ = Task.Run(() =>
+            {
+                try
+                {
+                    _wmi.RecoverAutomaticFans();
+                    if (_wmi.LastOperation?.Accepted == true)
+                        SafeInvoke(() => HighlightBtn(_btnAutoFan, ref _activeFanBtn));
+                }
+                finally { Interlocked.Exchange(ref _fanCurveWriteInFlight, 0); }
+            });
         };
         _fanSafetyTimer.Start();
         FormClosed += (_, _) => { _fanSafetyTimer.Dispose(); _compatibilityTip.Dispose(); };
@@ -64,6 +181,17 @@ public partial class Form1
     private void ApplyCapabilityUi()
     {
         var caps = _wmi.Capabilities;
+        RefreshKeyboardCapabilityUi(caps);
+        RefreshCoolingCapabilityUi(caps);
+        PopulateAutoModes();
+        var keyboardUi = KeyboardControlProjection.From(caps);
+        if (_trayRgbMenu != null) _trayRgbMenu.Visible = keyboardUi.Rgb;
+        if (_trayGpuMenu != null) _trayGpuMenu.Visible = caps.SupportsGpuMux;
+        var rgbTray = new[] { _trayRgbStatic, _trayRgbBreathe, _trayRgbNeon, _trayRgbWave, _trayRgbShift,
+            _trayRgbZoom, _trayRgbMeteor, _trayRgbTwinkle, _trayRgbOff };
+        for (int effect = 0; effect < rgbTray.Length; effect++)
+            if (rgbTray[effect] != null) rgbTray[effect].Visible = keyboardUi.AllowsEffect(effect);
+        if (_trayCoolBoost != null) _trayCoolBoost.Visible = _trayCoolBoost.Enabled = caps.SupportsCoolBoost;
         void Set(Control? c, HardwareFeature f)
         {
             if (c == null) return;
@@ -74,6 +202,7 @@ public partial class Form1
         Set(_btnCustomFan, HardwareFeature.FanManual); Set(_btnFixedSpeed, HardwareFeature.FanManual);
         Set(_btnFanCurve, HardwareFeature.FanCurve); Set(_cpuFanSlider, HardwareFeature.FanManual);
         Set(_gpuFanSlider, HardwareFeature.FanManual); Set(_auxFanSlider, HardwareFeature.AuxFan);
+        ApplyFanSliderRanges(caps);
         if (_fanCurveEnabled)
         {
             _cpuFanSlider.Enabled = _gpuFanSlider.Enabled = false;
@@ -101,9 +230,7 @@ public partial class Form1
             ? caps.PowerModes.FirstOrDefault(m => m.Value == activeMode)
             : UsesWindowsPowerPlans && caps.ActiveWindowsPowerPlan.HasValue
                 ? caps.PowerModes.FirstOrDefault(m => m.WindowsScheme == caps.ActiveWindowsPowerPlan)
-                : _activePowerBtn == null && caps.PowerModes.Count > 0
-                    ? caps.PowerModes.FirstOrDefault(m => m.Value == 1) ?? caps.PowerModes[0]
-                    : null;
+                : null;
         if (current != null && _lblPowerStatus != null)
         {
             _lblPowerStatus.Text = current.Label;
@@ -133,8 +260,10 @@ public partial class Form1
                 return _wmi.LastOperation ?? new(ok ? "unverified" : "failed", "Hardware state could not be verified.");
             }
         });
-        bool accepted = result.Accepted && (!_wmi.Capabilities.Results[feature].CanVerify || result.Confirmed);
-        if (IsDisposed) return result;
+        var current = _wmi.Capabilities;
+        bool accepted = result.Accepted && current.CanWrite(feature) &&
+            (current.Results.GetValueOrDefault(feature)?.CanVerify != true || result.Confirmed);
+        if (IsDisposed || toggle.IsDisposed) return result;
         if (accepted)
         {
             SaveState(preference, wanted ? 1 : 0);
@@ -153,13 +282,32 @@ public partial class Form1
 
     private void PopulateAutoModes()
     {
+        if (_cboAcProfile == null || _cboBatteryProfile == null) return;
+        byte acSelection = _cboAcProfile.SelectedIndex >= 0 && _cboAcProfile.SelectedIndex < _acModeValues.Length
+            ? _acModeValues[_cboAcProfile.SelectedIndex] : (byte)255;
+        byte batterySelection = _cboBatteryProfile.SelectedIndex >= 0 && _cboBatteryProfile.SelectedIndex < _batteryModeValues.Length
+            ? _batteryModeValues[_cboBatteryProfile.SelectedIndex] : (byte)255;
         var ac = _wmi.Capabilities.PowerModes.Where(m => m.OnAc).ToArray();
         var battery = _wmi.Capabilities.PowerModes.Where(m => m.OnBattery).ToArray();
-        _acModeValues = new byte[] {255}.Concat(ac.Select(m => m.Value)).ToArray();
-        _batteryModeValues = new byte[] {255}.Concat(battery.Select(m => m.Value)).ToArray();
-        _cboAcProfile.Items.AddRange(new[] {"Don't Change"}.Concat(ac.Select(m => m.Label)).ToArray());
-        _cboBatteryProfile.Items.AddRange(new[] {"Don't Change"}.Concat(battery.Select(m => m.Label)).ToArray());
-        _cboAcProfile.SelectedIndex = _cboBatteryProfile.SelectedIndex = 0;
+        var acLabels = new[] { "Don't Change" }.Concat(ac.Select(m => m.Label)).ToArray();
+        var batteryLabels = new[] { "Don't Change" }.Concat(battery.Select(m => m.Label)).ToArray();
+        if (_cboAcProfile.Items.Count > 0 && _acModeValues.SequenceEqual(new byte[] {255}.Concat(ac.Select(m => m.Value))) &&
+            _batteryModeValues.SequenceEqual(new byte[] {255}.Concat(battery.Select(m => m.Value))) &&
+            _cboAcProfile.Items.Cast<object>().Select(item => item.ToString()).SequenceEqual(acLabels) &&
+            _cboBatteryProfile.Items.Cast<object>().Select(item => item.ToString()).SequenceEqual(batteryLabels)) return;
+        bool loading = _loadingPreferences;
+        _loadingPreferences = true;
+        try
+        {
+            _acModeValues = new byte[] {255}.Concat(ac.Select(m => m.Value)).ToArray();
+            _batteryModeValues = new byte[] {255}.Concat(battery.Select(m => m.Value)).ToArray();
+            _cboAcProfile.Items.Clear(); _cboBatteryProfile.Items.Clear();
+            _cboAcProfile.Items.AddRange(acLabels);
+            _cboBatteryProfile.Items.AddRange(batteryLabels);
+            _cboAcProfile.SelectedIndex = Math.Max(0, Array.IndexOf(_acModeValues, acSelection));
+            _cboBatteryProfile.SelectedIndex = Math.Max(0, Array.IndexOf(_batteryModeValues, batterySelection));
+        }
+        finally { _loadingPreferences = loading; }
     }
 
     private void ExportCompatibility()

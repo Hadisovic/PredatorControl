@@ -42,7 +42,7 @@ internal static class SafeFile
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool GetFileInformationByHandle(SafeFileHandle file, out FileInformation information);
 
-    private static SafeFileHandle Open(string name, SafeFileHandle? parent, bool directory, bool create, bool write = false)
+    private static SafeFileHandle Open(string name, SafeFileHandle? parent, bool directory, bool create, bool write = false, bool delete = false)
     {
         IntPtr text = Marshal.StringToHGlobalUni(name);
         IntPtr unicode = Marshal.AllocHGlobal(Marshal.SizeOf<UnicodeString>());
@@ -54,9 +54,10 @@ internal static class SafeFile
             var attributes = new ObjectAttributes { Length = Marshal.SizeOf<ObjectAttributes>(), ObjectName = unicode,
                 RootDirectory = parent?.DangerousGetHandle() ?? IntPtr.Zero, Attributes = 0x40 | 0x1000 }; // CASE_INSENSITIVE | DONT_REPARSE
             uint access = directory ? 0x001000A0U : write ? 0x40110080U : 0x80100000U;
+            if (delete) access |= 0x10000U;
             uint disposition = create ? directory ? 3U : 2U : 1U; // OPEN_IF directories, CREATE new files, OPEN existing
             int status = NtCreateFile(out var handle, access, ref attributes, out _, IntPtr.Zero, 0x80,
-                directory ? FileShare.ReadWrite | FileShare.Delete : FileShare.Read, disposition,
+                directory && !delete ? FileShare.ReadWrite | FileShare.Delete : FileShare.Read, disposition,
                 0x20U | 0x00200000U | (directory ? 1U : 0x40U), IntPtr.Zero, 0); // synchronous, OPEN_REPARSE_POINT, DIRECTORY/NON_DIRECTORY
             GC.KeepAlive(parent);
             if (status < 0)
@@ -107,6 +108,27 @@ internal static class SafeFile
             return new FileStream(handle, FileAccess.Read);
         }
         catch { handle.Dispose(); throw; }
+    }
+
+    internal static void DeleteTree(string path, bool directory)
+    {
+        string fullPath = Path.GetFullPath(path);
+        using var parent = OpenDirectory(fullPath, create: false);
+        DeleteEntry(fullPath, parent, directory);
+    }
+
+    private static void DeleteEntry(string path, SafeFileHandle parent, bool directory)
+    {
+        using var entry = Open(Path.GetFileName(path), parent, directory, create: false, delete: true);
+        if (directory)
+        {
+            foreach (string child in Directory.GetFileSystemEntries(path))
+                DeleteEntry(child, entry, Directory.Exists(child));
+        }
+        else if (!GetFileInformationByHandle(entry, out var info) || info.Links != 1)
+            throw new IOException("Cannot remove a file with multiple links: " + path);
+        if (!SetFileInformationByHandle(entry, 4, [1], 1))
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not remove " + path);
     }
 
     internal static string ReadText(string path, int limit = 1024 * 1024)

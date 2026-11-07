@@ -253,6 +253,12 @@ namespace PredatorControlApp
 
         #region Public Methods
 
+        public void SetMinSpeed(int cpuMin, int gpuMin)
+        {
+            _graphCpu.MinSpeed = cpuMin;
+            _graphGpu.MinSpeed = gpuMin;
+        }
+
         public void UpdateTemps(int cpuTemp, int gpuTemp)
         {
             _graphCpu.CurrentTemp = cpuTemp;

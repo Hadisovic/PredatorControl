@@ -6,6 +6,7 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup><Compile Include="../../src/KeyboardPolicy.cs" Link="KeyboardPolicy.cs" /><Compile Include="../../src/HardwareCompatibility.cs" Link="HardwareCompatibility.cs" /></ItemGroup>
+  <ItemGroup><Compile Include="../../src/DeviceCapabilities.cs" Link="DeviceCapabilities.cs" /><Compile Include="../../src/VerifiedAcerProtocol.cs" Link="VerifiedAcerProtocol.cs" /><Compile Include="../../src/DynamicDeviceProfileCatalog.cs" Link="DynamicDeviceProfileCatalog.cs" /></ItemGroup>
   <Target Name="RunKeyboardTests" BeforeTargets="VSTest" DependsOnTargets="Build">
     <Exec Command="dotnet &quot;$(TargetPath)&quot;" />
   </Target>

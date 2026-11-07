@@ -6,32 +6,33 @@
 
 **A control panel and desktop companion for compatible Acer Predator and Nitro laptops.**
 
-[Download 1.4.3](https://github.com/Hadisovic/PredatorControl/releases/tag/v1.4.3) · [Source](https://github.com/Hadisovic/PredatorControl/tree/revisions) · [Report a problem](https://github.com/Hadisovic/PredatorControl/issues)
+[Download 1.4.4](https://github.com/Hadisovic/PredatorControl/releases/tag/v1.4.4) · [Source](https://github.com/Hadisovic/PredatorControl/tree/revisions) · [Report a problem](https://github.com/Hadisovic/PredatorControl/issues)
 
 Windows 10 (2004 or later) / Windows 11 · x64 · Administrator approval required
 
 </div>
 
-## What's new in 1.4.3
+## What's new in 1.4.4
 
-- Classic's five tabs organize Overview, Hardware, Keyboard, Games and Settings.
-- Jelli has more consistent spacing and clearer control groups.
-- Supported RGB keyboards get a separate zone row, little zone-color indicators and a three-column preset grid.
-- Choose an offline installer or a fully bundled portable EXE. No separate .NET or WebView2 installation is required.
-- Startup setup and application packaging have been streamlined.
+- **Dynamic Hardware Compatibility**: Enhanced support across 64+ Acer Predator and Nitro models with dynamic protocol discovery.
+- **Power & Performance Switching**: Reliable direct WMI and ACPI operation mode switching (Quiet, Balanced, Performance, Turbo, Eco) with confirmed firmware state readback.
+- **Fan Curve Editor & Limits**: Visual limit guideline and shaded deadzone enforcing hardware minimum fan floor (10% floor) on supported channels.
+- **Display & Overdrive**: 3ms LCD Overdrive support and refresh rate controls on high-refresh panels.
+- **Restored OSD Descriptors**: Rich performance mode descriptors in the gaming on-screen display overlay.
+- **Installer & Portable Optimizations**: Single portable EXE and clean offline setup installer without external runtime dependencies.
 
 ## Choose your download
 
 | Download | Best for | What happens |
 |---|---|---|
-| [Installer](https://github.com/Hadisovic/PredatorControl/releases/download/v1.4.3/PredatorControl-Setup-1.4.3.exe) | Regular use on one laptop | Installs the app, adds Start Menu and desktop shortcuts and provides an uninstaller. |
-| [Portable EXE](https://github.com/Hadisovic/PredatorControl/releases/download/v1.4.3/PredatorControl-Portable-1.4.3.exe) | Running without a conventional installation | Run one EXE; no shortcut or startup task is created unless you enable startup. |
+| [Installer](https://github.com/Hadisovic/PredatorControl/releases/download/v1.4.4/PredatorControl-Setup-1.4.4.exe) | Regular use on one laptop | Installs the app, adds Start Menu and desktop shortcuts and provides an uninstaller. |
+| [Portable EXE](https://github.com/Hadisovic/PredatorControl/releases/download/v1.4.4/PredatorControl-Portable-1.4.4.exe) | Running without a conventional installation | Run one EXE; no shortcut or startup task is created unless you enable startup. |
 
-Both contain the same app, .NET and the complete WebView2 browser runtime used by Jelli. Setup and runtime preparation work offline. Downloads are larger because these components are included.
+Both contain the complete application and runtime. Jelli uses the Microsoft Edge WebView2 Runtime already installed on Windows. Classic remains available if WebView2 is unavailable.
 
 ### Install
 
-1. Download **PredatorControl-Setup-1.4.3.exe** from the release page.
+1. Run **PredatorControl-Setup-1.4.4.exe**.
 2. Open it and approve Windows administrator access.
 3. Leave **Start Predator Control with Windows** checked, or clear it if you prefer manual launch.
 4. Leave **Launch PredatorControl** checked on the finish page to open the app, or launch it later from the desktop shortcut or Start Menu.
@@ -42,11 +43,11 @@ The app installs beneath Program Files. You can delete the downloaded setup file
 
 ### Run portable
 
-1. Download **PredatorControl-Portable-1.4.3.exe** and keep it in a convenient local folder.
+1. Keep **PredatorControl-Portable-1.4.4.exe** in a convenient local folder.
 2. Open it and approve Windows administrator access.
-3. Review the bundled browser terms when first opening Jelli, then allow browser preparation to finish. Choosing **Use Classic** keeps the native interface available.
+3. Enable Jelli if the Windows WebView2 Runtime is installed. Classic remains available without it.
 
-The portable EXE contains everything required by the application. It unpacks the browser into a protected local cache and keeps preferences/browser data per user, so it is not a zero-footprint USB application. Later launches reuse the verified cache. No browser runtime is downloaded in the background.
+The portable EXE includes the app and .NET runtime. It does not bundle Chromium/WebView2; browser profile data remains per user.
 
 If you enable **Start with Windows** in Settings, the app creates a persistent protected copy for startup. After closing the current session, you may delete the original downloaded EXE. Turning startup off removes the startup tasks and retains the installed copy.
 
@@ -105,19 +106,17 @@ Close the old app, then run the new installer or portable EXE. This packaging re
 
 For an older portable startup installation, use the new app to turn **Start with Windows** off and on again so future launches use the new copy. Setup refreshes startup registration when its startup option is selected.
 
-The version number remains **1.4.3**, so existing 1.4.3 copies will not announce this replacement as a newer version. Download it manually from the release page. These builds are unsigned; automatic installation remains unavailable. Windows may ask you to review the publisher before running them.
+This release reports version **1.4.4**.
 
 ## Compatibility and feedback
 
-Support depends on the exact laptop model, firmware and required Acer services. Bundled runtimes do not add support for unavailable hardware. Keep the Acer components needed by your laptop's controls.
+Support depends on the exact laptop model, firmware and required Acer services. Keep the Acer components needed by your laptop's controls.
 
 When reporting a problem, include the laptop model, Windows version, app version and reproduction steps. Export a compatibility report from Settings if useful, and review its contents before sharing it.
 
 ## Building from source
 
-The current 1.4.3 application source is on **revisions**; **master** retains the earlier application source and describes the latest release here.
-
-Development requires the .NET 10 SDK and Node.js. Run `scripts/Test-Compatibility.ps1` for the hardware-free checks. For the bundled packages, use `packaging/Build.ps1` with the official WebView2 Fixed Version 156.0.4314.58 x64 CAB and Inno Setup 6.7.4. The script checks the CAB hash, packages its complete contents and builds both downloads. See the script parameters for input/output locations. The browser runtime and build outputs are not stored in Git.
+Development requires the .NET 10 SDK, Node.js and Inno Setup. Run `scripts/Test-Compatibility.ps1` for the hardware-free checks. Build the setup and portable EXE with `packaging/Build.ps1 -Iscc <path-to-ISCC.exe>`. No WebView2 runtime installer is required; Jelli uses the Windows WebView2 Runtime already installed on the system.
 
 ## Credits and attribution
 

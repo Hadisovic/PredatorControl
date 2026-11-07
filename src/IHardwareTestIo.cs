@@ -5,6 +5,11 @@ internal interface IHardwareTestIo
 {
     bool IsOnAc { get; }
     HardwareOperationResult SetWindowsPowerMode(byte mode);
+    HardwareOperationResult SetReviewedAgentPowerMode(byte mode) => new("failed", "No test result supplied.");
+    byte? ReadReviewedAgentPowerMode() => null;
+    HardwareOperationResult SetReviewedAgentFanMode(byte mode) => new("failed", "No test result supplied.");
+    HardwareOperationResult SetReviewedAgentFanMode(byte mode, byte? cpuSpeed, byte? gpuSpeed) => SetReviewedAgentFanMode(mode);
+    ServiceEvidence? ReadServiceEvidence(string name) => null;
     HardwareOperationResult SetWindowsPowerPlan(Guid scheme);
     Guid? ReadActiveWindowsPowerPlan() => null;
     ulong? SendNitroSense(ushort command, ulong input, bool wide);

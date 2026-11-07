@@ -71,3 +71,22 @@ test('RGB zones have a dedicated ordered row and presets retain backend identity
   assert.deepEqual(groupRgbControls(controls, 0).zones, [])
   assert.deepEqual(groupRgbControls(controls, 5).zones, [])
 })
+
+test('single, three and four-zone keyboards use only the controls supplied by the backend', () => {
+  for (const count of [1, 3, 4]) {
+    const ids = ['rgb.all', ...Array.from({length: count}, (_, i) => `rgb.zone${i}`)]
+    const controls = ids.map(id => ({id, enabled: true}))
+    assert.deepEqual(groupRgbControls(controls, count).zones.map(c => c.id), ids)
+    assert.equal(canPreviewZones(true, ids, count), true)
+    assert.equal(canPreviewZones(false, ids, count), false)
+  }
+  assert.equal(canPreviewZones(true, ['rgb.zone0'], 128), false)
+  assert.equal(canPreviewZones(true, ['rgb.zone0'], 1.5), false)
+})
+
+test('unreadable active performance mode is displayed as unavailable', () => {
+  assert.equal(powerProfileSummary(undefined, []).activeLabel, 'N/A')
+  assert.equal(powerProfileSummary('Turbo', [
+    {id: 'power.balanced', label: 'Default', kind: 'button', enabled: true},
+  ]).activeLabel, 'N/A')
+})

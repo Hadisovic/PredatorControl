@@ -20,6 +20,13 @@ HardwareDiscovery Discovery(string model) => new()
 };
 var predator = Discovery("Predator PH16-71");
 var neo = Discovery("Predator Helios Neo PHN16-71");
+var legacyWmiPowerTestProfile = DeviceProfileResolver.Profiles[0] with
+{
+    Id = "synthetic-legacy-wmi-power-test-only",
+    Evidence = "Synthetic test fixture only; not enabled by production compatibility discovery.",
+    Bindings = DeviceProfileResolver.Profiles[0].Bindings.Append(new(HardwareFeature.Power, "acer-wmi-profile", "SetGamingProfile")).ToArray(),
+    PowerModes = [new(0, "Quiet"), new(1, "Balanced"), new(4, "Performance", OnBattery: false), new(5, "Turbo", OnBattery: false), new(6, "Eco", OnAc: false)]
+};
 var fixedRed = Discovery("Nitro AN515-58") with
 {
     Services = new Dictionary<string, ServiceEvidence>
@@ -49,12 +56,28 @@ Check(Id(" nitro  an515-58 ").NormalizedModel == "AN515-58", "Model normalizatio
 Check((Id("AN515-58") with { Manufacturer = "Other Acer Compatible OEM" }).Family == DeviceFamily.Unsupported, "Manufacturer substring cannot authorize Acer");
 Check((Id("PH16-71") with { ProductName = "AN515-58" }).NormalizedModel == "", "Contradictory model fields cannot select a profile");
 Check(new DeviceIdentity().Family == DeviceFamily.Unsupported, "Missing manufacturer is not Acer");
+Check(PowerModeOperationPolicy.IsSuccessful(new("confirmed", "readback matched"), true) &&
+      !PowerModeOperationPolicy.IsSuccessful(new("unverified", "no readback"), true) &&
+      PowerModeOperationPolicy.IsSuccessful(new("unverified", "legacy acknowledgement"), false) &&
+      !PowerModeOperationPolicy.IsSuccessful(new("failed", "rejected"), false),
+      "Shared power-mode commit policy requires confirmation only when the selected backend promises readback");
 Check(DeviceIdentity.Clean("To be filled by O.E.M.") == "" && DeviceIdentity.Clean(new string('x', 257)) == "", "Malformed and placeholder SMBIOS fields are ignored");
 Check((Id("PH16-71") with { SerialNumber = "OTHER" }).CompatibilityKey == Id("PH16-71").CompatibilityKey, "Serial alone cannot select firmware");
 Check((Id("PH16-71") with { BiosVersion = "V9.99" }).CompatibilityKey != Id("PH16-71").CompatibilityKey, "Firmware changes invalidate compatibility preference binding");
 var predatorCaps = DeviceProfileResolver.Resolve(predator);
-Check(predatorCaps.PowerModeCount == 5 && predatorCaps.SupportsRgbLighting && predatorCaps.CanWrite(HardwareFeature.FanCurve), "Legacy Predator fixture preserves modes, RGB and safe fan implementation");
-Check(DeviceProfileResolver.Resolve(neo).ProfileId == "legacy-phn16-71", "Helios Neo selects its own legacy profile");
+Check(predatorCaps.PowerModeCount == 0 && !predatorCaps.CanWrite(HardwareFeature.Power) &&
+      predatorCaps.Results[HardwareFeature.Power].Evidence.Contains("does not advertise per-device supported modes") &&
+      predatorCaps.SupportsRgbLighting && predatorCaps.CanWrite(HardwareFeature.FanCurve),
+      "Legacy WMI profile preserves unrelated controls but does not invent power modes");
+var neoCaps = DeviceProfileResolver.Resolve(neo);
+Check(neoCaps.ProfileId == "legacy-phn16-71", "Helios Neo selects its own legacy profile");
+Check(neoCaps.CanWrite(HardwareFeature.FanAuto) && neoCaps.CanWrite(HardwareFeature.FanMax) &&
+      neoCaps.CanWrite(HardwareFeature.FanManual) && neoCaps.CanWrite(HardwareFeature.FanCurve) &&
+      !neoCaps.CanWrite(HardwareFeature.Power) && neoCaps.PowerModeCount == 0,
+      "PHN16-71 retains supported fan controls while unadvertised WMI power modes stay hidden");
+var neo72 = DeviceProfileResolver.Resolve(Discovery("Predator Helios Neo PHN16-72"));
+Check(!neo72.CanWrite(HardwareFeature.FanManual) && !neo72.CanWrite(HardwareFeature.FanCurve),
+      "PHN16-72 remains fail-closed without a matching fan protocol or reviewed model exception");
 Check(!predatorCaps.SupportsGpuMux, "Predator branding does not imply MUX");
 Check(!predatorCaps.SupportsCoolBoost, "Predator family does not imply CoolBoost");
 Check(DeviceProfileResolver.Resolve(fixedRed).Keyboard.Kind == KeyboardKind.Binary, "AN515-58 fixed-red fixture resolves binary controls");
@@ -80,14 +103,18 @@ var mux = predator with { GpuModeMask = 3 };
 Check(DeviceProfileResolver.Resolve(mux).GpuModeMask == 3, "Explicit MUX mask exposes hybrid/discrete without invented Auto");
 var missingAgent = mux with { Services = new Dictionary<string, ServiceEvidence> { ["AASSvc"] = new("AASSvc", true, false, true) } };
 var degraded = DeviceProfileResolver.Resolve(missingAgent);
-Check(!degraded.SupportsGpuMux && degraded.Results[HardwareFeature.GpuMux].Status == CapabilityStatus.Unavailable && degraded.CanWrite(HardwareFeature.Power), "Unavailable Acer Agent degrades dependent features independently");
+Check(!degraded.SupportsGpuMux && degraded.Results[HardwareFeature.GpuMux].Status == CapabilityStatus.Unavailable && !degraded.CanWrite(HardwareFeature.Power), "Unavailable Acer Agent does not fall back to unadvertised WMI power modes");
 Check(!DeviceProfileResolver.Resolve(mux with { GpuModeMask = 255 }).SupportsGpuMux, "Malformed GPU capability masks cannot enable switching");
 Check(!DeviceProfileResolver.Resolve(predator with { Methods = new HashSet<string>() }).CanWrite(HardwareFeature.Power), "Missing method disables legacy controls");
 Check(!DeviceProfileResolver.Resolve(Discovery("Unknown Acer model")).Results.Values.Any(c => c.CanWrite), "Unidentified Acer uses read-only fallback");
+var unknownWithPowerMethod = Discovery("Unknown Acer model") with { Methods = new HashSet<string> { "SetGamingProfile" } };
+Check(!DeviceProfileResolver.Resolve(unknownWithPowerMethod).CanWrite(HardwareFeature.Power) &&
+      DeviceProfileResolver.Resolve(unknownWithPowerMethod).PowerModeCount == 0,
+      "SetGamingProfile method-name similarity cannot invent modes on unknown hardware");
 Check(!DeviceProfileResolver.Resolve(predator with { Identity = predator.Identity with { Manufacturer = "Other" }, BatteryStatusReadable = true, GpuModeMask = 7 }).Results.Values.Any(c => c.CanWrite), "Non-Acer rejects every Acer-specific operation");
 
 using (var io = new FakeIo())
-using (var controller = new WmiController(predator, io))
+using (var controller = new WmiController(predator, io, [legacyWmiPowerTestProfile]))
 {
     var result = controller.SetPowerMode(4);
     Check(result.Accepted && !result.Confirmed && io.Writes.SequenceEqual([("SetGamingProfile", 4UL)]), "Power uses exactly one selected payload and reports unverified acknowledgement");
@@ -102,6 +129,13 @@ using (var controller = new WmiController(predator, io))
     Check(io.Writes.Count == 6 && io.Writes.Last() == ("SetGamingFanBehavior", 0x09UL | (1UL << 16) | (1UL << 22)), "Manual session can safely request firmware Auto through its selected backend");
     io.Sensors[1] = 200; io.Sensors[2] = 0;
     Check(controller.CpuTemp == null && controller.CpuFanRpm == 0 && controller.AuxFanRpm == null, "Telemetry rejects implausible temperature and preserves real stopped-fan zero");
+}
+using (var io = new FakeIo())
+using (var controller = new WmiController(neo, io))
+{
+    var result = controller.SetPowerMode(5);
+    Check(!result.Accepted && io.Writes.Count == 0 && result.Code == "interface-unavailable",
+        "PHN16-71 method-name-only power modes are hidden and blocked before any WMI write");
 }
 using (var io = new FakeIo())
 using (var controller = new WmiController(fixedRed, io))
@@ -143,7 +177,8 @@ using (var controller = new WmiController(mux, io))
 }
 
 int active = 0, maximum = 0, writes = 0;
-var gate = new HardwareWriteGate(() => predatorCaps);
+var syntheticWritableCaps = DeviceProfileResolver.Resolve(predator, [legacyWmiPowerTestProfile]);
+var gate = new HardwareWriteGate(() => syntheticWritableCaps);
 await Task.WhenAll(Enumerable.Range(0, 30).Select(_ => Task.Run(() => gate.Execute(HardwareFeature.Power, true, () =>
 {
     int n = Interlocked.Increment(ref active); maximum = Math.Max(maximum, n);
@@ -257,9 +292,9 @@ foreach (var (name,command,input,wide) in new (string,ushort,ulong,bool)[] {
     ("cpu50",16,0x3201,true),("gpu50",16,0x3204,true),("coolOn",17,0x10007,true),
     ("coolOff",17,7,true),("coolRead",20,519,false),("cpuTemp",13,257,false),
     ("opModeQuiet",30,0,false),("opModeDefault",30,1,false),("opModePerformance",30,4,false),
-    ("opModeWmiQuiet",63,0x000B,true),("opModeWmiDefault",63,0x010B,true),("opModeWmiPerformance",63,0x040B,true),
-    ("opModeWmiRead",64,0x0B,false)})
-    Check(Convert.ToHexString(NitroSense3Protocol.Encode(command,input,wide))==golden[name], "NitroSense packet matches isolated official client capture: " + name);
+    ("opModeWmiQuiet",33,0x000B,true),("opModeWmiDefault",33,0x010B,true),("opModeWmiPerformance",33,0x040B,true),
+    ("opModeWmiRead",34,0x0B,false)})
+    Check(Convert.ToHexString(NitroSense3Protocol.Encode(command,input,wide))==golden[name], "NitroSense packet matches binary-derived protocol vector: " + name);
 byte[] reply32 = [1,4,0,0,0,0,0,0,0];
 byte[] reply64 = [1,8,0,0,0,0,1,0,0,0,0,0,0];
 using (var stream = new FragmentedStream(reply64)) Check(await NitroSense3Protocol.ReadReply(stream,true,CancellationToken.None)==256, "NitroSense fragmented reply is fully read");
@@ -336,10 +371,17 @@ Check(NitroSense3Protocol.BatteryBoostReady(1UL << 40)==true && NitroSense3Proto
 Check(NitroSense3Protocol.ParseRegistryOperationMode(0)==0 && NitroSense3Protocol.ParseRegistryOperationMode(1)==1 && NitroSense3Protocol.ParseRegistryOperationMode(4)==4 && NitroSense3Protocol.ParseRegistryOperationMode(5)==null && NitroSense3Protocol.ParseRegistryOperationMode("4")==4,"CurrentOperationMode registry parser accepts only verified Nitro modes {0, 1, 4}");
 var nitroJimnyCaps = DeviceProfileResolver.Resolve(fixedRed);
 Check(nitroJimnyCaps.PowerModeValues.SequenceEqual(new byte[] {0,1,4}) && nitroJimnyCaps.PowerModes.Select(m=>m.Label).SequenceEqual(new[] {"Quiet","Default","Performance"}) && nitroJimnyCaps.Results[HardwareFeature.Power].Backend=="nitrosense3-opmode" && nitroJimnyCaps.ActivePowerMode==1,"Nitro MachineType=2 enumerates Quiet(0), Default(1), Performance(4) on nitrosense3-opmode and reads active mode");
-foreach (string model in new[] {"Nitro AN515-46","Nitro AN515-47","Nitro AN517-42","Nitro AN517-43","Nitro AN517-55"})
+foreach (string model in new[] {"Nitro AN515-46","Nitro AN515-47","Nitro AN515-58","Nitro AN517-42","Nitro AN517-43","Nitro AN517-55"})
 {
-    var mCaps = DeviceProfileResolver.Resolve(fixedRed with { Identity = Id(model) });
+    var discovery = fixedRed with { Identity = Id(model) };
+    var mCaps = DeviceProfileResolver.Resolve(discovery);
     Check(mCaps.CanWrite(HardwareFeature.Power) && mCaps.PowerModeValues.SequenceEqual(new byte[] {0,1,4}) && mCaps.Results[HardwareFeature.Power].Backend=="nitrosense3-opmode","Verified Nitro MachineType=2 model resolves native Nitro operation modes: " + model);
+    using var io = new FakeIo();
+    using var controller = new WmiController(discovery, io);
+    Check(!controller.SetFanBehavior(1).Accepted && !controller.SetFanBehavior(2).Accepted &&
+        !controller.SetFanBehavior(3).Accepted && !controller.SetFanSpeed(50, 50) &&
+        io.Writes.Count == 0 && io.NitroCalls.Count == 0,
+        "Unverified Nitro fan controls reject Auto, Max, Custom and speed without hardware dispatch: " + model);
 }
 var nitroWmiDirect = fixedRed with
 {
@@ -350,21 +392,32 @@ var nitroWmiDirect = fixedRed with
 };
 var nitroWmiCaps = DeviceProfileResolver.Resolve(nitroWmiDirect);
 Check(nitroWmiCaps.CanWrite(HardwareFeature.Power) && nitroWmiCaps.Results[HardwareFeature.Power] is { CanWrite:true, Backend:"nitrosense3-wmi-opmode", RequiredService:null },"Nitro MachineType=2 falls back to direct GetGamingMiscSetting/SetGamingMiscSetting(0x0B) when PSSvc is absent but WMI readback is verified");
+using (var io = new FakeIo())
+using (var controller = new WmiController(fixedRed with
+{
+    NitroDirectOperationModeReadable = true,
+    Methods = nitroWmiDirect.Methods
+}, io))
+{
+    Check(controller.SetPowerMode(4).Confirmed &&
+        io.NitroCalls.SequenceEqual(new (ushort, ulong, bool)[] { (30, 4, false), (34, 0x0B, false) }) &&
+        io.Writes.Count == 0, "Trusted PSSvc takes precedence over direct WMI to preserve OEM GPU profile dispatch");
+}
 var nitroUnverifiedPower = DeviceProfileResolver.Resolve(fixedRed with { Services = new Dictionary<string,ServiceEvidence>(), NitroOperationModeReadable = false, NitroDirectOperationModeReadable = false });
 Check(!nitroUnverifiedPower.CanWrite(HardwareFeature.Power),"Nitro MachineType=2 disables power writes when neither PSSvc nor direct WMI readback is verified");
 using (var io = new FakeIo())
 using (var controller = new WmiController(fixedRed, io))
 {
-    Check(controller.ReadPowerMode()==1 && controller.Capabilities.ActivePowerMode==1,"Nitro ReadPowerMode queries PSSvc cmd 64 (0x0B) and updates ActivePowerMode");
+    Check(controller.ReadPowerMode()==1 && controller.Capabilities.ActivePowerMode==1,"Nitro ReadPowerMode queries PSSvc cmd 34 (0x0B) and updates ActivePowerMode");
     io.NitroCalls.Clear();
     var setPerf = controller.SetPowerMode(4);
-    Check(setPerf.Confirmed && controller.Capabilities.ActivePowerMode==4 && io.NitroCalls.SequenceEqual(new (ushort,ulong,bool)[] {(30,4,false),(64,0x0B,false)}) && io.Writes.Count==0,"Nitro SetPowerMode(4) sends SetOperationMode(30, 4) then GetGamingMiscSetting(64, 0x0B) without touching Predator SetGamingProfile");
+    Check(setPerf.Confirmed && controller.Capabilities.ActivePowerMode==4 && io.NitroCalls.SequenceEqual(new (ushort,ulong,bool)[] {(30,4,false),(34,0x0B,false)}) && io.Writes.Count==0,"Nitro SetPowerMode(4) sends SetOperationMode(30, 4) then GetGamingMiscSetting(34, 0x0B) without touching Predator SetGamingProfile");
     io.NitroCalls.Clear();
-    Check(controller.SetPowerMode(0).Confirmed && controller.Capabilities.ActivePowerMode==0 && io.NitroCalls.SequenceEqual(new (ushort,ulong,bool)[] {(30,0,false),(64,0x0B,false)}),"Nitro SetPowerMode(0) selects Quiet via cmd 30 and confirms via cmd 64");
+    Check(controller.SetPowerMode(0).Confirmed && controller.Capabilities.ActivePowerMode==0 && io.NitroCalls.SequenceEqual(new (ushort,ulong,bool)[] {(30,0,false),(34,0x0B,false)}),"Nitro SetPowerMode(0) selects Quiet via cmd 30 and confirms via cmd 34");
     io.NitroCalls.Clear();
     io.IsOnAc = false;
     Check(!controller.SetPowerMode(4).Accepted && !controller.SetPowerMode(0).Accepted && io.NitroCalls.Count==0,"Nitro Quiet(0) and Performance(4) are rejected on battery before any command is sent");
-    Check(controller.SetPowerMode(1).Confirmed && controller.Capabilities.ActivePowerMode==1 && io.NitroCalls.SequenceEqual(new (ushort,ulong,bool)[] {(30,1,false),(64,0x0B,false)}),"Nitro Default(1) is allowed on battery");
+    Check(controller.SetPowerMode(1).Confirmed && controller.Capabilities.ActivePowerMode==1 && io.NitroCalls.SequenceEqual(new (ushort,ulong,bool)[] {(30,1,false),(34,0x0B,false)}),"Nitro Default(1) is allowed on battery");
     io.IsOnAc = true;
     io.NitroOperationModeReadMismatch = true;
     Check(controller.SetPowerMode(4).Status=="unverified" && controller.Capabilities.ActivePowerMode==1,"Nitro SetOperationMode readback mismatch reports unverified and preserves last confirmed mode");
@@ -424,16 +477,16 @@ using (var io = new FakeIo { NitroOperationModeState = 1 })
 using (var controller = new WmiController(fixedRed, io))
 {
     io.NitroCalls.Clear();
-    Check(controller.RestoreSavedPowerMode(1).Confirmed && io.NitroCalls.SequenceEqual(new (ushort,ulong,bool)[] {(64,0x0B,false)}),"Startup profile restoration reads current hardware mode and skips redundant write when saved mode is already active");
+    Check(controller.RestoreSavedPowerMode(1).Confirmed && io.NitroCalls.SequenceEqual(new (ushort,ulong,bool)[] {(34,0x0B,false)}),"Startup profile restoration reads current hardware mode and skips redundant write when saved mode is already active");
     io.NitroCalls.Clear();
-    Check(controller.RestoreSavedPowerMode(4).Confirmed && controller.Capabilities.ActivePowerMode==4 && io.NitroCalls.SequenceEqual(new (ushort,ulong,bool)[] {(64,0x0B,false),(30,4,false),(64,0x0B,false)}),"Startup profile restoration applies verified saved Nitro mode when hardware is in a different mode");
+    Check(controller.RestoreSavedPowerMode(4).Confirmed && controller.Capabilities.ActivePowerMode==4 && io.NitroCalls.SequenceEqual(new (ushort,ulong,bool)[] {(34,0x0B,false),(30,4,false),(34,0x0B,false)}),"Startup profile restoration applies verified saved Nitro mode when hardware is in a different mode");
     io.NitroCalls.Clear();
-    Check(!controller.RestoreSavedPowerMode(5).Accepted && io.NitroCalls.SequenceEqual(new (ushort,ulong,bool)[] {(64,0x0B,false)}),"Startup profile restoration rejects unsupported saved mode without sending a write");
+    Check(!controller.RestoreSavedPowerMode(5).Accepted && io.NitroCalls.SequenceEqual(new (ushort,ulong,bool)[] {(34,0x0B,false)}),"Startup profile restoration rejects unsupported saved mode without sending a write");
     io.IsOnAc = false; io.NitroCalls.Clear();
-    Check(!controller.RestoreSavedPowerMode(4).Accepted && io.NitroCalls.SequenceEqual(new (ushort,ulong,bool)[] {(64,0x0B,false)}),"Startup profile restoration does not apply AC-only saved mode when starting on battery");
+    Check(!controller.RestoreSavedPowerMode(4).Accepted && io.NitroCalls.SequenceEqual(new (ushort,ulong,bool)[] {(34,0x0B,false)}),"Startup profile restoration does not apply AC-only saved mode when starting on battery");
 }
 using (var io = new FakeIo())
-using (var controller = new WmiController(predator, io))
+using (var controller = new WmiController(predator, io, [legacyWmiPowerTestProfile]))
 {
     controller.SetPowerMode(4);
     Check(io.Writes.SequenceEqual([("SetGamingProfile", 4UL)]) && io.NitroCalls.Count==0,"Predator backend isolation: Predator uses SetGamingProfile and never sends NitroSense SetOperationMode or SetGamingMiscSetting(0x0B)");
@@ -441,6 +494,21 @@ using (var controller = new WmiController(predator, io))
     Check(controller.Capabilities.SupportsWinKey && controller.SetWinKeyLock(true) && io.Writes.SequenceEqual([("SetGamingRgbKb", 0xFC00000000000003UL)]), "Predator WinKey lock dispatches exact EC SetGamingRgbKb lock payload");
     io.Writes.Clear();
     Check(controller.SetWinKeyLock(false) && io.Writes.SequenceEqual([("SetGamingRgbKb", 0xF900000000000303UL)]), "Predator WinKey unlock dispatches exact EC SetGamingRgbKb unlock payload");
+    io.Writes.Clear();
+    Check(controller.Capabilities.SupportsLcdOverdrive && controller.SetLcdOverdrive(true) && io.Writes.SequenceEqual([("SetGamingProfile", (1UL << 48) | 0x10UL)]), "Predator LCD Overdrive enable dispatches exact SetGamingProfile (1<<48)|0x10 payload");
+    io.Writes.Clear();
+    Check(controller.SetLcdOverdrive(false) && io.Writes.SequenceEqual([("SetGamingProfile", 0x10UL)]), "Predator LCD Overdrive disable dispatches exact SetGamingProfile 0x10 payload");
+    io.Writes.Clear();
+}
+foreach (var (discovery, model) in new[] { (predator, "PH16-71"), (neo, "PHN16-71") })
+using (var io = new FakeIo { Succeed = false, WmiFailureOutput = 2 })
+using (var controller = new WmiController(discovery, io,
+           [legacyWmiPowerTestProfile with { Id = "synthetic-" + model.ToLowerInvariant(), Model = discovery.Identity.NormalizedModel }]))
+{
+    var rejected = controller.SetPowerMode(5);
+    Check(rejected.Status == "failed" && rejected.Code == "wmi-command-rejected" && rejected.Message.Contains("0x2") &&
+          io.Writes.SequenceEqual([("SetGamingProfile", 5UL)]),
+          model + " surfaces firmware rejection without trying another protocol");
 }
 using (var io = new FakeIo())
 using (var controller = new WmiController(fixedRed, io))
@@ -495,6 +563,51 @@ Check(Updater.IsTrustedUpdateUri(new Uri("https://github.com/Hadisovic/PredatorC
       !Updater.IsTrustedUpdateUri(new Uri("https://evil.example.com/PredatorControl.exe")),
       "S3: Updater URI validator enforces HTTPS and trusted GitHub hosts for binaries, checksums and redirects");
 
+ProtocolCapabilityChecks.Run(Check);
+AgentAuthenticationChecks.Run(Check);
+UiCapabilityChecks.Run(Check);
+
+Check(DynamicDeviceProfileCatalog.Entries.Count >= 64, "Dynamic OEM catalog loads 64+ Predator and Nitro models from extracted OEM INIs");
+Check(DynamicDeviceProfileCatalog.GetSafeGpuOffsets("PHN16-71", @"PCI\VEN_10DE&DEV_28E0&SUBSYS_170F1025", 5) == (100, 200) &&
+      DynamicDeviceProfileCatalog.GetSafeGpuOffsets("PHN16-71", @"PCI\VEN_10DE&DEV_28E0&SUBSYS_170F1025", 0) == (0, 0),
+      "Dynamic OEM catalog resolves exact Predator Turbo (+100/+200 MHz) and Quiet (0/0 MHz) GPU clock offsets");
+var dynamicNitro16 = fixedRed with { Identity = Id("Nitro AN16-41") };
+var dynamicNitro16Caps = DeviceProfileResolver.Resolve(dynamicNitro16);
+Check(dynamicNitro16Caps.CanWrite(HardwareFeature.Power) && dynamicNitro16Caps.PowerModeValues.SequenceEqual(new byte[] { 0, 1, 4 }),
+      "Dynamic OEM catalog enables MachineType=2 operation modes for newly cataloged Nitro 16/17/V models");
+var dynamicPredatorWmi = neo with
+{
+    Methods = neo.Methods.Append("GetGamingMiscSetting").ToHashSet(),
+    PredatorDirectOperationModeReadable = true,
+    PredatorOperationMode = 1,
+    PredatorOperationModes = WmiController.ParsePredatorOperationModeCapabilities(0x7300UL)
+};
+var dynamicPredatorWmiCaps = DeviceProfileResolver.Resolve(dynamicPredatorWmi);
+Check(dynamicPredatorWmiCaps.CanWrite(HardwareFeature.Power) &&
+      dynamicPredatorWmiCaps.Results[HardwareFeature.Power].Backend == DeviceProfileResolver.PredatorWmiOperationModeBackend &&
+      dynamicPredatorWmiCaps.ActivePowerMode == 1 &&
+      dynamicPredatorWmiCaps.PowerModeValues.SequenceEqual(new byte[] { 0, 1, 4, 5, 6 }),
+      "Verified GetGamingMiscSetting(0x0A/0x0B) readback enables PredatorSense 5.2 WMI operation-mode backend on PHN16-71 when AcerAgentService is absent");
+using (var io = new FakeIo())
+using (var controller = new WmiController(dynamicPredatorWmi, io))
+{
+    var turboResult = controller.SetPowerMode(5);
+    Check(turboResult.Confirmed && controller.Capabilities.ActivePowerMode == 5 &&
+          io.Writes.SequenceEqual([("SetGamingMiscSetting", 0x050BUL)]),
+          "PHN16-71 Turbo mode dispatches SetGamingMiscSetting(0x050B) and confirms via GetGamingMiscSetting(0x0B)");
+}
+
+var testCurve = new List<Point> { new(30, 0), new(50, 5), new(100, 100) };
+var normalized10 = FanCurveGraph.Normalize(testCurve, 10);
+Check(normalized10.All(p => p.Y >= 10) && normalized10[0].Y == 10 && normalized10[1].Y == 10,
+      "Fan curve normalization clamps points below the 10% hardware minimum limit");
+var normalized0 = FanCurveGraph.Normalize(testCurve, 0);
+Check(normalized0[0].Y == 0 && normalized0[1].Y == 5,
+      "Fan curve normalization allows 0% when minimum speed limit is set to 0");
+using var testGraph = new FanCurveGraph { MinSpeed = 10, Points = testCurve };
+Check(testGraph.InterpolateSpeed(30) >= 10 && testGraph.InterpolateSpeed(40) >= 10,
+      "FanCurveGraph enforces 10% minimum floor during runtime interpolation");
+
 Console.WriteLine($"{passed} compatibility checks passed. All identities, services, sensors and command outcomes were synthetic. No hardware accessed.");
 
 sealed class FakeKeyboard : IKeyboardFirmware
@@ -508,14 +621,26 @@ sealed class FakeIo : IHardwareTestIo, IDisposable
 {
     public bool IsOnAc { get; set; } = true;
     public bool Succeed = true;
+    public ulong WmiFailureOutput = 1;
     public int FailAtWrite = -1;
     public List<(string, ulong)> Writes = [];
     public Dictionary<ulong, int?> Sensors = [];
-    public int LightingWrites, BatteryWrites, GpuWrites, WindowsPowerWrites, WindowsPlanWrites;
+    public int LightingWrites, BatteryWrites, GpuWrites, WindowsPowerWrites, WindowsPlanWrites, AgentWrites, AgentFanWrites;
+    public List<(byte Mode, byte? CpuSpeed, byte? GpuSpeed)> AgentFanCalls = [];
+    public byte AgentMode = 1;
+    public ServiceEvidence? LiveService;
+    public ServiceEvidence? ReadServiceEvidence(string name) => LiveService;
+    public byte? ReadReviewedAgentPowerMode() => AgentMode;
+    public HardwareOperationResult SetReviewedAgentPowerMode(byte mode)
+    { AgentWrites++; if (Succeed) AgentMode = mode; return new(Succeed ? "confirmed" : "failed", "Synthetic OEM service result."); }
+    public HardwareOperationResult SetReviewedAgentFanMode(byte mode)
+    { AgentFanWrites++; AgentFanCalls.Add((mode, null, null)); return new(Succeed ? "confirmed" : "failed", "Synthetic OEM fan result."); }
+    public HardwareOperationResult SetReviewedAgentFanMode(byte mode, byte? cpuSpeed, byte? gpuSpeed)
+    { AgentFanWrites++; AgentFanCalls.Add((mode, cpuSpeed, gpuSpeed)); return new(Succeed ? "confirmed" : "failed", "Synthetic OEM fan result."); }
     public bool? BatteryReadback;
     public FakeKeyboard KeyboardIo = new();
     public IKeyboardFirmware Keyboard => KeyboardIo;
-    public int TotalWrites => Writes.Count + LightingWrites + BatteryWrites + GpuWrites + WindowsPowerWrites + WindowsPlanWrites + KeyboardIo.Writes + NitroCalls.Count(c => c.Command is 15 or 16 or 17 or 30 or 63);
+    public int TotalWrites => Writes.Count + LightingWrites + BatteryWrites + GpuWrites + WindowsPowerWrites + WindowsPlanWrites + AgentWrites + AgentFanWrites + KeyboardIo.Writes + NitroCalls.Count(c => c.Command is 15 or 16 or 17 or 30 or 33);
     public HardwareOperationResult SetWindowsPowerMode(byte mode) { WindowsPowerWrites++; return new(Succeed ? "confirmed" : "failed", "Synthetic Windows power result; no OS API called."); }
     public WindowsPowerPlanDiscovery PlanInventory = WindowsPowerPlans.Describe([WindowsPowerPlans.PowerSaver,WindowsPowerPlans.Balanced,WindowsPowerPlans.HighPerformance],null,WindowsPowerPlans.Balanced);
     public Guid? ActivePlan = WindowsPowerPlans.Balanced;
@@ -542,13 +667,13 @@ sealed class FakeIo : IHardwareTestIo, IDisposable
             if (!NitroOperationModeReadMismatch) NitroOperationModeState = (byte)input;
             return 0;
         }
-        if (command == 63)
+        if (command == 33)
         {
             if (!NitroOperationModeReadMismatch && (input & 0xFF) == 0x0B)
                 NitroOperationModeState = (byte)((input >> 8) & 0xFF);
             return 0;
         }
-        if (command == 64 && input == 0x0B)
+        if (command == 34 && input == 0x0B)
             return NitroReadUnavailable ? null : ((ulong)NitroOperationModeState << 8);
         return NitroReadUnavailable ? null : 0UL;
     }
@@ -558,7 +683,7 @@ sealed class FakeIo : IHardwareTestIo, IDisposable
         bool ok = Succeed && Writes.Count != FailAtWrite;
         if (ok && method == "SetGamingMiscSetting" && (input & 0xFF) == 0x0B && !NitroOperationModeReadMismatch)
             NitroOperationModeState = (byte)((input >> 8) & 0xFF);
-        return (ok, ok ? 0UL : 1UL);
+        return (ok, ok ? 0UL : WmiFailureOutput);
     }
     public ulong? ReadGamingMiscSetting(uint input) =>
         NitroReadUnavailable || input != 0x0B ? null : ((ulong)NitroOperationModeState << 8);

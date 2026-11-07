@@ -75,7 +75,18 @@ namespace PredatorControlApp
                     writtenLog = path;
                 }
             }
-            catch (Exception logError) { loggingFailure = logError.Message; }
+            catch (Exception logError)
+            {
+                loggingFailure = logError.Message;
+                try
+                {
+                    string fallback = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                        "PredatorControl", "last-error.txt");
+                    SafeFile.WriteText(fallback, $"[{DateTime.Now:u}] {ex}\nProtected log unavailable: {loggingFailure}");
+                    writtenLog = fallback;
+                }
+                catch { }
+            }
 
             // Never display a modal dialog if Windows is shutting down / logging off
             if (Form1.IsShuttingDown || Environment.HasShutdownStarted) return;
@@ -151,6 +162,17 @@ namespace PredatorControlApp
         [STAThread]
         static void Main(string[] args)
         {
+            if (args.Length > 0 && args[0] == "--package-check-uninstaller")
+            {
+                try
+                {
+                    if (args.Length != 2) throw new ArgumentException("Expected an uninstaller path.");
+                    StartupInstallation.ValidateUninstaller(args[1]);
+                    Environment.ExitCode = Form1.IsStartupEnabled() ? 10 : 0;
+                }
+                catch { Environment.ExitCode = 1; }
+                return;
+            }
             // Installer maintenance exits before UI hooks, telemetry or hardware preferences.
             if (args.Length == 1 && args[0].StartsWith("--package-", StringComparison.Ordinal))
             {
@@ -161,25 +183,53 @@ namespace PredatorControlApp
                         case "--package-preflight":
                             StartupInstallation.PrepareDestination();
                             break;
+                        case "--package-data-preflight":
+                            SecureLaunch.PrepareProtectedDataDirectory();
+                            break;
+                        case "--package-product":
+                            Environment.ExitCode = StartupInstallation.ProductName == "NitroControl" ? 10 : 0;
+                            break;
                         case "--package-install-startup":
                         case "--package-install-manual":
-                            BundledBrowser.AcceptTerms(installerAlreadyAccepted: true);
-                            BundledBrowser.EnsureReady();
                             StartupInstallation.InstallRunningImage();
                             if (!Form1.SetStartupEnabled(args[0] == "--package-install-startup"))
-                                throw new IOException("Startup configuration failed. " + Form1.StartupFailureReason);
+                                Environment.ExitCode = 21;
                             break;
-                        case "--package-verify-browser":
-                            BundledBrowser.EnsureReady();
+                        case "--package-stop":
+                            using (StartupInstallation.StopRunningInstance()) { }
+                            break;
+                        case "--package-prune":
+                            Environment.ExitCode = InstallationCleanup.Run(uninstall: false) ? 0 : 23;
+                            break;
+                        case "--package-clean-legacy-uninstall":
+                            Environment.ExitCode = InstallationCleanup.Run(uninstall: true) ? 0 : 23;
                             break;
                         case "--package-uninstall-check":
-                            if (!SecureLaunch.IsAdminOnly(Environment.ProcessPath!) || !Form1.CleanUninstall())
-                                throw new IOException("Startup cleanup could not be verified. Installed files were retained.");
+                        case "--package-uninstall-full":
+                            if (!SecureLaunch.IsAdminOnly(Environment.ProcessPath!))
+                                throw new IOException("The installed executable is not protected.");
+                            using (StartupInstallation.StopRunningInstance())
+                            {
+                                if (!Form1.CleanUninstall())
+                                    throw new IOException("Startup cleanup could not be verified.");
+                                if (args[0] == "--package-uninstall-full")
+                                    Environment.ExitCode = InstallationCleanup.Run(uninstall: true) ? 0 : 23;
+                            }
                             break;
                         default: throw new ArgumentException("Unknown package command.");
                     }
                 }
-                catch { Environment.ExitCode = 1; }
+                catch (Exception ex)
+                {
+                    Environment.ExitCode = 1;
+                    try
+                    {
+                        string path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                            "PredatorControl", "last-setup-error.txt");
+                        SafeFile.WriteText(path, args[0] + Environment.NewLine + ex.Message);
+                    }
+                    catch { }
+                }
                 return;
             }
             if (args.Length == 1 && args[0].Equals("--clean-uninstall", StringComparison.OrdinalIgnoreCase))
@@ -193,7 +243,7 @@ namespace PredatorControlApp
                 try
                 {
                     if (!IsDiagnosticPathAllowed(args[1])) throw new ArgumentException("Diagnostics must be written to a .json file outside system folders.");
-                    using var controller = new WmiController();
+                    using var controller = new WmiController(readOnly: true);
                     SafeFile.WriteText(Path.GetFullPath(args[1]), controller.ExportDiagnosticReport());
                 }
                 catch { Environment.ExitCode = 1; }

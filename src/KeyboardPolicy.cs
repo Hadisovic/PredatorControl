@@ -3,10 +3,12 @@ namespace PredatorControlApp;
 public enum KeyboardKind { Unknown, Binary, Rgb, None }
 
 public sealed record KeyboardCapabilities(KeyboardKind Kind, string Evidence, string? FixedColor = null,
-    int ZoneCount = 0, IReadOnlyList<int>? Effects = null, bool IdleTimeoutSupported = false)
+    int ZoneCount = 0, IReadOnlyList<int>? Effects = null, bool IdleTimeoutSupported = false,
+    bool BrightnessSupported = true, bool EffectSpeedSupported = true, bool PowerToggleSupported = true)
 {
-    public bool SupportsPower => Kind is KeyboardKind.Binary or KeyboardKind.Rgb;
-    public bool SupportsBrightness => Kind == KeyboardKind.Rgb;
+    public bool SupportsPower => PowerToggleSupported && (Kind is KeyboardKind.Binary or KeyboardKind.Rgb);
+    public bool SupportsBrightness => Kind == KeyboardKind.Rgb && BrightnessSupported;
+    public bool SupportsEffectSpeed => Kind == KeyboardKind.Rgb && EffectSpeedSupported;
     public bool SupportsRgb => Kind == KeyboardKind.Rgb;
     public bool SupportsIdleTimeout => IdleTimeoutSupported;
 
@@ -23,6 +25,28 @@ public sealed record KeyboardCapabilities(KeyboardKind Kind, string Evidence, st
         // Compatibility is resolved centrally. A user preference or method name cannot prove support.
         return new(KeyboardKind.Unknown, "Use the resolved device profile and operational interface evidence.");
     }
+}
+
+// Classic and Jelli render this same projection. UI preferences never add capabilities.
+public sealed record KeyboardControlProjection(bool Rgb, int ZoneCount, IReadOnlyList<int> Effects,
+    bool Power, bool Brightness, bool EffectSpeed, bool IdleTimeout, string? FixedColor, string Explanation)
+{
+    public static KeyboardControlProjection From(HardwareCapabilities capabilities)
+    {
+        var keyboard = capabilities.Keyboard;
+        bool rgb = capabilities.CanWrite(HardwareFeature.Rgb) && keyboard.SupportsRgb &&
+            keyboard.ZoneCount is >= 1 and <= 4 && keyboard.Effects is { Count: > 0 } &&
+            keyboard.Effects.All(effect => effect is >= 0 and <= 8);
+        return new(rgb, rgb ? keyboard.ZoneCount : 0,
+            rgb ? Array.AsReadOnly(keyboard.Effects!.Distinct().ToArray()) : Array.Empty<int>(),
+            keyboard.SupportsPower && capabilities.CanWrite(HardwareFeature.KeyboardPower),
+            rgb && keyboard.SupportsBrightness, rgb && keyboard.SupportsEffectSpeed,
+            keyboard.SupportsIdleTimeout && capabilities.CanWrite(HardwareFeature.KeyboardTimeout),
+            keyboard.FixedColor, keyboard.Evidence);
+    }
+
+    public bool AllowsEffect(int effect) => Rgb && Effects.Contains(effect);
+    public bool AllowsZone(int zone) => Rgb && zone >= 0 && zone < ZoneCount;
 }
 
 public sealed record KeyboardState(bool? Enabled, bool? IdleTimeout, string Status);

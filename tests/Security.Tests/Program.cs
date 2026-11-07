@@ -49,6 +49,18 @@ await Check("native resource remains locked against replacement", () =>
     }
     finally { Directory.Delete(dir, true); }
 });
+await Check("native loader hash verification rewinds the stream before loading", () =>
+{
+    var secure = assembly.GetType("PredatorControlApp.SecureLaunch")!;
+    var verify = secure.GetMethod("VerifyHashAndRewind", BindingFlags.Static | BindingFlags.NonPublic)!;
+    byte[] bytes = [1, 2, 3, 4, 5];
+    byte[] expected = System.Security.Cryptography.SHA256.HashData(bytes);
+    using var stream = new MemoryStream(bytes);
+    bool matches = (bool)verify.Invoke(null, [stream, expected])!;
+    bool rewound = stream.Position == 0;
+    bool rejectsMismatch = !(bool)verify.Invoke(null, [stream, System.Security.Cryptography.SHA256.HashData([5, 4, 3, 2, 1])])!;
+    return Task.FromResult(matches && rewound && rejectsMismatch && stream.Position == 0);
+});
 await Check("update script preserves exclamation marks with inherited delayed expansion", async () =>
 {
     var type = assembly.GetType("PredatorControlApp.Updater")!;

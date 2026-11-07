@@ -389,11 +389,13 @@ namespace PredatorControlApp
 
             _cboAcProfile.SelectedIndexChanged += (s, e) =>
             {
+                if (_loadingPreferences || _cboAcProfile.SelectedIndex < 0) return;
                 SaveState("AutoPowerACValue", _acModeValues[_cboAcProfile.SelectedIndex]);
                 if (_isPluggedIn == true) ApplyPowerRules(true);
             };
             _cboBatteryProfile.SelectedIndexChanged += (s, e) =>
             {
+                if (_loadingPreferences || _cboBatteryProfile.SelectedIndex < 0) return;
                 SaveState("AutoPowerBatteryValue", _batteryModeValues[_cboBatteryProfile.SelectedIndex]);
                 if (_isPluggedIn == false) ApplyPowerRules(false);
             };
@@ -476,13 +478,23 @@ namespace PredatorControlApp
             {
                 int cpuVal = _cpuFanSlider.Value;
                 SaveState("FanSpeedCpu", cpuVal);
-                _ = Task.Run(() => _wmi.SetCpuFanSpeed((byte)cpuVal));
+                _ = Task.Run(() =>
+                {
+                    if (_wmi.Capabilities.Results.GetValueOrDefault(HardwareFeature.FanManual)?.Backend == VerifiedAcerProtocol.FanBackend)
+                        _wmi.SetFanSpeed((byte)cpuVal, (byte)_gpuFanSlider.Value);
+                    else _wmi.SetCpuFanSpeed((byte)cpuVal);
+                });
             };
             _gpuFanSlider.ValueCommitted += (s, e) =>
             {
                 int gpuVal = _gpuFanSlider.Value;
                 SaveState("FanSpeedGpu", gpuVal);
-                _ = Task.Run(() => _wmi.SetGpuFanSpeed((byte)gpuVal));
+                _ = Task.Run(() =>
+                {
+                    if (_wmi.Capabilities.Results.GetValueOrDefault(HardwareFeature.FanManual)?.Backend == VerifiedAcerProtocol.FanBackend)
+                        _wmi.SetFanSpeed((byte)_cpuFanSlider.Value, (byte)gpuVal);
+                    else _wmi.SetGpuFanSpeed((byte)gpuVal);
+                });
             };
 
             int subBtnY = S(22) + S(28) + S(8);
@@ -528,44 +540,7 @@ namespace PredatorControlApp
                 OpenFanCurveEditor();
             };
 
-            if (_wmi.Capabilities.SupportsCoolBoost)
-            {
-                int coolH = S(30);
-                _lblCoolBoost = MakeLabel("Acer CoolBoost", pad, y, FontBody, Color.FromArgb(120, 120, 135));
-                CenterV(_lblCoolBoost, y, coolH);
-
-                _switchCoolBoost = new PredatorToggle
-                {
-                    Location = new Point(ClientSize.Width - pad - S(48), y),
-                    Size = new Size(S(48), coolH),
-                    Checked = _wmi.CoolBoost
-                };
-                _buildTarget.Controls.Add(_switchCoolBoost);
-
-                _switchCoolBoost.CheckedChanged += async (s, e) =>
-                    await ChangeHardwareToggle(_switchCoolBoost, "CoolBoostEnabled", HardwareFeature.CoolBoost, value => _wmi.SetCoolBoost(value));
-                y += coolH + S(12);
-            }
-
-            if (_wmi.Supports(AcerFeature.CoolBoost))
-            {
-                _lblAutoCoolBoost = MakeLabel("Auto-CoolBoost on Performance / Turbo", pad, y, FontBody, Color.FromArgb(120, 120, 135));
-                CenterV(_lblAutoCoolBoost, y, switchH);
-
-                _switchAutoCoolBoost = new PredatorToggle
-                {
-                    Location = new Point(ClientSize.Width - pad - S(48), y),
-                    Size = new Size(S(48), switchH),
-                    Checked = LoadState("AutoCoolBoost", 0) == 1
-                };
-                _buildTarget.Controls.Add(_switchAutoCoolBoost);
-
-                _switchAutoCoolBoost.CheckedChanged += (s, e) =>
-                {
-                    SaveState("AutoCoolBoost", _switchAutoCoolBoost.Checked ? 1 : 0);
-                };
-                y += switchH + S(12);
-            }
+            BuildCoolBoostControls(ref y);
 
             AddSeparator(y);
 
@@ -749,8 +724,7 @@ namespace PredatorControlApp
                 {
                     _btnAutoRepair.Enabled = true;
                     _btnAutoRepair.Text = "\uD83D\uDEE0  Auto-Repair OEM Services";
-                    await Task.Run(() => _wmi.RefreshCompatibility());
-                    ApplyCapabilityUi();
+                    await RefreshCompatibilityUiAsync();
                     UpdateOptimizeCounter();
                 }
             };
@@ -771,199 +745,7 @@ namespace PredatorControlApp
             // ========================================================================================
             // TAB 2: KEYBOARD (RGB Zones, Effects, Presets, Profiles, Idle Sleep)
             // ========================================================================================
-            _buildTarget = _tabPanels[2];
-            y = S(16);
-
-            if (!_wmi.Capabilities.SupportsRgbLighting)
-            {
-                MakeSectionHeader("KEYBOARD BACKLIGHT", pad, y);
-                y += S(24);
-                var keyboard = _wmi.Keyboard;
-                MakeLabel(keyboard.SupportsPower ? "On/off keyboard backlight" : "Keyboard type unverified", pad, y, FontBody, Color.FromArgb(140, 140, 155));
-                y += S(28);
-                _lblKeyboardPower = MakeLabel("Keyboard backlight (unverified)", pad, y, FontBody, Color.FromArgb(180, 190, 200));
-                _switchKeyboardPower = new PredatorToggle
-                {
-                    Location = new Point(ClientSize.Width - pad - S(48), y),
-                    Size = new Size(S(48), switchH), Enabled = keyboard.SupportsPower
-                };
-                _buildTarget.Controls.Add(_switchKeyboardPower);
-                _switchKeyboardPower.CheckedChanged += async (_, _) =>
-                {
-                    if (_restoringLighting || _updatingKeyboard) return;
-                    await ChangeKeyboardFromClassicAsync(true, _switchKeyboardPower.Checked);
-                };
-                y += S(28);
-                _brightnessSlider = new PredatorSlider { Minimum = 0, Maximum = 100, Value = 100 };
-
-                MakeLabel(keyboard.Evidence, pad, y, FontBody, Color.Gray);
-                y += S(44);
-                _rgbDropDown = new PredatorDropDown();
-                foreach (var name in RgbModeNames) _rgbDropDown.Items.Add(name);
-                SelectRgbMode(0);
-                _cboRgbProfiles = new PredatorDropDown();
-                _speedSlider = new PredatorSlider();
-            }
-            else
-            {
-                MakeSectionHeader("KEYBOARD RGB LIGHTING", pad, y);
-
-                y += S(24);
-                int dropH = S(34);
-                _rgbDropDown = new PredatorDropDown { Location = new Point(pad, y), Size = new Size(contentW, dropH) };
-                _rgbModeValues = _wmi.Keyboard.Effects?.ToArray() ?? [];
-                foreach (int effect in _rgbModeValues) _rgbDropDown.Items.Add(RgbModeNames[effect]);
-                _rgbDropDown.SelectedIndex = _rgbModeValues.Length > 0 ? 0 : -1;
-                _buildTarget.Controls.Add(_rgbDropDown);
-
-                y += dropH + S(16);
-                MakeLabel($"KEYBOARD {_wmi.Keyboard.ZoneCount}-ZONE CONFIG:", pad, y, FontSectionHeader, Color.FromArgb(120, 120, 135));
-
-                y += S(20);
-                int zoneBtnW = (contentW - _wmi.Keyboard.ZoneCount * gap) / Math.Max(1, _wmi.Keyboard.ZoneCount + 1);
-                _btnAllZones = MakeButton("All Zones", pad, y, zoneBtnW, S(30));
-                _btnAllZones.IsActive = true;
-                _btnAllZones.ColorIndicator = _currentZoneColors[0];
-                _btnAllZones.Click += (s, e) => SelectZone(-1);
-
-                string[] zoneLabels = { "Zone 1", "Zone 2", "Zone 3", "Zone 4" };
-                for (int z = 0; z < 4; z++)
-                {
-                    int zIdx = z;
-                    _btnZones[z] = MakeButton(zoneLabels[z], pad + (zoneBtnW + gap) * (z + 1), y, zoneBtnW, S(30));
-                    _btnZones[z].ColorIndicator = _currentZoneColors[z];
-                    _btnZones[z].Visible = z < _wmi.Keyboard.ZoneCount;
-                    _btnZones[z].Click += (s, e) => SelectZone(zIdx);
-                }
-
-                y += S(30) + S(16);
-                MakeLabel("QUICK COLOR PRESETS:", pad, y, FontSectionHeader, Color.FromArgb(120, 120, 135));
-
-                y += S(20);
-                int preW = (contentW - 5 * gap) / 6;
-                for (int p = 0; p < 6; p++)
-                {
-                    int pIdx = p;
-                    _btnPresetColors[p] = MakeButton(PresetColorNames[p], pad + (preW + gap) * p, y, preW, S(28));
-                    _btnPresetColors[p].ColorIndicator = PresetColors[p];
-                    _btnPresetColors[p].Click += (s, e) => ApplyPresetColor(PresetColors[pIdx]);
-                }
-
-                y += S(28) + S(12);
-                _btnCustomColor = MakeButton("\uD83C\uDFA8  Custom Color...", pad, y, contentW, btnH);
-                _btnCustomColor.Click += (s, e) =>
-                {
-                    if (_selectedZone >= 0 && _selectedZone < 4)
-                        _colorPicker.Color = _currentZoneColors[_selectedZone];
-                    else
-                        _colorPicker.Color = _currentZoneColors[0];
-
-                    if (_colorPicker.ShowDialog() == DialogResult.OK)
-                    {
-                        ApplyPresetColor(_colorPicker.Color);
-                    }
-                };
-
-                y += btnH + S(16);
-                MakeLabel("SAVED RGB PROFILES:", pad, y, FontSectionHeader, Color.FromArgb(120, 120, 135));
-
-                y += S(20);
-                int profBtnW = S(68);
-                int profDropW = contentW - (profBtnW * 3 + gap * 3);
-                _cboRgbProfiles = new PredatorDropDown { Location = new Point(pad, y), Size = new Size(profDropW, S(30)) };
-                _cboRgbProfiles.SelectedIndexChanged += (s, e) =>
-                {
-                    if (_isApplyingRgbProfile) return;
-                    int idx = _cboRgbProfiles.SelectedIndex;
-                    var profiles = RgbProfileManager.LoadProfiles();
-                    if (idx >= 0 && idx < profiles.Count)
-                    {
-                        ApplyRgbProfile(profiles[idx]);
-                    }
-                };
-                _buildTarget.Controls.Add(_cboRgbProfiles);
-
-                _btnSaveRgbProfile = MakeButton("Save", pad + profDropW + gap, y, profBtnW, S(30));
-                _btnSaveRgbProfile.Click += (s, e) => SaveCurrentRgbProfile();
-
-                _btnNewRgbProfile = MakeButton("+ New", pad + profDropW + gap + profBtnW + gap, y, profBtnW, S(30));
-                _btnNewRgbProfile.Click += (s, e) => CreateNewRgbProfile();
-
-                _btnDeleteRgbProfile = MakeButton("Delete", pad + profDropW + gap + (profBtnW + gap) * 2, y, profBtnW, S(30));
-                _btnDeleteRgbProfile.Click += (s, e) => DeleteCurrentRgbProfile();
-
-                y += S(30) + S(16);
-                _lblBrightHdr = MakeLabel("BRIGHTNESS: 100%", pad, y, FontSectionHeader, Color.FromArgb(120, 120, 135));
-                _lblSpeedHdr = MakeLabel("EFFECT SPEED: 50%", ClientSize.Width / 2 + S(10), y, FontSectionHeader, Color.FromArgb(120, 120, 135));
-
-                y += S(24);
-                int sliderW = (contentW - gap * 4) / 2;
-                _brightnessSlider = new PredatorSlider { Location = new Point(pad, y), Size = new Size(sliderW, S(28)), Minimum = 0, Maximum = 100, Value = 100 };
-                _buildTarget.Controls.Add(_brightnessSlider);
-
-                _speedSlider = new PredatorSlider { Location = new Point(ClientSize.Width / 2 + S(10), y), Size = new Size(sliderW, S(28)), Minimum = 1, Maximum = 100, Value = 50 };
-                _buildTarget.Controls.Add(_speedSlider);
-
-                _brightnessSlider.ValueChanged += (s, e) =>
-                {
-                    if (_restoringLighting) return;
-                    _lblBrightHdr.Text = $"BRIGHTNESS: {_brightnessSlider.Value}%";
-                    DebounceHelper.Debounce("RgbBrightnessLive", () =>
-                    {
-                        _wmi.SetBrightness((byte)_brightnessSlider.Value);
-                    }, 40);
-                };
-                _brightnessSlider.ValueCommitted += (s, e) =>
-                {
-                    _wmi.SetBrightness((byte)_brightnessSlider.Value);
-                    SaveState("Brightness", _brightnessSlider.Value);
-                };
-
-                _speedSlider.ValueChanged += (s, e) =>
-                {
-                    if (_restoringLighting) return;
-                    _lblSpeedHdr.Text = $"EFFECT SPEED: {_speedSlider.Value}%";
-                    DebounceHelper.Debounce("RgbSpeedLive", () =>
-                    {
-                        _wmi.SetSpeed(GetMappedSpeed());
-                    }, 40);
-                };
-                _speedSlider.ValueCommitted += (s, e) =>
-                {
-                    _wmi.SetSpeed(GetMappedSpeed());
-                    SaveState("RGB_Speed", _speedSlider.Value);
-                };
-
-                _rgbDropDown.SelectedIndexChanged += (s, e) =>
-                {
-                    if (_isGameSyncOverriding || _restoringLighting) return;
-                    int mode = SelectedRgbMode;
-                    ApplyRgbModeFromDropdown(mode);
-                };
-
-                UpdateRgbControlsState(SelectedRgbMode);
-            }
-
-            y += S(28) + S(16);
-            AddSeparator(y);
-
-            y += S(14);
-            _lblBacklight30s = MakeLabel("Backlight 30-Sec Idle Sleep", pad, y, FontBody, Color.FromArgb(120, 120, 135));
-            CenterV(_lblBacklight30s, y, switchH);
-
-            _switchBacklight30s = new PredatorToggle
-            {
-                Location = new Point(ClientSize.Width - pad - S(48), y),
-                Size = new Size(S(48), switchH)
-            };
-            _buildTarget.Controls.Add(_switchBacklight30s);
-
-            _switchBacklight30s.Enabled = _wmi.Keyboard.SupportsIdleTimeout;
-            _switchBacklight30s.CheckedChanged += async (_, _) =>
-            {
-                if (_restoringLighting || _updatingKeyboard) return;
-                await ChangeKeyboardFromClassicAsync(false, _switchBacklight30s.Checked);
-            };
+            BuildKeyboardPage();
 
             // ========================================================================================
             // TAB 3: GAMES (Game Sync + Gaming Overlay HUD)
@@ -1135,7 +917,9 @@ namespace PredatorControlApp
             y += S(20);
             _btnExportCompatibility = MakeButton("Export compatibility report to JSON", pad, y, contentW, btnH);
             _btnExportCompatibility.Click += (s, e) => ExportCompatibility();
-            _btnExportCompatibility.Click += (s, e) => ExportCompatibility();
+            y += btnH + S(10);
+            _btnRefreshCompatibility = MakeButton("Refresh device compatibility", pad, y, contentW, btnH);
+            _btnRefreshCompatibility.Click += async (_, _) => await RefreshCompatibilityUiAsync();
 
             LoadRgbProfilesIntoUi();
 
@@ -1144,6 +928,269 @@ namespace PredatorControlApp
             PerformCustomLayout();
             UpdateScrollMinSize();
             AdjustWindowHeightToActiveTab();
+        }
+
+        private void BuildCoolBoostControls(ref int y, HardwareCapabilities? capabilities = null)
+        {
+            int pad = S(24), switchH = S(30);
+            int start = _buildTarget.Controls.Count;
+            var caps = capabilities ?? _wmi.Capabilities;
+            if (caps.SupportsCoolBoost)
+            {
+                int coolH = S(30);
+                _lblCoolBoost = MakeLabel("Acer CoolBoost", pad, y, FontBody, Color.FromArgb(120, 120, 135));
+                CenterV(_lblCoolBoost, y, coolH);
+
+                _switchCoolBoost = new PredatorToggle
+                {
+                    Location = new Point(ClientSize.Width - pad - S(48), y),
+                    Size = new Size(S(48), coolH),
+                    Checked = _wmi.CoolBoost
+                };
+                _buildTarget.Controls.Add(_switchCoolBoost);
+
+                _switchCoolBoost.CheckedChanged += async (s, e) =>
+                    await ChangeHardwareToggle(_switchCoolBoost, "CoolBoostEnabled", HardwareFeature.CoolBoost, value => _wmi.SetCoolBoost(value));
+                y += coolH + S(12);
+            }
+
+            if (caps.SupportsCoolBoost)
+            {
+                _lblAutoCoolBoost = MakeLabel("Auto-CoolBoost on Performance / Turbo", pad, y, FontBody, Color.FromArgb(120, 120, 135));
+                CenterV(_lblAutoCoolBoost, y, switchH);
+
+                _switchAutoCoolBoost = new PredatorToggle
+                {
+                    Location = new Point(ClientSize.Width - pad - S(48), y),
+                    Size = new Size(S(48), switchH),
+                    Checked = LoadState("AutoCoolBoost", 0) == 1
+                };
+                _buildTarget.Controls.Add(_switchAutoCoolBoost);
+
+                _switchAutoCoolBoost.CheckedChanged += (s, e) =>
+                {
+                    SaveState("AutoCoolBoost", _switchAutoCoolBoost.Checked ? 1 : 0);
+                };
+                y += switchH + S(12);
+            }
+
+            _coolBoostRows = _buildTarget.Controls.Cast<Control>().Skip(start).ToArray();
+        }
+
+        private void BuildKeyboardPage(HardwareCapabilities? capabilities = null)
+        {
+            _buildTarget = _tabPanels[2];
+            int pad = S(24), gap = S(6), btnH = S(34), switchH = S(30);
+            int contentW = ClientSize.Width - pad * 2;
+            int y = S(16);
+            var keyboardUi = KeyboardControlProjection.From(capabilities ?? _wmi.Capabilities);
+            _keyboardUiSignature = KeyboardUiSignature(keyboardUi);
+
+            if (!keyboardUi.Rgb)
+            {
+                MakeSectionHeader("KEYBOARD BACKLIGHT", pad, y);
+                y += S(24);
+                MakeLabel(keyboardUi.Power ? "On/off keyboard backlight" : "Keyboard type unverified", pad, y, FontBody, Color.FromArgb(140, 140, 155));
+                y += S(28);
+                _lblKeyboardPower = MakeLabel("Keyboard backlight (unverified)", pad, y, FontBody, Color.FromArgb(180, 190, 200));
+                _switchKeyboardPower = new PredatorToggle
+                {
+                    Location = new Point(ClientSize.Width - pad - S(48), y),
+                    Size = new Size(S(48), switchH), Enabled = keyboardUi.Power, Visible = keyboardUi.Power
+                };
+                _buildTarget.Controls.Add(_switchKeyboardPower);
+                _switchKeyboardPower.CheckedChanged += async (_, _) =>
+                {
+                    if (_restoringLighting || _updatingKeyboard) return;
+                    await ChangeKeyboardFromClassicAsync(true, _switchKeyboardPower.Checked);
+                };
+                _lblKeyboardPower.Visible = keyboardUi.Power;
+                if (keyboardUi.FixedColor is string fixedColor && keyboardUi.Power)
+                {
+                    var indicator = MakeLabel("●", ClientSize.Width - pad - S(20), y - S(26), FontBodyBold, ColorTranslator.FromHtml(fixedColor));
+                    indicator.AccessibleName = "Fixed keyboard backlight color";
+                }
+                y += S(28);
+                _brightnessSlider = new PredatorSlider { Minimum = 0, Maximum = 100, Value = 100 };
+
+                _lblKeyboardEvidence = MakeLabel(keyboardUi.Explanation, pad, y, FontBody, Color.Gray);
+                _lblKeyboardEvidence.AutoSize = false;
+                _lblKeyboardEvidence.Size = new Size(contentW, S(44));
+                y += S(44);
+                _rgbDropDown = new PredatorDropDown();
+                foreach (var name in RgbModeNames) _rgbDropDown.Items.Add(name);
+                SelectRgbMode(0);
+                _cboRgbProfiles = new PredatorDropDown();
+                _speedSlider = new PredatorSlider { Minimum = 1, Maximum = 100, Value = 50 };
+            }
+            else
+            {
+                MakeSectionHeader("KEYBOARD RGB LIGHTING", pad, y);
+
+                y += S(24);
+                int dropH = S(34);
+                _rgbDropDown = new PredatorDropDown { Location = new Point(pad, y), Size = new Size(contentW, dropH) };
+                _rgbModeValues = keyboardUi.Effects.ToArray();
+                foreach (int effect in _rgbModeValues) _rgbDropDown.Items.Add(RgbModeNames[effect]);
+                _rgbDropDown.SelectedIndex = _rgbModeValues.Length > 0 ? 0 : -1;
+                _buildTarget.Controls.Add(_rgbDropDown);
+
+                y += dropH + S(16);
+                MakeLabel($"KEYBOARD {keyboardUi.ZoneCount}-ZONE CONFIG:", pad, y, FontSectionHeader, Color.FromArgb(120, 120, 135));
+
+                y += S(20);
+                int zoneBtnW = (contentW - keyboardUi.ZoneCount * gap) / Math.Max(1, keyboardUi.ZoneCount + 1);
+                _btnAllZones = MakeButton("All Zones", pad, y, zoneBtnW, S(30));
+                _btnAllZones.IsActive = true;
+                _btnAllZones.ColorIndicator = _currentZoneColors[0];
+                _btnAllZones.Click += (s, e) => SelectZone(-1);
+
+                string[] zoneLabels = { "Zone 1", "Zone 2", "Zone 3", "Zone 4" };
+                for (int z = 0; z < 4; z++)
+                {
+                    int zIdx = z;
+                    _btnZones[z] = MakeButton(zoneLabels[z], pad + (zoneBtnW + gap) * (z + 1), y, zoneBtnW, S(30));
+                    _btnZones[z].ColorIndicator = _currentZoneColors[z];
+                    _btnZones[z].Visible = z < keyboardUi.ZoneCount;
+                    _btnZones[z].Click += (s, e) => SelectZone(zIdx);
+                }
+
+                y += S(30) + S(16);
+                MakeLabel("QUICK COLOR PRESETS:", pad, y, FontSectionHeader, Color.FromArgb(120, 120, 135));
+
+                y += S(20);
+                int preW = (contentW - 5 * gap) / 6;
+                for (int p = 0; p < 6; p++)
+                {
+                    int pIdx = p;
+                    _btnPresetColors[p] = MakeButton(PresetColorNames[p], pad + (preW + gap) * p, y, preW, S(28));
+                    _btnPresetColors[p].ColorIndicator = PresetColors[p];
+                    _btnPresetColors[p].Click += (s, e) => ApplyPresetColor(PresetColors[pIdx]);
+                }
+
+                y += S(28) + S(12);
+                _btnCustomColor = MakeButton("\uD83C\uDFA8  Custom Color...", pad, y, contentW, btnH);
+                _btnCustomColor.Click += (s, e) =>
+                {
+                    if (_selectedZone >= 0 && _selectedZone < 4)
+                        _colorPicker.Color = _currentZoneColors[_selectedZone];
+                    else
+                        _colorPicker.Color = _currentZoneColors[0];
+
+                    if (_colorPicker.ShowDialog() == DialogResult.OK)
+                    {
+                        ApplyPresetColor(_colorPicker.Color);
+                    }
+                };
+
+                y += btnH + S(16);
+                MakeLabel("SAVED RGB PROFILES:", pad, y, FontSectionHeader, Color.FromArgb(120, 120, 135));
+
+                y += S(20);
+                int profBtnW = S(68);
+                int profDropW = contentW - (profBtnW * 3 + gap * 3);
+                _cboRgbProfiles = new PredatorDropDown { Location = new Point(pad, y), Size = new Size(profDropW, S(30)) };
+                _cboRgbProfiles.SelectedIndexChanged += (s, e) =>
+                {
+                    if (_isApplyingRgbProfile) return;
+                    int idx = _cboRgbProfiles.SelectedIndex;
+                    var profiles = RgbProfileManager.LoadProfiles();
+                    if (idx >= 0 && idx < profiles.Count)
+                    {
+                        ApplyRgbProfile(profiles[idx]);
+                    }
+                };
+                _buildTarget.Controls.Add(_cboRgbProfiles);
+
+                _btnSaveRgbProfile = MakeButton("Save", pad + profDropW + gap, y, profBtnW, S(30));
+                _btnSaveRgbProfile.Click += (s, e) => SaveCurrentRgbProfile();
+
+                _btnNewRgbProfile = MakeButton("+ New", pad + profDropW + gap + profBtnW + gap, y, profBtnW, S(30));
+                _btnNewRgbProfile.Click += (s, e) => CreateNewRgbProfile();
+
+                _btnDeleteRgbProfile = MakeButton("Delete", pad + profDropW + gap + (profBtnW + gap) * 2, y, profBtnW, S(30));
+                _btnDeleteRgbProfile.Click += (s, e) => DeleteCurrentRgbProfile();
+
+                y += S(30) + S(16);
+                _lblBrightHdr = MakeLabel("BRIGHTNESS: 100%", pad, y, FontSectionHeader, Color.FromArgb(120, 120, 135));
+                _lblSpeedHdr = MakeLabel("EFFECT SPEED: 50%", ClientSize.Width / 2 + S(10), y, FontSectionHeader, Color.FromArgb(120, 120, 135));
+
+                y += S(24);
+                int sliderW = (contentW - gap * 4) / 2;
+                _brightnessSlider = new PredatorSlider { Location = new Point(pad, y), Size = new Size(sliderW, S(28)), Minimum = 0, Maximum = 100, Value = 100 };
+                _buildTarget.Controls.Add(_brightnessSlider);
+
+                _speedSlider = new PredatorSlider { Location = new Point(ClientSize.Width / 2 + S(10), y), Size = new Size(sliderW, S(28)), Minimum = 1, Maximum = 100, Value = 50 };
+                _buildTarget.Controls.Add(_speedSlider);
+                _brightnessSlider.Visible = _lblBrightHdr.Visible = keyboardUi.Brightness;
+                _speedSlider.Visible = _lblSpeedHdr.Visible = keyboardUi.EffectSpeed;
+
+                _brightnessSlider.ValueChanged += (s, e) =>
+                {
+                    if (_restoringLighting || !KeyboardControlProjection.From(_wmi.Capabilities).Brightness) return;
+                    _lblBrightHdr.Text = $"BRIGHTNESS: {_brightnessSlider.Value}%";
+                    DebounceHelper.Debounce("RgbBrightnessLive", () =>
+                    {
+                        _wmi.SetBrightness((byte)_brightnessSlider.Value);
+                    }, 40);
+                };
+                _brightnessSlider.ValueCommitted += (s, e) =>
+                {
+                    if (_restoringLighting || !KeyboardControlProjection.From(_wmi.Capabilities).Brightness) return;
+                    _wmi.SetBrightness((byte)_brightnessSlider.Value);
+                    SaveState("Brightness", _brightnessSlider.Value);
+                };
+
+                _speedSlider.ValueChanged += (s, e) =>
+                {
+                    if (_restoringLighting || !KeyboardControlProjection.From(_wmi.Capabilities).EffectSpeed) return;
+                    _lblSpeedHdr.Text = $"EFFECT SPEED: {_speedSlider.Value}%";
+                    DebounceHelper.Debounce("RgbSpeedLive", () =>
+                    {
+                        _wmi.SetSpeed(GetMappedSpeed());
+                    }, 40);
+                };
+                _speedSlider.ValueCommitted += (s, e) =>
+                {
+                    if (_restoringLighting || !KeyboardControlProjection.From(_wmi.Capabilities).EffectSpeed) return;
+                    _wmi.SetSpeed(GetMappedSpeed());
+                    SaveState("RGB_Speed", _speedSlider.Value);
+                };
+
+                _rgbDropDown.SelectedIndexChanged += (s, e) =>
+                {
+                    if (_isGameSyncOverriding || _restoringLighting) return;
+                    int mode = SelectedRgbMode;
+                    ApplyRgbModeFromDropdown(mode);
+                };
+
+                UpdateRgbControlsState(SelectedRgbMode);
+            }
+
+            if (keyboardUi.IdleTimeout)
+            {
+                y += S(28) + S(16);
+                AddSeparator(y);
+
+                y += S(14);
+                _lblBacklight30s = MakeLabel("Backlight 30-Sec Idle Sleep", pad, y, FontBody, Color.FromArgb(120, 120, 135));
+                CenterV(_lblBacklight30s, y, switchH);
+
+                _switchBacklight30s = new PredatorToggle
+                {
+                    Location = new Point(ClientSize.Width - pad - S(48), y),
+                    Size = new Size(S(48), switchH)
+                };
+                _buildTarget.Controls.Add(_switchBacklight30s);
+
+                _switchBacklight30s.Visible = _lblBacklight30s.Visible = keyboardUi.IdleTimeout;
+                _switchBacklight30s.Enabled = keyboardUi.IdleTimeout;
+                _switchBacklight30s.CheckedChanged += async (_, _) =>
+                {
+                    if (_restoringLighting || _updatingKeyboard) return;
+                    await ChangeKeyboardFromClassicAsync(false, _switchBacklight30s.Checked);
+                };
+            }
         }
 
         private void SwitchClassicTab(int index, bool save = true, bool adjustHeight = true)
@@ -1568,7 +1615,7 @@ namespace PredatorControlApp
 
             if (_rgbDropDown != null) { _rgbDropDown.Left = pad; _rgbDropDown.Width = contentW; }
 
-            int zoneCount = Math.Max(0, _wmi.Keyboard.ZoneCount);
+            int zoneCount = KeyboardControlProjection.From(_wmi.Capabilities).ZoneCount;
             int zoneBtnW = (contentW - zoneCount * gap) / Math.Max(1, zoneCount + 1);
             if (_btnAllZones != null)
             {
@@ -1620,6 +1667,7 @@ namespace PredatorControlApp
             if (_btnConfigureGames != null) { _btnConfigureGames.Left = pad; _btnConfigureGames.Width = contentW; }
             if (_btnCheckUpdates != null) _btnCheckUpdates.Left = pad + contentW - _btnCheckUpdates.Width;
             if (_btnExportCompatibility != null) { _btnExportCompatibility.Left = pad; _btnExportCompatibility.Width = contentW; }
+            if (_btnRefreshCompatibility != null) { _btnRefreshCompatibility.Left = pad; _btnRefreshCompatibility.Width = contentW; }
 
             UpdateScrollMinSize();
             _contentPanel.Invalidate(true);

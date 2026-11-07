@@ -10,6 +10,54 @@ public partial class Form1
     private bool _updatingKeyboard;
     private bool _keyboardBusy;
     private string? _keyboardNotice;
+    private string? _keyboardUiSignature;
+    private Label? _lblKeyboardEvidence;
+
+    private static string KeyboardUiSignature(KeyboardControlProjection projection) =>
+        $"{projection.Rgb}|{projection.ZoneCount}|{string.Join(',', projection.Effects)}|{projection.Power}|{projection.Brightness}|{projection.EffectSpeed}|{projection.IdleTimeout}|{projection.FixedColor}";
+
+    private void RefreshKeyboardCapabilityUi(HardwareCapabilities capabilities)
+    {
+        var projection = KeyboardControlProjection.From(capabilities);
+        string signature = KeyboardUiSignature(projection);
+        if (_keyboardUiSignature == null) _keyboardUiSignature = signature;
+        if (_keyboardUiSignature != signature && _tabPanels[2] != null)
+        {
+            int mode = SelectedRgbMode, brightness = _brightnessSlider.Value, speed = _speedSlider.Value;
+            bool restoring = _restoringLighting;
+            var previousTarget = _buildTarget;
+            _restoringLighting = true;
+            try
+            {
+                var page = _tabPanels[2];
+                foreach (Control control in page.Controls.Cast<Control>().ToArray())
+                {
+                    if (control is Panel separator) _separators.Remove(separator);
+                    control.Dispose();
+                }
+                page.Controls.Clear();
+                Array.Clear(_btnZones);
+                Array.Clear(_btnPresetColors);
+                _switchKeyboardPower = null; _switchBacklight30s = null!;
+                _lblKeyboardPower = _lblKeyboardEvidence = null; _lblBacklight30s = null!;
+                _lblBrightHdr = null!; _lblSpeedHdr = null!;
+                _btnAllZones = _btnCustomColor = null!;
+                _btnSaveRgbProfile = _btnNewRgbProfile = _btnDeleteRgbProfile = null!;
+                BuildKeyboardPage(capabilities);
+                _brightnessSlider.Value = Math.Clamp(brightness, _brightnessSlider.Minimum, _brightnessSlider.Maximum);
+                _speedSlider.Value = Math.Clamp(speed, _speedSlider.Minimum, _speedSlider.Maximum);
+                SelectRgbMode(projection.AllowsEffect(mode) ? mode : projection.Effects.FirstOrDefault(-1));
+                if (!projection.AllowsZone(_selectedZone)) _selectedZone = -1;
+                LoadRgbProfilesIntoUi();
+                UpdateRgbControlsState(SelectedRgbMode);
+                _keyboardUiSignature = signature;
+                ApplyCurrentTheme();
+            }
+            finally { _restoringLighting = restoring; _buildTarget = previousTarget; }
+        }
+        if (_lblKeyboardEvidence != null) _lblKeyboardEvidence.Text = projection.Explanation;
+        UpdateKeyboardSwitches();
+    }
 
     private static void PersistKeyboardSetting(string name, int value)
     {
@@ -31,7 +79,9 @@ public partial class Form1
         {
             using var key = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\PredatorControl");
             var preferences = KeyboardPreferences.Read(name => CompatibilitySettings.Read(key, name));
-            var result = _wmi.KeyboardControl.Restore(preferences.Enabled, preferences.IdleTimeout);
+            var projection = KeyboardControlProjection.From(_wmi.Capabilities);
+            var result = _wmi.KeyboardControl.Restore(projection.Power ? preferences.Enabled : null,
+                projection.IdleTimeout ? preferences.IdleTimeout : null);
             _keyboardNotice = result?.Message;
         }
         else if (_wmi.Keyboard.SupportsRgb)
@@ -43,7 +93,8 @@ public partial class Form1
                 finally { _restoringLighting = true; }
             }
             var timeout = ExplicitKeyboardPreference("KeyboardIdleTimeout");
-            if (timeout.HasValue) _keyboardNotice = _wmi.KeyboardControl.Apply(null, timeout).Message;
+            if (timeout.HasValue && KeyboardControlProjection.From(_wmi.Capabilities).IdleTimeout)
+                _keyboardNotice = _wmi.KeyboardControl.Apply(null, timeout).Message;
         }
         UpdateKeyboardSwitches();
     }
@@ -53,6 +104,7 @@ public partial class Form1
         _updatingKeyboard = true;
         try
         {
+            var projection = KeyboardControlProjection.From(_wmi.Capabilities);
             var state = _wmi.KeyboardControl.State;
             if (_lblKeyboardPower != null)
                 _lblKeyboardPower.Text = state.Enabled.HasValue ? "Keyboard backlight" : "Keyboard backlight (unverified)";
@@ -61,12 +113,14 @@ public partial class Form1
             if (_switchKeyboardPower != null)
             {
                 _switchKeyboardPower.Checked = state.Enabled ?? false;
-                _switchKeyboardPower.Enabled = !_keyboardBusy && _wmi.Keyboard.SupportsPower;
+                _switchKeyboardPower.Visible = projection.Power;
+                _switchKeyboardPower.Enabled = !_keyboardBusy && projection.Power;
             }
             if (_switchBacklight30s != null)
             {
                 _switchBacklight30s.Checked = state.IdleTimeout ?? false;
-                _switchBacklight30s.Enabled = !_keyboardBusy && _wmi.Keyboard.SupportsIdleTimeout;
+                _switchBacklight30s.Visible = projection.IdleTimeout;
+                _switchBacklight30s.Enabled = !_keyboardBusy && projection.IdleTimeout;
             }
         }
         finally { _updatingKeyboard = false; }
@@ -74,6 +128,9 @@ public partial class Form1
 
     private async Task<KeyboardOperationResult> ChangeKeyboardAsync(bool power, bool value)
     {
+        var projection = KeyboardControlProjection.From(_wmi.Capabilities);
+        if (power ? !projection.Power : !projection.IdleTimeout)
+            return new("failed", "This keyboard control has no verified interface. No command was sent.");
         if (_keyboardBusy) return new("failed", "Wait for the current keyboard operation to finish.");
         _keyboardBusy = true;
         UpdateKeyboardSwitches();

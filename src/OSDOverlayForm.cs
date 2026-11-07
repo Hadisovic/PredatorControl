@@ -19,6 +19,7 @@ namespace PredatorControlApp
         private Font? _titleFont;
         private Font? _subFont;
         private float _fontDpiScale = 0f;
+        private bool _isNitro;
 
         private void EnsureFonts()
         {
@@ -28,9 +29,9 @@ namespace PredatorControlApp
                 _titleFont?.Dispose();
                 _subFont?.Dispose();
 
-                _tagFont = new Font("Segoe UI", 7.5f * _dpiScale, FontStyle.Bold);
-                _titleFont = new Font("Segoe UI", 13.5f * _dpiScale, FontStyle.Bold);
-                _subFont = new Font("Segoe UI", 8.5f * _dpiScale, FontStyle.Regular);
+                _tagFont = new Font("Segoe UI", 10f * _dpiScale, FontStyle.Bold, GraphicsUnit.Pixel);
+                _titleFont = new Font("Segoe UI", 18f * _dpiScale, FontStyle.Bold, GraphicsUnit.Pixel);
+                _subFont = new Font("Segoe UI", 11.33f * _dpiScale, FontStyle.Regular, GraphicsUnit.Pixel);
                 _fontDpiScale = _dpiScale;
             }
         }
@@ -38,6 +39,8 @@ namespace PredatorControlApp
         private const int WS_EX_NOACTIVATE = 0x08000000;
         private const int WS_EX_TOOLWINDOW = 0x00000080;
         private const int WS_EX_TOPMOST = 0x00000008;
+        private const int WS_EX_TRANSPARENT = 0x00000020;
+        private const int WS_EX_LAYERED = 0x00080000;
 
         [DllImport("user32.dll")]
         private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
@@ -49,6 +52,12 @@ namespace PredatorControlApp
         [DllImport("user32.dll")]
         private static extern int SetWindowRgn(IntPtr hWnd, IntPtr hRgn, bool bRedraw);
 
+        [DllImport("gdi32.dll")]
+        private static extern bool DeleteObject(IntPtr hObject);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
+
         public OSDOverlayForm()
         {
             FormBorderStyle = FormBorderStyle.None;
@@ -56,6 +65,7 @@ namespace PredatorControlApp
             TopMost = true;
             StartPosition = FormStartPosition.Manual;
             DoubleBuffered = true;
+            AutoScaleMode = AutoScaleMode.None;
             BackColor = Color.FromArgb(14, 18, 24);
 
             SetStyle(ControlStyles.AllPaintingInWmPaint |
@@ -94,6 +104,7 @@ namespace PredatorControlApp
                 cp.ExStyle |= WS_EX_NOACTIVATE;
                 cp.ExStyle |= WS_EX_TOOLWINDOW;
                 cp.ExStyle |= WS_EX_TOPMOST;
+                cp.ExStyle |= WS_EX_TRANSPARENT | WS_EX_LAYERED;
                 return cp;
             }
         }
@@ -126,31 +137,16 @@ namespace PredatorControlApp
             _currentMode = mode;
             _onBattery = onBattery;
             _windowsPowerPlanLabel = windowsPowerPlanLabel;
+            _isNitro = WmiController.DetectChassisFamily() == AcerChassisFamily.Nitro || ThemeManager.Current.Mode == ThemeMode.NitroCrimson;
 
             _fadeTimer.Stop();
             _dismissTimer.Stop();
 
-            // Calculate DPI and sizing
-            using (var g = CreateGraphics())
-            {
-                _dpiScale = g.DpiX / 96.0f;
-                if (_dpiScale < 1.0f) _dpiScale = 1.0f;
-            }
-
-            int w = (int)(380 * _dpiScale);
-            int h = (int)(110 * _dpiScale);
-            Size = new Size(w, h);
-
-            // Set rounded region
-            int radius = (int)(16 * _dpiScale);
-            IntPtr rgn = CreateRoundRectRgn(0, 0, w, h, radius, radius);
-            SetWindowRgn(Handle, rgn, true);
-
-            // Center on active screen, upper-third (16% from top)
-            var screen = Screen.FromPoint(Cursor.Position);
-            int x = screen.Bounds.Left + (screen.Bounds.Width - w) / 2;
-            int y = screen.Bounds.Top + (int)(screen.Bounds.Height * 0.16f);
-            Location = new Point(x, y);
+            // Move to the foreground application's monitor before taking PerMonitorV2 DPI.
+            var foreground = GetForegroundWindow();
+            var screen = foreground != IntPtr.Zero ? Screen.FromHandle(foreground) : Screen.FromPoint(Cursor.Position);
+            Location = new Point(screen.WorkingArea.Left + screen.WorkingArea.Width / 2, screen.WorkingArea.Top + 20);
+            UpdateDpiLayout(screen);
 
             Opacity = _targetOpacity;
             ShowWindow(Handle, SW_SHOWNOACTIVATE);
@@ -158,6 +154,26 @@ namespace PredatorControlApp
             Invalidate();
 
             _dismissTimer.Start();
+        }
+
+        protected override void OnDpiChanged(DpiChangedEventArgs e)
+        {
+            base.OnDpiChanged(e);
+            UpdateDpiLayout(Screen.FromControl(this));
+            Invalidate();
+        }
+
+        private void UpdateDpiLayout(Screen screen)
+        {
+            _dpiScale = (DeviceDpi > 0 ? DeviceDpi : 96) / 96f;
+            int w = (int)(380 * _dpiScale), h = (int)(110 * _dpiScale);
+            Size = new Size(w, h);
+            int radius = Math.Max(4, (int)(16 * _dpiScale));
+            IntPtr rgn = CreateRoundRectRgn(0, 0, w, h, radius, radius);
+            if (rgn != IntPtr.Zero && SetWindowRgn(Handle, rgn, true) == 0) DeleteObject(rgn);
+            var area = screen.WorkingArea;
+            Location = OverlayPolicy.ClampPosition(new Point(area.Left + (area.Width - w) / 2, area.Top + (int)(area.Height * 0.16f)), Size, area);
+            EnsureFonts();
         }
 
         private (string title, string subtitle, Color primaryColor, Color glowColor) GetModeInfo(byte mode)
@@ -256,9 +272,7 @@ namespace PredatorControlApp
             EnsureFonts();
 
             // Small header tag: "PREDATOR PERFORMANCE" or "NITRO PERFORMANCE"
-            bool isNitro = WmiController.DetectChassisFamily() == AcerChassisFamily.Nitro ||
-                           ThemeManager.Current.Mode == ThemeMode.NitroCrimson;
-            string brandTag = isNitro ? "NITRO PERFORMANCE" : "PREDATOR PERFORMANCE";
+            string brandTag = _isNitro ? "NITRO PERFORMANCE" : "PREDATOR PERFORMANCE";
             using (var tagBrush = new SolidBrush(Color.FromArgb(160, 175, 195)))
             {
                 g.DrawString(brandTag, _tagFont!, tagBrush, textLeft, textTop);
@@ -267,7 +281,8 @@ namespace PredatorControlApp
             // Title: "TURBO MODE", etc.
             using (var titleBrush = new SolidBrush(Color.White))
             {
-                g.DrawString(title, _titleFont!, titleBrush, textLeft, textTop + (int)(16 * _dpiScale));
+                using var format = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap };
+                g.DrawString(title, _titleFont!, titleBrush, new RectangleF(textLeft, textTop + 16 * _dpiScale, Width - textLeft - 16 * _dpiScale, 26 * _dpiScale), format);
             }
 
             // Subtitle

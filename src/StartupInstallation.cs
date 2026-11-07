@@ -7,6 +7,24 @@ namespace PredatorControlApp;
 
 internal static class StartupInstallation
 {
+    internal static string ProductName => WmiController.DetectChassisFamily() == AcerChassisFamily.Nitro
+        ? "NitroControl" : "PredatorControl";
+    internal static string Root => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), ProductName);
+
+    internal static Mutex StopRunningInstance()
+    {
+        var gate = SingleInstanceIpc.TryAcquireHardwareLock();
+        if (gate != null) return gate;
+        SingleInstanceIpc.SignalRunningInstance("EXIT");
+        long deadline = Environment.TickCount64 + 5000;
+        do
+        {
+            Thread.Sleep(100);
+            gate = SingleInstanceIpc.TryAcquireHardwareLock();
+            if (gate != null) return gate;
+        } while (Environment.TickCount64 < deadline);
+        throw new IOException("Close all running copies of Predator Control and try again.");
+    }
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
     private static extern IntPtr GetModuleHandleW(string? name);
     [DllImport("ntdll.dll", ExactSpelling = true)]
@@ -33,28 +51,67 @@ internal static class StartupInstallation
         // denies write/delete sharing and stays open through image identity, hash, copy and publication.
         using var source = SafeFile.OpenRead(current);
         VerifyRunningImage(source);
-        return InstallPinnedImage(source, PrepareVersionRoot());
-    }
-
-    private static string PrepareVersionRoot()
-    {
-        string root = SecureLaunch.CreateAdminOnlyDirectory(Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "PredatorControl"), usersMayRead: true);
-        string version = typeof(StartupInstallation).Assembly.GetName().Version!.ToString(3);
-        root = SecureLaunch.CreateAdminOnlyDirectory(Path.Combine(root, version), usersMayRead: true);
-        return root;
+        if (!current.Equals(Path.Combine(Root, ProductName + ".exe"), StringComparison.OrdinalIgnoreCase) ||
+            !SecureLaunch.IsAdminOnly(current))
+            throw new IOException("Install Predator Control with Setup to enable Start with Windows.");
+        return current;
     }
 
     internal static string PrepareDestination()
     {
-        using var source = SafeFile.OpenRead(Environment.ProcessPath!);
-        VerifyRunningImage(source);
-        string hash = Convert.ToHexString(SHA256.HashData(source)).ToLowerInvariant();
-        string directory = SecureLaunch.CreateAdminOnlyDirectory(Path.Combine(PrepareVersionRoot(), hash), usersMayRead: true);
+        string directory = SecureLaunch.CreateAdminOnlyDirectory(Root, usersMayRead: true);
         foreach (string entry in Directory.EnumerateFileSystemEntries(directory))
-            if ((File.GetAttributes(entry) & FileAttributes.Directory) != 0 || !SecureLaunch.IsAdminOnly(entry))
+        {
+            string name = Path.GetFileName(entry);
+            if (name.Equals("data", StringComparison.OrdinalIgnoreCase) ||
+                (ProductName == "PredatorControl" && Version.TryParse(name, out _) && Directory.Exists(entry)))
+            {
+                if (!SecureLaunch.IsAdminOnlyDirectory(entry))
+                    throw new UnauthorizedAccessException("Unprotected installation directory: " + entry);
+                continue;
+            }
+            if (!SecureLaunch.IsAdminOnly(entry) ||
+                !(name.Equals(ProductName + ".exe", StringComparison.OrdinalIgnoreCase) ||
+                  name.Equals("ThirdPartyNotices.txt", StringComparison.OrdinalIgnoreCase) ||
+                  name.Equals("dotnet-LICENSE.txt", StringComparison.OrdinalIgnoreCase) ||
+                  name.Equals("dotnet-THIRD-PARTY-NOTICES.txt", StringComparison.OrdinalIgnoreCase) ||
+                  System.Text.RegularExpressions.Regex.IsMatch(name, @"\Aunins[0-9]{3}\.(exe|dat|msg)\z", System.Text.RegularExpressions.RegexOptions.IgnoreCase)))
                 throw new UnauthorizedAccessException("The installation contains an unsafe existing entry.");
+            using var file = SafeFile.OpenRead(entry);
+        }
         return directory;
+    }
+
+    internal static void ValidateUninstaller(string path)
+    {
+        string fullPath = Path.GetFullPath(path);
+        if (!path.Equals(fullPath, StringComparison.OrdinalIgnoreCase))
+            throw new UnauthorizedAccessException("The registered uninstaller path is not canonical.");
+        string programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+        string directory = Path.GetDirectoryName(fullPath)!;
+        string root = Path.Combine(programFiles, "PredatorControl");
+        string relative = Path.GetRelativePath(root, fullPath);
+        if (!System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(fullPath), @"\Aunins[0-9]{3}\.exe\z",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+            throw new UnauthorizedAccessException("Unexpected uninstaller filename.");
+        if (directory.Equals(root, StringComparison.OrdinalIgnoreCase) ||
+            directory.Equals(Path.Combine(programFiles, "NitroControl"), StringComparison.OrdinalIgnoreCase))
+        {
+            string app = Path.Combine(directory, Path.GetFileName(directory) + ".exe");
+            if (!SecureLaunch.IsAdminOnly(app)) throw new UnauthorizedAccessException("The installed application is not protected.");
+            using var handle = SafeFile.OpenRead(app);
+        }
+        else if (System.Text.RegularExpressions.Regex.IsMatch(relative, @"\A[0-9]+\.[0-9]+\.[0-9]+\\[0-9a-f]{64}\\unins[0-9]{3}\.exe\z",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant))
+            VerifyInstalled(Path.Combine(directory, "PredatorControl.exe"), Path.GetFileName(directory));
+        else
+            throw new UnauthorizedAccessException("The registered uninstaller is outside the protected install layout.");
+        foreach (string file in new[] { fullPath, Path.ChangeExtension(fullPath, ".dat") })
+        {
+            if (!SecureLaunch.IsAdminOnly(file))
+                throw new UnauthorizedAccessException("The uninstaller is not protected.");
+            using var handle = SafeFile.OpenRead(file);
+        }
     }
 
     internal static string InstallPinnedImage(FileStream source, string versionRoot)

@@ -1,64 +1,44 @@
-using System.IO.Compression;
-using System.Security.Cryptography;
+using System.Diagnostics;
 using PredatorControlApp;
 
-if (Environment.UserName != "WDAGUtilityAccount") return 90;
-var results = new List<string>();
-void Check(string name, Action body) { body(); results.Add("PASS " + name); }
-void Reject(Action body) { try { body(); } catch (InvalidDataException) { return; } catch (IOException) { return; } catch (UnauthorizedAccessException) { return; } throw new Exception("Expected rejection"); }
-byte[] bytes = [1, 2, 3];
-var manifest = new BundledBrowser.PayloadManifest("fixture", [new("Locales/sample.pak", 3, Convert.ToHexString(SHA256.HashData(bytes)))]);
-MemoryStream Zip(params (string name, byte[] data)[] entries)
-{
-    var stream = new MemoryStream();
-    using (var zip = new ZipArchive(stream, ZipArchiveMode.Create, true))
-        foreach (var item in entries) { using var file = zip.CreateEntry(item.name).Open(); file.Write(item.data); }
-    stream.Position = 0;
-    return stream;
-}
-string root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "PredatorBundleTest-" + Guid.NewGuid().ToString("N"));
+string root = Path.Combine(Path.GetTempPath(), "PredatorCleanup-" + Guid.NewGuid().ToString("N"));
+string retained = Path.Combine(root, "retained");
+string cleanup = Path.Combine(root, "cleanup");
+Directory.CreateDirectory(retained);
+Directory.CreateDirectory(cleanup);
+string marker = Path.Combine(retained, "keep.txt");
+File.WriteAllText(marker, "Keep this file.");
 try
 {
-    SecureLaunch.CreateAdminOnlyDirectory(root, usersMayRead: true);
-    string NewCase() => SecureLaunch.CreateAdminOnlyDirectory(Path.Combine(root, Guid.NewGuid().ToString("N")), usersMayRead: true);
-    Check("complete extraction and repeat verification", () => {
-        string path = NewCase(); using var data = Zip(("Locales/sample.pak", bytes)); using var zip = new ZipArchive(data);
-        BundledBrowser.Extract(zip, path, manifest); BundledBrowser.VerifyTree(path, manifest); BundledBrowser.VerifyTree(path, manifest);
-        File.WriteAllBytes(Path.Combine(path, "Locales", "sample.pak"), [4, 5, 6]);
-        Reject(() => BundledBrowser.VerifyTree(path, manifest));
-    });
-    Check("traversal archive rejected without outside writes", () => {
-        string path = NewCase(); using var data = Zip(("../escape.exe", bytes)); using var zip = new ZipArchive(data);
-        Reject(() => BundledBrowser.Extract(zip, path, manifest));
-        if (File.Exists(Path.Combine(root, "escape.exe"))) throw new Exception("escaped");
-    });
-    Check("duplicate entries and partial extraction rejected", () => {
-        string path = NewCase(); using var data = Zip(("Locales/sample.pak", bytes), ("Locales/sample.pak", bytes)); using var zip = new ZipArchive(data);
-        Reject(() => BundledBrowser.Extract(zip, path, manifest));
-        Reject(() => BundledBrowser.VerifyTree(path, manifest));
-    });
-    Check("wrong file length rejected", () => {
-        string path = NewCase(); using var data = Zip(("Locales/sample.pak", new byte[4])); using var zip = new ZipArchive(data);
-        Reject(() => BundledBrowser.Extract(zip, path, manifest));
-    });
-    Check("untrusted existing storage refused without ACL repair", () => {
-        string path = Path.Combine(Path.GetTempPath(), "UnsafeBundle-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(path);
-        try { Reject(() => SecureLaunch.CreateAdminOnlyDirectory(path)); } finally { Directory.Delete(path); }
-    });
-    Check("junction ancestor rejected", () => {
-        string target = NewCase(), junction = Path.Combine(root, "junction");
-        var start = new System.Diagnostics.ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "cmd.exe")) { UseShellExecute = false, CreateNoWindow = true };
-        start.ArgumentList.Add("/c"); start.ArgumentList.Add("mklink"); start.ArgumentList.Add("/J"); start.ArgumentList.Add(junction); start.ArgumentList.Add(target);
-        using var process = System.Diagnostics.Process.Start(start)!; process.WaitForExit(); if (process.ExitCode != 0) throw new Exception("junction fixture failed");
-        try { Reject(() => BundledBrowser.VerifyTree(junction, manifest)); } finally { Directory.Delete(junction); }
-    });
-    results.Add("PASS: no hardware, tasks, installation or host changes.");
-    return 0;
+    string junction = Path.Combine(cleanup, "junction");
+    var cmd = new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "cmd.exe"))
+        { UseShellExecute = false, CreateNoWindow = true };
+    foreach (string arg in new[] { "/c", "mklink", "/J", junction, retained }) cmd.ArgumentList.Add(arg);
+    using (var process = Process.Start(cmd)!)
+    {
+        process.WaitForExit();
+        if (process.ExitCode != 0) throw new IOException("Could not create junction fixture.");
+    }
+    try
+    {
+        bool rejected = false;
+        try { SafeFile.DeleteTree(cleanup, directory: true); }
+        catch (IOException) { rejected = true; }
+        if (!rejected || !File.Exists(marker)) throw new IOException("Cleanup followed the junction.");
+        Console.WriteLine("PASS cleanup refused a junction and preserved its target");
+    }
+    finally { Directory.Delete(junction); }
+
+    Directory.CreateDirectory(Path.Combine(cleanup, "nested"));
+    File.WriteAllText(Path.Combine(cleanup, "nested", "test.txt"), "Remove this file.");
+    SafeFile.DeleteTree(cleanup, directory: true);
+    if (Directory.Exists(cleanup) || !File.Exists(marker)) throw new IOException("Cleanup scope failed.");
+    Console.WriteLine("PASS cleanup removed only the selected tree");
 }
-catch (Exception ex) { results.Add("FAIL " + ex); return 1; }
 finally
 {
-    File.WriteAllLines(@"C:\Output\bundle-tests.txt", results);
-    // Only the unique guest-local fixture directory is removed; no production cache is touched.
-    if (Directory.Exists(root)) Directory.Delete(root, true);
+    if (Directory.Exists(cleanup)) SafeFile.DeleteTree(cleanup, directory: true);
+    File.Delete(marker);
+    Directory.Delete(retained);
+    Directory.Delete(root);
 }

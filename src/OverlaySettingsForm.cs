@@ -47,6 +47,8 @@ namespace PredatorControlApp
         private PredatorCheckBox _chkPower = null!;
         private PredatorCheckBox _chkBattery = null!;
         private PredatorCheckBox _chkFan = null!;
+        private PredatorCheckBox _chkCpuClock = null!;
+        private PredatorCheckBox _chkGpuClock = null!;
         private PredatorCheckBox _chkLoad = null!;
         private PredatorCheckBox _chkLabels = null!;
 
@@ -78,7 +80,7 @@ namespace PredatorControlApp
             ForeColor = Color.White;
             ShowInTaskbar = false;
             DoubleBuffered = true;
-            Size = new Size(510, 480);
+            Size = new Size(510, 510);
             try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
 
             BuildUI();
@@ -179,6 +181,9 @@ namespace PredatorControlApp
             _chkLoad = new PredatorCheckBox { Text = "Load", Location = new Point(col3X, y + chkH + 4), Size = new Size(colW, chkH) };
             _chkLabels = new PredatorCheckBox { Text = "Labels", Location = new Point(col3X, y + (chkH + 4) * 2), Size = new Size(colW, chkH) };
 
+            _chkCpuClock = new PredatorCheckBox { Text = "CPU clock", Location = new Point(col1X, y + (chkH + 4) * 3), Size = new Size(colW, chkH) };
+            _chkGpuClock = new PredatorCheckBox { Text = "GPU clock", Location = new Point(col2X, y + (chkH + 4) * 3), Size = new Size(colW, chkH) };
+
             // Wire Checkbox change handlers
             _chkFps.CheckedChanged += OnCheckboxChanged;
             _chkChart.CheckedChanged += OnCheckboxChanged;
@@ -189,6 +194,8 @@ namespace PredatorControlApp
             _chkFan.CheckedChanged += OnCheckboxChanged;
             _chkLoad.CheckedChanged += OnCheckboxChanged;
             _chkLabels.CheckedChanged += OnCheckboxChanged;
+            _chkCpuClock.CheckedChanged += OnCheckboxChanged;
+            _chkGpuClock.CheckedChanged += OnCheckboxChanged;
 
             Controls.Add(_chkFps);
             Controls.Add(_chkChart);
@@ -199,8 +206,10 @@ namespace PredatorControlApp
             Controls.Add(_chkFan);
             Controls.Add(_chkLoad);
             Controls.Add(_chkLabels);
+            Controls.Add(_chkCpuClock);
+            Controls.Add(_chkGpuClock);
 
-            y += (chkH + 4) * 3 + 12;
+            y += (chkH + 4) * 4 + 12;
 
             // 4. Sliders Row: Size (Left) & Transparency (Right)
             int sliderColW = (Width - pad * 2 - gap * 2) / 2;
@@ -255,11 +264,12 @@ namespace PredatorControlApp
                 Location = new Point(pad, y),
                 Size = new Size(sliderColW, 26),
                 Minimum = 50,
-                Maximum = 200,
-                Value = Math.Clamp(_overlay.ScalePercent, 50, 200)
+                Maximum = 300,
+                Value = Math.Clamp(_overlay.ScalePercent, 50, 300)
             };
             _sliderSize.ValueChanged += (s, e) =>
             {
+                if (_suppressSync) return;
                 _lblSizeVal.Text = $"{_sliderSize.Value}%";
                 _overlay.SetScale(_sliderSize.Value);
             };
@@ -276,6 +286,7 @@ namespace PredatorControlApp
             };
             _sliderTransp.ValueChanged += (s, e) =>
             {
+                if (_suppressSync) return;
                 _lblTranspVal.Text = $"{_sliderTransp.Value}%";
                 _overlay.SetTransparency(_sliderTransp.Value);
             };
@@ -375,6 +386,8 @@ namespace PredatorControlApp
             _overlay.ShowPower = _chkPower.Checked;
             _overlay.ShowBattery = _chkBattery.Checked;
             _overlay.ShowFan = _chkFan.Checked;
+            _overlay.ShowCpuClock = _chkCpuClock.Checked;
+            _overlay.ShowGpuClock = _chkGpuClock.Checked;
             _overlay.ShowLoad = _chkLoad.Checked;
             _overlay.ShowLabels = _chkLabels.Checked;
 
@@ -401,12 +414,14 @@ namespace PredatorControlApp
                 _chkPower.Checked = _overlay.ShowPower;
                 _chkBattery.Checked = _overlay.ShowBattery;
                 _chkFan.Checked = _overlay.ShowFan;
+                _chkCpuClock.Checked = _overlay.ShowCpuClock;
+                _chkGpuClock.Checked = _overlay.ShowGpuClock;
                 _chkLoad.Checked = _overlay.ShowLoad;
                 _chkLabels.Checked = _overlay.ShowLabels;
 
                 // Sliders
                 if (_sliderSize != null && _sliderSize.Value != _overlay.ScalePercent)
-                    _sliderSize.Value = Math.Clamp(_overlay.ScalePercent, 50, 200);
+                    _sliderSize.Value = Math.Clamp(_overlay.ScalePercent, 50, 300);
                 if (_lblSizeVal != null)
                     _lblSizeVal.Text = $"{_overlay.ScalePercent}%";
 

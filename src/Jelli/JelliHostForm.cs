@@ -34,7 +34,20 @@ internal sealed class JelliHostForm : Form
     internal bool DashboardOpen => _surface == "dashboard";
     internal static string BrowserProfilePath(bool persist) => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PredatorControl",
-        persist ? "WebView2-v3" : "WebView2-Test-v3");
+        persist ? "WebView2-Evergreen" : "WebView2-Test-Evergreen");
+
+    internal static string? FindMachineRuntime()
+    {
+        string application = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+            "Microsoft", "EdgeWebView", "Application");
+        if (!SecureLaunch.IsAdminOnlyDirectory(application)) return null;
+        return Directory.EnumerateDirectories(application)
+            .Select(path => (Path: path, Version: Version.TryParse(Path.GetFileName(path), out var version) ? version : null))
+            .Where(entry => entry.Version != null)
+            .OrderByDescending(entry => entry.Version)
+            .Select(entry => entry.Path)
+            .FirstOrDefault(path => SecureLaunch.IsAdminOnly(Path.Combine(path, "msedgewebview2.exe")));
+    }
     internal JelliHostForm(IJelliBackend backend, bool persist = true)
     {
         _backend = backend;
@@ -80,21 +93,37 @@ internal sealed class JelliHostForm : Form
                 ?? throw new InvalidOperationException("The native loader resource is missing.");
             using var bytes = new MemoryStream();
             stream.CopyTo(bytes);
-            SecureLaunch.CreateAdminOnlyDirectory(SecureLaunch.ProtectedDataDir);
-            string root = SecureLaunch.CreateAdminOnlyDirectory(Path.Combine(SecureLaunch.ProtectedDataDir, "native"));
+            string dir = SecureLaunch.CreateAdminOnlyDirectory(SecureLaunch.ProtectedDataDir);
             byte[] resource = bytes.ToArray();
             byte[] hash = System.Security.Cryptography.SHA256.HashData(resource);
-            string dir = SecureLaunch.CreateAdminOnlyDirectory(Path.Combine(root, Convert.ToHexString(hash)));
             string dll = Path.Combine(dir, "WebView2Loader.dll");
             FileStream held;
-            try { held = SecureLaunch.WriteLockedResource(dll, resource); }
-            catch (IOException) when (File.Exists(dll))
+            if (File.Exists(dll))
             {
-                held = new FileStream(dll, FileMode.Open, FileAccess.Read, FileShare.Read);
+                if (!SecureLaunch.IsAdminOnly(dll))
+                    throw new UnauthorizedAccessException("The existing native loader is not protected.");
+                FileStream? existing = SafeFile.OpenRead(dll);
+                try
+                {
+                    if (SecureLaunch.VerifyHashAndRewind(existing, hash))
+                    {
+                        held = existing;
+                        existing = null;
+                    }
+                    else
+                    {
+                        existing.Dispose();
+                        existing = null;
+                        SafeFile.DeleteTree(dll, directory: false);
+                        held = SecureLaunch.WriteLockedResource(dll, resource);
+                    }
+                }
+                finally { existing?.Dispose(); }
             }
+            else held = SecureLaunch.WriteLockedResource(dll, resource);
             try
             {
-                if (!SecureLaunch.IsAdminOnly(dll) || !System.Security.Cryptography.SHA256.HashData(held).AsSpan().SequenceEqual(hash))
+                if (!SecureLaunch.IsAdminOnly(dll) || !SecureLaunch.VerifyHashAndRewind(held, hash))
                     throw new UnauthorizedAccessException("The native loader is not protected or has changed.");
                 // Restrict dependency search to this protected folder and System32.
                 if (LoadLibraryEx(dll, IntPtr.Zero, 0x00000100 | 0x00000800) == IntPtr.Zero)
@@ -116,6 +145,9 @@ internal sealed class JelliHostForm : Form
 
     internal async Task InitializeAsync(bool startSuspended = false)
     {
+        string? browser = await Task.Run(FindMachineRuntime);
+        if (browser == null)
+            throw new InvalidOperationException("Microsoft Edge WebView2 Runtime is not installed. Install the Windows WebView2 Runtime to use Jelli, then try again.");
         EnsureWebView2Loader();
         _ = Handle;
         _ = _web.Handle;
@@ -135,17 +167,12 @@ internal sealed class JelliHostForm : Form
         {
             AdditionalBrowserArguments = "--disable-gpu --disable-background-networking --disable-component-update --disable-extensions --disable-speech-api --js-flags=\"--max-old-space-size=16 --max-semi-space-size=1 --optimize-for-size\""
         };
-        if (BundledBrowser.IsBundled) BundledBrowser.AcceptTerms();
-        string? browser = BundledBrowser.IsBundled ? await BundledBrowser.PrepareWithProgressAsync(this) : null;
-        if (browser != null)
-        {
-            // WebView2 environment overrides otherwise take precedence over explicit API arguments.
-            Environment.SetEnvironmentVariable("WEBVIEW2_BROWSER_EXECUTABLE_FOLDER", browser);
-            Environment.SetEnvironmentVariable("WEBVIEW2_USER_DATA_FOLDER", profile);
-            Environment.SetEnvironmentVariable("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", " ");
-            Environment.SetEnvironmentVariable("WEBVIEW2_WAIT_FOR_SCRIPT_DEBUGGER", null);
-            Environment.SetEnvironmentVariable("WEBVIEW2_PIPE_FOR_SCRIPT_DEBUGGER", null);
-        }
+        // Prevent a user-controlled browser or arguments from being used by this elevated host.
+        Environment.SetEnvironmentVariable("WEBVIEW2_BROWSER_EXECUTABLE_FOLDER", browser);
+        Environment.SetEnvironmentVariable("WEBVIEW2_USER_DATA_FOLDER", profile);
+        Environment.SetEnvironmentVariable("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", options.AdditionalBrowserArguments);
+        Environment.SetEnvironmentVariable("WEBVIEW2_WAIT_FOR_SCRIPT_DEBUGGER", null);
+        Environment.SetEnvironmentVariable("WEBVIEW2_PIPE_FOR_SCRIPT_DEBUGGER", null);
         var env = await CoreWebView2Environment.CreateAsync(browserExecutableFolder: browser, userDataFolder: profile, options: options);
         var controller = env.CreateCoreWebView2ControllerOptions();
         controller.IsInPrivateModeEnabled = true;

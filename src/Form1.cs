@@ -406,10 +406,12 @@ namespace PredatorControlApp
                 _lblGameSyncStatus.Text = "Active \u2014 Monitoring";
             }
 
+            _wmi.CompatibilityChanged += OnCompatibilityChanged;
             SystemEvents.PowerModeChanged += OnPowerModeChanged;
             SystemEvents.SessionEnding += OnSessionEnding;
             FormClosed += (s, e) =>
             {
+                _wmi.CompatibilityChanged -= OnCompatibilityChanged;
                 SystemEvents.PowerModeChanged -= OnPowerModeChanged;
                 SystemEvents.SessionEnding -= OnSessionEnding;
                 ThemeManager.ThemeChanged -= OnThemeChanged;
@@ -512,6 +514,7 @@ namespace PredatorControlApp
             {
                 IsShuttingDown = true;
                 SystemEvents.SessionEnding -= OnSessionEnding;
+                _wmi.CompatibilityChanged -= OnCompatibilityChanged;
                 SystemEvents.PowerModeChanged -= OnPowerModeChanged;
                 ThemeManager.ThemeChanged -= OnThemeChanged;
                 _trayIcon.Visible = false;
@@ -978,6 +981,7 @@ namespace PredatorControlApp
             else if (m.Msg == WM_DISPLAYCHANGE)
             {
                 BeginInvoke(new Action(RefreshExternalMonitorSection));
+                RefreshCompatibilityAfterDisplayChange();
             }
 
             base.WndProc(ref m);

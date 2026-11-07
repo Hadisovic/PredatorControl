@@ -5,76 +5,140 @@ namespace PredatorControlApp;
 public partial class WmiController
 {
     private readonly IHardwareTestIo? _testIo;
+    private readonly bool _readOnly;
+    private readonly IEnumerable<DeviceProfile>? _testProfiles;
     public WmiController() { }
-    internal WmiController(HardwareDiscovery discovery, IHardwareTestIo io, IEnumerable<DeviceProfile>? profiles = null)
+    public WmiController(bool readOnly) { _readOnly = readOnly; }
+    internal WmiController(HardwareDiscovery discovery, IHardwareTestIo io, IEnumerable<DeviceProfile>? profiles = null, bool readOnly = false)
     {
         _testIo = io;
+        _readOnly = readOnly;
+        _testProfiles = profiles;
         _discovery = discovery;
         _cachedCapabilities = DeviceProfileResolver.Resolve(discovery, profiles);
     }
     private bool IsOnAc => _testIo?.IsOnAc ?? SystemInformation.PowerStatus.PowerLineStatus == PowerLineStatus.Online;
     private HardwareWriteGate? _writeGate;
     private HardwareDiscovery? _discovery;
+    private long _compatibilityRevision;
+    private int _compatibilityStale;
+    private readonly object _refreshLock = new();
+    private Task<HardwareCapabilities>? _compatibilityRefresh;
+    public event EventHandler? CompatibilityChanged;
     private bool _manualFanSession;
-    private HardwareWriteGate WriteGate => _writeGate ??= new(() => Capabilities,
-        name => _testIo != null ? Capabilities.Services.GetValueOrDefault(name) is { Exists: true, Running: true, Trusted: true, InterfaceWorking: true } : OemServiceManager.ReadServiceEvidence(name) is { Exists: true, Running: true, Trusted: true });
+    private int? _latestCpuThermalSample;
+    private int? _latestGpuThermalSample;
+    private long _latestThermalSampleTick;
+    private HardwareWriteGate WriteGate => _writeGate ??= new(() => Capabilities, ServiceStillMatches);
+    private bool ServiceStillMatches(string name)
+    {
+        var expected = Capabilities.Services.GetValueOrDefault(name);
+        var live = _testIo != null ? _testIo.ReadServiceEvidence(name) ?? expected : OemServiceManager.ReadServiceEvidence(name, refreshFingerprint: true);
+        bool matches = live is { Exists: true, Running: true, Trusted: true } && expected is { InterfaceWorking: true } &&
+            live.BinarySha256 == expected.BinarySha256 && live.ProtocolBinarySha256 == expected.ProtocolBinarySha256 && live.ProcessId == expected.ProcessId;
+        if (!matches && _testIo == null) RequestCompatibilityRefresh();
+        return matches;
+    }
     public HardwareOperationResult? LastOperation => WriteGate.LastOperation;
-    private HardwareOperationResult Write(HardwareFeature feature, bool valid, Func<HardwareOperationResult> command) =>
-        WriteGate.Execute(feature, valid && !_disposed, command);
+    private HardwareOperationResult Write(HardwareFeature feature, bool valid, Func<HardwareOperationResult> command)
+    {
+        if (_readOnly)
+        {
+            var denied = new HardwareOperationResult("failed", $"{feature}: diagnostics mode does not dispatch hardware writes.", "read-only-diagnostics", feature);
+            WriteGate.RecordResult(denied);
+            return denied;
+        }
+        return WriteGate.Execute(feature, valid && !_disposed, command);
+    }
     private static HardwareOperationResult Acknowledged(bool ok) => ok
         ? new("unverified", "Command acknowledged; firmware state readback is unavailable.")
         : new("failed", "Hardware command failed. State and saved preference were not confirmed.");
 
     public HardwareCapabilities RefreshCompatibility()
     {
-        if (_testIo != null) return Capabilities;
-        // Called explicitly after service repair, never from the telemetry poll loop.
-        lock (HardwareWriteGate.CommandLock)
-        lock (_probeLock)
+        if (_testIo != null)
         {
-            _discovery = null;
-            _cachedCapabilities = null;
-            _keyboardControl = null;
-            return Capabilities;
+            lock (HardwareWriteGate.CommandLock)
+            lock (_probeLock)
+            {
+                _keyboardControl = null;
+                _cachedCapabilities = DeviceProfileResolver.Resolve(_discovery!, _testProfiles) with { Revision = Interlocked.Increment(ref _compatibilityRevision) };
+                Interlocked.Exchange(ref _compatibilityStale, 0);
+                return _cachedCapabilities;
+            }
         }
+        Interlocked.Exchange(ref _compatibilityStale, 1);
+        HardwareCapabilities refreshed;
+        lock (HardwareWriteGate.CommandLock)
+        {
+            if (_disposed) return HardwareCapabilities.None with { IsCurrent = false };
+            _keyboardControl = null;
+            lock (_lightingLock) _pendingLightingAction = null;
+            lock (_lock)
+            {
+                _cachedObj?.Dispose();
+                _cachedObj = null;
+            }
+            // Refresh does not restore settings or send firmware writes.
+            try { refreshed = ProbeCapabilities(); }
+            catch { refreshed = HardwareCapabilities.None with { Explanation = "Hardware discovery failed. Refresh compatibility to retry." }; }
+            lock (_probeLock)
+            {
+                _cachedCapabilities = refreshed = refreshed with { Revision = Interlocked.Increment(ref _compatibilityRevision) };
+                Interlocked.Exchange(ref _compatibilityStale, 0);
+            }
+        }
+        CompatibilityChanged?.Invoke(this, EventArgs.Empty);
+        return refreshed;
+    }
+
+    public Task<HardwareCapabilities> RefreshCompatibilityAsync()
+    {
+        lock (_refreshLock)
+        {
+            if (_compatibilityRefresh is { IsCompleted: false }) return _compatibilityRefresh;
+            Interlocked.Exchange(ref _compatibilityStale, 1); // Revoke before scheduling the worker.
+            return _compatibilityRefresh = Task.Run(RefreshCompatibility);
+        }
+    }
+
+    public void RequestCompatibilityRefresh() => _ = RefreshCompatibilityAsync();
+
+    public void InvalidateCompatibility()
+    {
+        Interlocked.Exchange(ref _compatibilityStale, 1);
+        CompatibilityChanged?.Invoke(this, EventArgs.Empty);
     }
 
     public void RefreshServiceAvailability()
     {
         if (_testIo != null || _discovery == null) return;
-        var services = OemServiceManager.HardwareServices.ToDictionary(n => n, OemServiceManager.ReadServiceEvidence);
-        lock (HardwareWriteGate.CommandLock)
+        var services = OemServiceManager.HardwareServices.ToDictionary(n => n, n => OemServiceManager.ReadServiceEvidence(n));
+        bool changed;
         lock (_probeLock)
         {
             if (_disposed || _discovery == null) return;
-            bool changed = services.Any(s => !_discovery.Services.TryGetValue(s.Key, out var old) ||
-                old.Exists != s.Value.Exists || old.Running != s.Value.Running || old.Trusted != s.Value.Trusted);
-            if (!changed) return;
-            bool? coolBoost = _discovery.Identity.NormalizedModel == "AN515-54" &&
-                _discovery.Identity.BoardProduct.Equals("Octavia_CFS", StringComparison.OrdinalIgnoreCase) && services["PSSvc"] is { Running: true, Trusted: true }
-                ? NitroSense3Protocol.CoolBoostState(NitroSense3Protocol.Exchange(20, 519, false).GetAwaiter().GetResult()) : null;
-            byte? opMode = IsNitroOperationModeModel(_discovery.Identity) && services["PSSvc"] is { Running: true, Trusted: true }
-                ? NitroSense3Protocol.OperationModeState(NitroSense3Protocol.Exchange(NitroSense3Protocol.CmdWmiGetGamingMiscSetting, NitroSense3Protocol.MiscSubfunctionOperationMode, false).GetAwaiter().GetResult()) : null;
-            services["PSSvc"] = services["PSSvc"] with { InterfaceWorking = coolBoost.HasValue || opMode.HasValue };
-            if (coolBoost.HasValue) _coolBoost = coolBoost.Value;
-            int mux = services["AASSvc"] is { Running: true, Trusted: true }
-                ? AcerAgentClient.GetGpuModeCapabilityAsync().GetAwaiter().GetResult() : 0;
-            services["AASSvc"] = services["AASSvc"] with { InterfaceWorking = mux > 0 };
-            _discovery = _discovery with
-            {
-                Services = services, GpuModeMask = mux,
-                NitroOperationMode = opMode ?? _discovery.NitroOperationMode,
-                NitroOperationModeReadable = opMode.HasValue || _discovery.NitroOperationModeReadable
-            };
-            _cachedCapabilities = DeviceProfileResolver.Resolve(_discovery) with { TelemetryChannels = _cachedCapabilities?.TelemetryChannels ?? new Dictionary<string, TelemetryChannelEvidence>() };
+            changed = services.Any(s => !_discovery.Services.TryGetValue(s.Key, out var old) ||
+                old.Exists != s.Value.Exists || old.Running != s.Value.Running || old.Trusted != s.Value.Trusted ||
+                old.Version != s.Value.Version ||
+                old.BinarySha256 != s.Value.BinarySha256 || old.ProtocolBinarySha256 != s.Value.ProtocolBinarySha256 || old.ProcessId != s.Value.ProcessId);
         }
+        // Never retain a previous process's capability readbacks after service recovery.
+        if (changed) RefreshCompatibilityAsync().GetAwaiter().GetResult();
     }
 
     private static bool IsNitroOperationModeModel(DeviceIdentity identity) =>
-        identity.IsAcer && identity.NormalizedModel is "AN515-46" or "AN515-47" or "AN515-58" or "AN517-42" or "AN517-43" or "AN517-55";
+        identity.IsAcer && (identity.NormalizedModel is "AN515-46" or "AN515-47" or "AN515-58" or "AN517-42" or "AN517-43" or "AN517-55" ||
+        DynamicDeviceProfileCatalog.TryGetModel(identity.NormalizedModel) is { MachineType: 2 });
 
     public void ObserveTelemetry(TelemetrySnapshot sample)
     {
+        lock (_probeLock)
+        {
+            _latestCpuThermalSample = sample.CpuTemp;
+            _latestGpuThermalSample = sample.GpuTemp;
+            _latestThermalSampleTick = Environment.TickCount64;
+        }
         var channels = new (string Name, bool Available, string Source)[]
         {
             ("cpuTemp", sample.CpuTemp.HasValue, "profile-mapped Acer WMI"), ("gpuTemp", sample.GpuTemp.HasValue, "profile-mapped Acer WMI / trusted NVML"),
@@ -96,6 +160,32 @@ public partial class WmiController
                         c.Available ? "Plausible sample observed; read-only." : "No current sample. Display N/A; this does not authorize any writes.")))
             };
         }
+    }
+
+    private bool TryPrepareReviewedFanSpeeds(int requestedCpu, int requestedGpu, out byte cpuSpeed, out byte gpuSpeed)
+    {
+        cpuSpeed = gpuSpeed = 0;
+        int? cpuTemp, gpuTemp;
+        long sampleTick;
+        lock (_probeLock)
+        {
+            cpuTemp = _latestCpuThermalSample;
+            gpuTemp = _latestGpuThermalSample;
+            sampleTick = _latestThermalSampleTick;
+        }
+        if (FanCurveSafety.MustRecover(cpuTemp, gpuTemp, Environment.TickCount64 - sampleTick) ||
+            !VerifiedAcerProtocol.TryGetCpuGpuFans(Capabilities.FanChannels, out var cpuFan, out var gpuFan))
+            return false;
+
+        int floor = FanCurveSafety.FloorSpeed(cpuTemp, gpuTemp);
+        int cpu = Math.Max(Math.Max(requestedCpu, 10), floor);
+        int gpu = Math.Max(Math.Max(requestedGpu, 10), floor);
+        cpu = Math.Max(cpu, cpuFan.Minimum);
+        gpu = Math.Max(gpu, gpuFan.Minimum);
+        if (cpu > cpuFan.Maximum || gpu > gpuFan.Maximum) return false;
+        cpuSpeed = (byte)cpu;
+        gpuSpeed = (byte)gpu;
+        return true;
     }
 
     private HardwareCapabilities ProbeCapabilities()
@@ -124,7 +214,7 @@ public partial class WmiController
         }
         catch { }
         ulong? sensorInfo = identity.IsAcer && methods.Contains("GetGamingSysInfo") ? ReadGamingSystemInfo(0) : null;
-        var services = OemServiceManager.HardwareServices.ToDictionary(n => n, OemServiceManager.ReadServiceEvidence);
+        var services = OemServiceManager.HardwareServices.ToDictionary(n => n, n => OemServiceManager.ReadServiceEvidence(n, refreshFingerprint: true));
         bool? directCoolBoost = nitro3 ? NitroSense3Protocol.CoolBoostState(NitroSense3Protocol.ExchangeDirect(20, 519, false)) : null;
         if (directCoolBoost.HasValue)
         {
@@ -139,6 +229,13 @@ public partial class WmiController
             ? NitroSense3Protocol.OperationModeState(NitroSense3Protocol.Exchange(NitroSense3Protocol.CmdWmiGetGamingMiscSetting, NitroSense3Protocol.MiscSubfunctionOperationMode, false).GetAwaiter().GetResult()) : null;
         bool? batteryBoost = nitroOpModeModel && methods.Contains("GetGamingSysInfo")
             ? NitroSense3Protocol.BatteryBoostReady(ReadGamingSystemInfo(0x0002)) : null;
+        bool predatorCatalogModel = identity.IsAcer && DynamicDeviceProfileCatalog.TryGetModel(identity.NormalizedModel) is { MachineType: 0 };
+        var predatorModes = predatorCatalogModel && methods.Contains("GetGamingMiscSetting") && methods.Contains("SetGamingMiscSetting")
+            ? ParsePredatorOperationModeCapabilities(ReadGamingMiscSetting(MiscSubfunctionOperationModeCap)) : Array.Empty<PowerMode>();
+        byte? predatorDirectMode = predatorCatalogModel && methods.Contains("GetGamingMiscSetting") && methods.Contains("SetGamingMiscSetting")
+            ? ParsePredatorOperationMode(ReadGamingMiscSetting(NitroSense3Protocol.MiscSubfunctionOperationMode)) ?? (predatorModes.Count > 0 ? (byte)1 : null) : null;
+        if (predatorModes.Count > 0 && predatorDirectMode.HasValue && !predatorModes.Any(m => m.Value == predatorDirectMode.Value))
+            predatorModes = Array.Empty<PowerMode>();
         services["PSSvc"] = services["PSSvc"] with { InterfaceWorking = coolBoost.HasValue || pipeOpMode.HasValue };
         if (coolBoost.HasValue) _coolBoost = coolBoost.Value;
         if (directCoolBoost.HasValue) _coolBoost = directCoolBoost.Value;
@@ -147,6 +244,32 @@ public partial class WmiController
         {
             try { mux = AcerAgentClient.GetGpuModeCapabilityAsync().GetAwaiter().GetResult(); } catch { }
             services["AASSvc"] = services["AASSvc"] with { InterfaceWorking = mux > 0 };
+        }
+        var protocols = new List<ProtocolEvidence>();
+        OemKeyboardInfo? detectedKeyboard = null;
+        if (identity.IsAcer && VerifiedAcerProtocol.ReviewedService(services["AASSvc"]))
+        {
+            detectedKeyboard = VerifiedAcerProtocol.ParseKeyboard(AcerAgentClient.QueryCapabilityAsync("SUPPORT_KEYBOARD_INFO").GetAwaiter().GetResult());
+            var modes = VerifiedAcerProtocol.ParseModes(AcerAgentClient.QueryCapabilityAsync("SUPPORT_OPERATING_MODE_CAPABILITY").GetAwaiter().GetResult());
+            byte? current = VerifiedAcerProtocol.ParseCurrentMode(AcerAgentClient.GetDeviceDataAsync("OPERATING_MODE").GetAwaiter().GetResult());
+            if (!current.HasValue || !modes.Any(m => m.Value == current)) modes = [];
+            var fans = VerifiedAcerProtocol.ParseFans(AcerAgentClient.QueryCapabilityAsync("SUPPORT_FAN_CONTROL").GetAwaiter().GetResult());
+            if (!VerifiedAcerProtocol.ParseFanState(AcerAgentClient.GetDeviceDataAsync("FAN_CONTROL").GetAwaiter().GetResult(), fans).HasValue) fans = [];
+            bool? boostReady = VerifiedAcerProtocol.ParseStatus(AcerAgentClient.GetDeviceDataAsync("BATTERY_BOOST").GetAwaiter().GetResult(), "BATTERY_BOOST");
+            bool? adaptorReady = VerifiedAcerProtocol.ParseStatus(AcerAgentClient.GetDeviceDataAsync("ADAPTOR_STATUS").GetAwaiter().GetResult(), "ADAPTOR_STATUS") ?? IsOnAc;
+            if (modes.Count > 0 || fans.Count > 0)
+            {
+                services["AASSvc"] = services["AASSvc"] with { InterfaceWorking = true };
+                protocols.Add(new(VerifiedAcerProtocol.Family, "AASSvc", services["AASSvc"].ProtocolBinarySha256!, modes, current, fans, boostReady, adaptorReady));
+            }
+        }
+        var warnings = new List<string>();
+        if (_wmiDiscoveryFailure != null) warnings.Add(_wmiDiscoveryFailure);
+        if (identity.IsAcer && services["AASSvc"].Exists)
+        {
+            if (!services["AASSvc"].Trusted) warnings.Add("Installed OEM service failed publisher or protected-path verification. It cannot authorize hardware controls.");
+            else if (!VerifiedAcerProtocol.ReviewedService(services["AASSvc"])) warnings.Add("Installed OEM service fingerprint is outside the reviewed protocol catalog. Only independent verified model bindings remain available.");
+            else if (protocols.Count == 0) warnings.Add("Reviewed OEM service is installed, but valid capability readbacks are unavailable. Authentication, encryption or service recovery may be required; no protocol-family writes are authorized.");
         }
         _discovery = new()
         {
@@ -157,13 +280,50 @@ public partial class WmiController
             SupportedSensorMask = sensorInfo.HasValue ? (ushort)((sensorInfo.Value >> 24) & 0xFFFF) : null,
             NitroCoolBoostEnabled = directCoolBoost ?? coolBoost,
             NitroDirectCoolBoostReadable = directCoolBoost.HasValue,
-            NitroOperationMode = directOpMode ?? pipeOpMode ?? (nitroOpModeModel ? NitroSense3Protocol.ReadRegistryOperationMode() : null),
+            NitroOperationMode = pipeOpMode ?? directOpMode ?? (nitroOpModeModel ? NitroSense3Protocol.ReadRegistryOperationMode() : null),
             NitroOperationModeReadable = pipeOpMode.HasValue,
             NitroDirectOperationModeReadable = directOpMode.HasValue,
             NitroBatteryBoostReady = batteryBoost,
-            Services = services, GpuModeMask = mux
+            PredatorOperationMode = predatorDirectMode,
+            PredatorDirectOperationModeReadable = predatorDirectMode.HasValue,
+            PredatorOperationModes = predatorModes,
+            Services = services, GpuModeMask = mux, Protocols = protocols, DetectedKeyboard = detectedKeyboard,
+            Warnings = warnings.AsReadOnly()
         };
         return DeviceProfileResolver.Resolve(_discovery);
+    }
+
+    internal const uint MiscSubfunctionOperationModeCap = 0x0A;
+
+    internal static byte? ParsePredatorOperationMode(ulong? reply) =>
+        reply.HasValue && (reply.Value & 0xFF) == 0 && (byte)((reply.Value >> 8) & 0xFF) is byte m && m is 0 or 1 or 4 or 5 or 6 ? m : null;
+
+    internal static IReadOnlyList<PowerMode> ParsePredatorOperationModeCapabilities(ulong? reply)
+    {
+        if (!reply.HasValue || (reply.Value & 0xFF) != 0) return Array.Empty<PowerMode>();
+        byte mask = (byte)((reply.Value >> 8) & 0xFF);
+        var modes = new List<PowerMode>();
+        foreach (var mode in DynamicDeviceProfileCatalog.PredatorStandardModes)
+            if ((mask & (1 << mode.Value)) != 0) modes.Add(mode);
+        return modes.Count > 0 ? Array.AsReadOnly(modes.ToArray()) : Array.Empty<PowerMode>();
+    }
+
+    internal ulong? ReadGamingProfileRaw(ulong command = 0UL)
+    {
+        lock (_lock)
+        {
+            try
+            {
+                var obj = GetWmiObject();
+                if (obj == null) return null;
+                using var inParams = obj.GetMethodParameters("GetGamingProfile");
+                inParams["gmInput"] = command;
+                using var outParams = obj.InvokeMethod("GetGamingProfile", inParams, new InvokeMethodOptions { Timeout = TimeSpan.FromSeconds(2) });
+                if (outParams?["gmOutput"] == null) return null;
+                return Convert.ToUInt64(outParams["gmOutput"]);
+            }
+            catch { InvalidateCache(); return null; }
+        }
     }
 
     private ulong? ReadGamingMiscSetting(uint command)
@@ -227,9 +387,13 @@ public partial class WmiController
     {
         return method switch
         {
-            "SetGamingProfile" => (input <= 255 || ((input >> 24) == 1 && (input & 0xFFFFFF) <= 255))
-                && Capabilities.AllowsPower((byte)(input & 0xFF), IsOnAc)
-                && HardwareWriteGate.InScope(HardwareFeature.Power, "acer-wmi-profile"),
+            "SetGamingProfile" => (
+                ((input <= 255 || ((input >> 24) == 1 && (input & 0xFFFFFF) <= 255))
+                    && Capabilities.AllowsPower((byte)(input & 0xFF), IsOnAc)
+                    && HardwareWriteGate.InScope(HardwareFeature.Power, "acer-wmi-profile")) ||
+                ((input == 0x10UL || input == ((1UL << 48) | 0x10UL))
+                    && HardwareWriteGate.InScope(HardwareFeature.LcdOverdrive, "acer-wmi-lcd"))
+            ),
             "SetGamingFanBehavior" => HardwareWriteGate.InScope(HardwareFeature.FanAuto, "acer-wmi-fans") || HardwareWriteGate.InScope(HardwareFeature.FanMax, "acer-wmi-fans") ||
                 HardwareWriteGate.InScope(HardwareFeature.FanManual, "acer-wmi-fans") || HardwareWriteGate.InScope(HardwareFeature.CoolBoost, "acer-wmi-coolboost"),
             "SetGamingFanSpeed" => HardwareWriteGate.InScope(HardwareFeature.FanManual, "acer-wmi-fans") || HardwareWriteGate.InScope(HardwareFeature.AuxFan, "acer-wmi-aux"),
@@ -248,7 +412,8 @@ public partial class WmiController
                     Capabilities.AllowsPower((byte)((input >> 8) & 0xFF), IsOnAc) &&
                     ((NitroSense3Protocol.IsSupportedOperationMode((byte)((input >> 8) & 0xFF)) &&
                       HardwareWriteGate.InScope(HardwareFeature.Power, NitroSense3Protocol.OperationModeWmiBackend)) ||
-                     HardwareWriteGate.InScope(HardwareFeature.Power, "acer-wmi-profile")),
+                     (((input >> 8) & 0xFFUL) is 0 or 1 or 4 or 5 or 6 &&
+                      HardwareWriteGate.InScope(HardwareFeature.Power, DeviceProfileResolver.PredatorWmiOperationModeBackend))),
                 _ => false
             },
             _ => false

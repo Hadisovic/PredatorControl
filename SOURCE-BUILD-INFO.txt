@@ -1,0 +1,7 @@
+Predator Control 1.4.4 source package
+
+This is the local source tree used to build the 1.4.4 installer and portable app beside this folder.
+
+Build caches, generated binaries, the frontend node_modules/dist folders, and Git working-tree metadata are omitted. The source, tests, frontend source, and packaging scripts are included. No proprietary binaries are included.
+
+To build the app, install the .NET 10 SDK and Node.js/npm, run `npm ci` and `npm run build` from jelli-ui, then build src/PredatorControlApp.csproj. packaging/Build.ps1 creates the setup and portable files when given an Inno Setup 6 compiler path.

@@ -108,6 +108,9 @@ For an older portable startup installation, use the new app to turn **Start with
 
 This release reports version **1.4.4**.
 
+> [!TIP]
+> **Jelli troubleshooting after an update**: If Jelli does not work or displays an error after updating from an earlier version, open `C:\Program Files` and delete the `PredatorControlData` folder to allow a clean initialization, then re-launch the application.
+
 ## Compatibility and feedback
 
 Support depends on the exact laptop model, firmware and required Acer services. Keep the Acer components needed by your laptop's controls.

@@ -30,7 +30,10 @@ public partial class Form1 : IJelliBackend
             if (ex is OperationCanceledException) { SetJelliEnabled(false); return; }
             Opacity = 1;
             Show();
-            Program.Report(new InvalidOperationException("Jelli could not start. The native controls remain available. " + ex.Message, ex), false);
+            Program.Report(new InvalidOperationException(
+                "Jelli could not start. The native controls remain available.\n\n" +
+                "If Jelli throws an error after updating to a new version, open C:\\Program Files and delete the 'PredatorControlData' folder to make it work, then try again.\n\n" +
+                "Error: " + ex.Message, ex), false);
         }
     }
 

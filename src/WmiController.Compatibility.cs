@@ -245,6 +245,12 @@ public partial class WmiController
             try { mux = AcerAgentClient.GetGpuModeCapabilityAsync().GetAwaiter().GetResult(); } catch { }
             services["AASSvc"] = services["AASSvc"] with { InterfaceWorking = mux > 0 };
         }
+        if (mux == 0 && identity.IsAcerGaming &&
+            methods.Contains("SetGamingMiscSetting") && methods.Contains("GetGamingMiscSetting") &&
+            identity.GpuNames.Any(g => g.Contains("NVIDIA", StringComparison.OrdinalIgnoreCase)))
+        {
+            mux = 7;
+        }
         var protocols = new List<ProtocolEvidence>();
         OemKeyboardInfo? detectedKeyboard = null;
         if (identity.IsAcer && VerifiedAcerProtocol.ReviewedService(services["AASSvc"]))
@@ -407,7 +413,8 @@ public partial class WmiController
                 0x06 or 0x106 => HardwareWriteGate.InScope(HardwareFeature.BootSound, "acer-wmi-misc"),
                 0x0C or 0x0D => HardwareWriteGate.InScope(HardwareFeature.UsbCharging, "acer-wmi-misc"),
                 _ when (input & 0xFFUL) == 0x02 && ((input >> 8) & 0xFFUL) is >= 1 and <= 3 =>
-                    HardwareWriteGate.InScope(HardwareFeature.GpuMux, "acer-agent"),
+                    HardwareWriteGate.InScope(HardwareFeature.GpuMux, "acer-agent") ||
+                    HardwareWriteGate.InScope(HardwareFeature.GpuMux, "acer-wmi-mux"),
                 _ when (input & 0xFFUL) == NitroSense3Protocol.MiscSubfunctionOperationMode && (input >> 16) == 0 =>
                     Capabilities.AllowsPower((byte)((input >> 8) & 0xFF), IsOnAc) &&
                     ((NitroSense3Protocol.IsSupportedOperationMode((byte)((input >> 8) & 0xFF)) &&

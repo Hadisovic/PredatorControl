@@ -11,12 +11,19 @@ internal static class VerifiedAcerProtocol
     internal const string PowerBackend = "acer-agent-profile";
     internal const string FanBackend = "acer-agent-fans";
     internal const string AgentSha256 = "FA8C50E604CA71F93314209414D35622A265D1CB65532798DF810C17FC042201";
+    internal const string AgentSha256_2108 = "46533208B86B48EA901C8CE41368C44B512BA57B941D3E02048B08C039959484";
     internal const string CentralSha256 = "63855F9D6BD706145E82A8CBFEA5A26ECD273ED2E16674C4CA17A2F9025475D9";
+    internal const string CentralSha256_2108 = "5BB16FA594878F7014BC61E2A7B2A6C6B640F0CE0E6A1BF1E18E440C3DD4C9F3";
     internal const string Nitro3ServiceSha256 = "E6638FECC41730075D25587BFDDA7B4DDA2D170B64AC9DF9B3C03543999F3B4E";
-    internal static bool ReviewedAgent(string? hash) => string.Equals(hash, AgentSha256, StringComparison.OrdinalIgnoreCase);
+    internal static bool ReviewedAgent(string? hash) =>
+        string.Equals(hash, AgentSha256, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(hash, AgentSha256_2108, StringComparison.OrdinalIgnoreCase);
     internal static bool ReviewedService(ServiceEvidence? service) => service is { Exists: true, Running: true, Trusted: true, ProcessId: > 0 } &&
-        string.Equals(service.BinarySha256, CentralSha256, StringComparison.OrdinalIgnoreCase) && ReviewedAgent(service.ProtocolBinarySha256);
-    internal static bool ReviewedAttestedBinary(string hash) => ReviewedAgent(hash) || string.Equals(hash, CentralSha256, StringComparison.OrdinalIgnoreCase);
+        ((string.Equals(service.BinarySha256, CentralSha256, StringComparison.OrdinalIgnoreCase) && string.Equals(service.ProtocolBinarySha256, AgentSha256, StringComparison.OrdinalIgnoreCase)) ||
+         (string.Equals(service.BinarySha256, CentralSha256_2108, StringComparison.OrdinalIgnoreCase) && string.Equals(service.ProtocolBinarySha256, AgentSha256_2108, StringComparison.OrdinalIgnoreCase)));
+    internal static bool ReviewedAttestedBinary(string hash) => ReviewedAgent(hash) ||
+        string.Equals(hash, CentralSha256, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(hash, CentralSha256_2108, StringComparison.OrdinalIgnoreCase);
 
     internal static IReadOnlyList<PowerMode> ParseModes(string? json)
     {

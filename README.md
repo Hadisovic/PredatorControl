@@ -14,6 +14,8 @@ Windows 10 (2004 or later) / Windows 11 · x64 · Administrator approval require
 
 ## What's new in 1.4.4
 
+- **RGB Keyboard Enhancements**: Dynamic multi-zone RGB keyboard detection (4 zones across all supported Predator & Nitro RGB models) and clean Fixed-Red single-color backlight handling on older Nitro models without hardcoded model lists.
+- **Hardware GPU MUX Switch**: Added direct ACPI WMI MUX switching when OEM services are absent. Fixed MUX control disappearing when booted in Discrete GPU Only mode (where the iGPU is powered down by hardware).
 - **Dynamic Hardware Compatibility**: Enhanced support across 64+ Acer Predator and Nitro models with dynamic protocol discovery.
 - **Power & Performance Switching**: Reliable direct WMI and ACPI operation mode switching (Quiet, Balanced, Performance, Turbo, Eco) with confirmed firmware state readback.
 - **Fan Curve Editor & Limits**: Visual limit guideline and shaded deadzone enforcing hardware minimum fan floor (10% floor) on supported channels.
@@ -110,6 +112,34 @@ This release reports version **1.4.4**.
 
 > [!TIP]
 > **Jelli troubleshooting after an update**: If Jelli does not work or displays an error after updating from an earlier version, open `C:\Program Files` and delete the `PredatorControlData` folder to allow a clean initialization, then re-launch the application.
+
+## Troubleshooting
+
+### Frequently Asked Questions & Solutions
+
+* **GPU MUX Switch requires a restart**:
+  * Switching between **Hybrid (Optimus)** and **Discrete GPU** mode re-routes the internal display connection at the motherboard firmware level. A full system restart is required by the BIOS and Windows graphics stack for the change to take effect.
+* **GPU MUX Switch missing or says unsupported**:
+  * Ensure the application is **Run as Administrator** so it has permission to query ACPI WMI and EC registers.
+  * If you have PredatorSense services running, ensure `AASSvc` / `AcerAgentService` is operational. If you uninstalled PredatorSense, PredatorControl will automatically use direct ACPI WMI.
+  * Note: Older laptops without a physical hardware MUX chip (or with fixed display routing) do not support MUX switching.
+* **Keyboard RGB lighting only shows red or won't change color**:
+  * Some laptops (notably older Nitro 5 models) have single-color fixed red backlighting in hardware rather than multi-zone RGB LEDs. On those devices, PredatorControl cleanly provides backlight on/off and brightness toggles without inventing unsupported color modes.
+* **Jelli UI displays an error or blank screen after updating**:
+  * Open `C:\Program Files` and delete the `PredatorControlData` folder (or your user's `%LOCALAPPDATA%\PredatorControl` folder) to clear the cached WebView2 runtime state, then restart the application.
+* **Fans or power modes not applying**:
+  * Certain high-performance power modes (Turbo) are restricted by Acer firmware to AC adapter power and require battery charge levels above 40%. Plug in your official charger before engaging Turbo mode.
+
+### Report an Issue / Request Support for Your Laptop
+
+If a feature is missing, unverified, or not working as expected on your specific Acer laptop model:
+
+1. Open **PredatorControl** and navigate to the **Settings** tab.
+2. Click **Export Compatibility Report** (or locate `PredatorControl-compatibility.json` saved in your application folder).
+3. [**Open an Issue on GitHub**](https://github.com/Hadisovic/PredatorControl/issues).
+4. Describe your issue and attach your `PredatorControl-compatibility.json` file.
+   * *Note: PredatorControl automatically redacts all hardware serial numbers, MAC addresses, and personal identifying information before saving the report.*
+   * Attaching this file lets us inspect your laptop's exact ACPI WMI method tables, sensor IDs, and power mode descriptors so we can add native support for your model!
 
 ## Compatibility and feedback
 

@@ -320,12 +320,21 @@ public static class DeviceProfileResolver
         DeviceProfile? p = matches.Length > 1 && matches[0].Specificity == matches[1].Specificity ? null : matches.FirstOrDefault();
         if (p == null && profiles == null && d.Identity.IsAcer && DynamicDeviceProfileCatalog.TryGetModel(d.Identity.NormalizedModel) is { } oemEntry)
         {
+            KeyboardCapabilities oemKeyboard = (oemEntry.LightingType, oemEntry.PerKey) switch
+            {
+                (4 or 1, false) => new(KeyboardKind.Rgb, $"Dynamic {oemEntry.Model} 4-zone RGB profile", ZoneCount: 4, Effects: Enumerable.Range(0, 9).ToArray()),
+                (0, false) => new(KeyboardKind.Binary, $"Dynamic {oemEntry.Model} single-color profile", "#ff394b"),
+                _ => new(KeyboardKind.Unknown, "Unverified keyboard configuration")
+            };
             if (oemEntry.MachineType == 2)
             {
+                var bindings = oemKeyboard.SupportsRgb
+                    ? Nitro2022OperationModeBindings.Concat([new(HardwareFeature.Rgb, "acer-wmi-rgb", "SetGamingKBBacklight"), new(HardwareFeature.WinKey, "acer-wmi-winkey", "SetGamingRgbKb")]).ToArray()
+                    : Nitro2022OperationModeBindings;
                 p = new DeviceProfile($"nitro-{oemEntry.Model.ToLowerInvariant()}-dynamic", oemEntry.Model,
                     $"Dynamic OEM catalog profile ({oemEntry.SourcePackage}, MachineType=2 operation modes Quiet=0, Default=1, Performance=4).",
-                    Nitro2022OperationModeBindings, NitroPowerProfileCoordinator.OperationModes,
-                    new(KeyboardKind.Unknown, "Unverified keyboard configuration"), new Dictionary<string, ulong>());
+                    bindings, NitroPowerProfileCoordinator.OperationModes,
+                    oemKeyboard, new Dictionary<string, ulong>());
             }
             else if (oemEntry.MachineType == 0 && d.PredatorDirectOperationModeReadable && d.Methods.Contains("SetGamingMiscSetting") && d.Methods.Contains("GetGamingMiscSetting"))
             {
@@ -334,7 +343,7 @@ public static class DeviceProfileResolver
                     $"Dynamic OEM catalog profile ({oemEntry.SourcePackage}, PredatorSense 5.2 WMI operation-mode subfunction 0x0A/0x0B).",
                     LegacyPredator.Append(new(HardwareFeature.Power, PredatorWmiOperationModeBackend, "SetGamingMiscSetting", CanVerify: true)).ToArray(),
                     modes,
-                    new(KeyboardKind.Unknown, "Unverified keyboard configuration"), LegacySensors);
+                    oemKeyboard, LegacySensors);
             }
         }
         if (p != null && p.PowerModes.Count == 0 && d.PredatorDirectOperationModeReadable && d.Methods.Contains("SetGamingMiscSetting") && d.Methods.Contains("GetGamingMiscSetting") &&
@@ -391,6 +400,10 @@ public static class DeviceProfileResolver
             results[b.Feature] = new(method && service ? CapabilityStatus.Supported : CapabilityStatus.Unavailable,
                 b.Backend, method && service || b.Backend == "windows-power-plan" ? evidence : "Required method or trusted, operational OEM service is unavailable.", b.Service, true, b.CanVerify);
         }
+        bool hasWmiMux = d.Identity.IsAcerGaming &&
+            d.Methods.Contains("SetGamingMiscSetting") && d.Methods.Contains("GetGamingMiscSetting") &&
+            d.Identity.GpuNames.Any(g => g.Contains("NVIDIA", StringComparison.OrdinalIgnoreCase));
+        int effectiveMuxMask = d.GpuModeMask is > 0 and <= 7 ? d.GpuModeMask : (hasWmiMux ? 7 : 0);
         if (d.Identity.IsAcer)
         {
             if (p != null) foreach (var b in p.Bindings) Bind(b, p.Evidence);
@@ -411,8 +424,13 @@ public static class DeviceProfileResolver
                 Bind(new(HardwareFeature.BatteryLimit, "battery-control", CanVerify: true), "BatteryControl status reports health-control support and a valid state.");
             else if (d.Methods.Contains("BatteryControl.SetBatteryHealthControl"))
                 results[HardwareFeature.BatteryLimit] = new(CapabilityStatus.Unknown, "battery-control", "BatteryControl exists, but its health-status query did not confirm support. No battery command is authorized.");
-            if (d.GpuModeMask is > 0 and <= 7)
-                Bind(new(HardwareFeature.GpuMux, "acer-agent", Service: "AASSvc", CanVerify: true), "Explicit Acer Agent supported GPU mode mask.");
+            if (effectiveMuxMask is > 0 and <= 7)
+            {
+                if (hasWmiMux && !(d.Services.TryGetValue("AASSvc", out var aas) && aas is { Exists: true, Running: true, Trusted: true, InterfaceWorking: true }))
+                    Bind(new(HardwareFeature.GpuMux, "acer-wmi-mux", Method: "SetGamingMiscSetting", CanVerify: false), "Hardware ACPI WMI GPU MUX switch (subfunction 0x02).");
+                else
+                    Bind(new(HardwareFeature.GpuMux, "acer-agent", Service: "AASSvc", CanVerify: true), "Explicit Acer Agent supported GPU mode mask.");
+            }
         }
         if (protocol?.Fans is { Count: > 0 } && p?.Bindings.Any(b => b.Feature is HardwareFeature.FanManual or HardwareFeature.FanCurve or HardwareFeature.AuxFan) != true &&
             !VerifiedAcerProtocol.TryGetCpuGpuFans(protocol.Fans, out _, out _))
@@ -500,7 +518,7 @@ public static class DeviceProfileResolver
             PowerPlanNotice = powerNotice,
             Keyboard = keyboard, Sensors = new ReadOnlyDictionary<string, ulong>(d.Methods.Contains("GetGamingSysInfo") ? sensors : new Dictionary<string, ulong>()),
             Services = new ReadOnlyDictionary<string, ServiceEvidence>(d.Services.ToDictionary(x => x.Key, x => x.Value)),
-            GpuModeMask = results[HardwareFeature.GpuMux].CanWrite ? d.GpuModeMask : 0,
+            GpuModeMask = results[HardwareFeature.GpuMux].CanWrite ? effectiveMuxMask : (byte)0,
             BatteryLimitEnabled = d.BatteryStatusReadable ? d.BatteryLimitEnabled : null
         };
     }

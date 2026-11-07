@@ -1107,7 +1107,25 @@ namespace PredatorControlApp
         /// </summary>
         public async Task<int?> GetGpuModeAsync()
         {
-            return _testIo != null ? null : await AcerAgentClient.GetGpuModeAsync();
+            if (_testIo == null)
+            {
+                int? agentMode = await AcerAgentClient.GetGpuModeAsync();
+                if (agentMode.HasValue) return agentMode;
+            }
+            if (Capabilities.Results.TryGetValue(HardwareFeature.GpuMux, out var mux) && mux.Backend == "acer-wmi-mux")
+            {
+                ulong? raw = ReadGamingMiscSetting(0x02);
+                if (raw.HasValue && (raw.Value & 0xFF) == 0 && ((raw.Value >> 8) & 0xFF) is >= 1 and <= 3)
+                    return (int)((raw.Value >> 8) & 0xFF) - 1;
+                if (Capabilities.Identity.GpuNames.Any(g => g.Contains("NVIDIA", StringComparison.OrdinalIgnoreCase)))
+                {
+                    bool hasIgpu = Capabilities.Identity.GpuNames.Any(g =>
+                        g.Contains("Intel", StringComparison.OrdinalIgnoreCase) ||
+                        g.Contains("AMD", StringComparison.OrdinalIgnoreCase));
+                    return hasIgpu ? AcerAgentClient.GPU_MODE_OPTIMUS : AcerAgentClient.GPU_MODE_DISCRETE;
+                }
+            }
+            return null;
         }
 
         /// <summary>
@@ -1127,6 +1145,13 @@ namespace PredatorControlApp
         {
             var result = Write(HardwareFeature.GpuMux, mode is >= 0 and <= 2 && (Capabilities.GpuModeMask & (1 << mode)) != 0, () =>
             {
+                if (Capabilities.Results[HardwareFeature.GpuMux].Backend == "acer-wmi-mux")
+                {
+                    ulong gmInput = ((ulong)(mode + 1) << 8) | 0x02UL;
+                    return SendCommand("SetGamingMiscSetting", gmInput).success
+                        ? new("unverified", "GPU mode written to ACPI WMI (subfunction 0x02); restart Windows to apply.")
+                        : new("failed", "GPU mode WMI request rejected.");
+                }
                 if (_testIo != null) return _testIo.SetGpuMode(mode) ? new("unverified", "GPU mode set.") : new("failed", "GPU mode rejected.");
                 bool agentOk = AcerAgentClient.SetGpuModeAsync(mode).GetAwaiter().GetResult();
                 if (!agentOk) return new("failed", "GPU mode request failed. No alternate firmware command was sent.");

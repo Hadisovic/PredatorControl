@@ -597,6 +597,69 @@ using (var controller = new WmiController(dynamicPredatorWmi, io))
           "PHN16-71 Turbo mode dispatches SetGamingMiscSetting(0x050B) and confirms via GetGamingMiscSetting(0x0B)");
 }
 
+var dynamicNeo72 = Discovery("Predator PHN16-72") with
+{
+    Identity = Id("Predator PHN16-72", "V1.17") with { GpuNames = ["Intel(R) UHD Graphics", "NVIDIA GeForce RTX 4060 Laptop GPU"] },
+    Services = new Dictionary<string, ServiceEvidence>
+    {
+        ["AASSvc"] = new("AASSvc", true, true, true, false, "1.2.2108.0", VerifiedAcerProtocol.CentralSha256_2108, 2500, VerifiedAcerProtocol.AgentSha256_2108),
+        ["ASMSvc"] = new("ASMSvc", true, true, true)
+    },
+    Methods = Discovery("Predator PHN16-72").Methods.Append("GetGamingMiscSetting").ToHashSet(),
+    PredatorDirectOperationModeReadable = true,
+    PredatorOperationMode = 1,
+    PredatorOperationModes = WmiController.ParsePredatorOperationModeCapabilities(0x7300UL),
+    GpuModeMask = 7
+};
+Check(VerifiedAcerProtocol.ReviewedService(dynamicNeo72.Services["AASSvc"]),
+      "ReviewedService accepts PredatorSense 5.2 v1.2.2108.0 signed service and worker fingerprint pair");
+var dynamicNeo72Caps = DeviceProfileResolver.Resolve(dynamicNeo72);
+Check(dynamicNeo72Caps.SupportsRgbLighting && dynamicNeo72Caps.Keyboard.Kind == KeyboardKind.Rgb &&
+      dynamicNeo72Caps.Keyboard.ZoneCount == 4 &&
+      dynamicNeo72Caps.SupportsGpuMux && dynamicNeo72Caps.GpuModeMask == 7 &&
+      dynamicNeo72Caps.Results[HardwareFeature.GpuMux].Backend == "acer-wmi-mux",
+      "Dynamic catalog PHN16-72 resolves 4-zone RGB keyboard and direct WMI MUX fallback when AASSvc IPC is unavailable");
+using (var io = new FakeIo())
+using (var controller = new WmiController(dynamicNeo72, io))
+{
+    controller.ApplyLightingSynchronous([Color.Cyan, Color.Magenta, Color.Yellow, Color.White]);
+    Check(io.LightingWrites == 1 && io.Writes.Count == 4,
+          "Dynamic catalog PHN16-72 dispatches 4-zone RGB lighting and per-zone color payloads");
+    io.Writes.Clear();
+    Check(await controller.SetGpuModeAsync(1) && io.Writes.SequenceEqual([("SetGamingMiscSetting", 0x0202UL)]),
+          "Direct WMI MUX backend dispatches SetGamingMiscSetting(0x0202) for Discrete GPU mode without requiring AASSvc");
+}
+var discreteBootNeo = dynamicNeo72 with
+{
+    Identity = dynamicNeo72.Identity with { GpuNames = ["Parsec Virtual Display Adapter", "NVIDIA GeForce RTX 4060 Laptop GPU"] },
+    GpuModeMask = 0
+};
+var discreteBootCaps = DeviceProfileResolver.Resolve(discreteBootNeo);
+Check(discreteBootCaps.SupportsGpuMux && discreteBootCaps.GpuModeMask == 7 &&
+      discreteBootCaps.Results[HardwareFeature.GpuMux].Backend == "acer-wmi-mux",
+      "Direct WMI MUX remains supported when booted in Discrete GPU mode where iGPU is absent from Win32_VideoController");
+using (var io = new FakeIo())
+using (var controller = new WmiController(discreteBootNeo, io))
+{
+    Check(await controller.GetGpuModeAsync() == 1,
+          "GetGpuModeAsync infers Discrete GPU mode when NVIDIA dGPU is present without iGPU in Win32_VideoController");
+}
+var dynamicNitroRgb = fixedRed with
+{
+    Identity = Id("Nitro ANV15-51"),
+    Methods = fixedRed.Methods.Append("GetGamingMiscSetting").ToHashSet()
+};
+var dynamicNitroRgbCaps = DeviceProfileResolver.Resolve(dynamicNitroRgb);
+Check(dynamicNitroRgbCaps.SupportsRgbLighting && dynamicNitroRgbCaps.Keyboard.ZoneCount == 4,
+      "Dynamic catalog MachineType=2 model with LightingType=1 resolves 4-zone RGB support");
+var dynamicNitroRed = fixedRed with
+{
+    Identity = Id("Nitro AN515-52"),
+    KeyboardConfigurationReadable = true
+};
+Check(DynamicDeviceProfileCatalog.TryGetModel("AN515-52") is { LightingType: 0, PerKey: false },
+      "Dynamic catalog identifies older fixed-red Nitro models with LightingType=0");
+
 var testCurve = new List<Point> { new(30, 0), new(50, 5), new(100, 100) };
 var normalized10 = FanCurveGraph.Normalize(testCurve, 10);
 Check(normalized10.All(p => p.Y >= 10) && normalized10[0].Y == 10 && normalized10[1].Y == 10,
